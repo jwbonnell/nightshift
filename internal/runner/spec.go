@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,10 +22,17 @@ import (
 // Options configures a nightshift run. Fields are added incrementally as
 // later tasks need them — see PROGRESS.md for which task introduced which.
 type Options struct {
-	SpecArg string // spec name or path (ignored when Next is set)
-	Base    string // "" = fall through to frontmatter/env/config/default
-	MaxIter int    // 0 = unset
-	Home    string
+	SpecArg   string // spec name or path (ignored when Next is set)
+	Base      string // "" = fall through to frontmatter/env/config/default
+	MaxIter   int    // 0 = unset
+	Home      string
+	StateRoot string    // default: <Home>/runs
+	Now       time.Time // stamps run.json "started" and PROGRESS.md lines; zero = time.Now()
+	Fresh     bool
+	Yes       bool
+	IsTTY     bool
+	Stdout    io.Writer
+	Stdin     io.Reader
 }
 
 const (
