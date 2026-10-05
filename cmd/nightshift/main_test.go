@@ -2,10 +2,54 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
-func TestDispatchUsageAndHelp(t *testing.T) {
+func dirExistsForTest(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.IsDir()
+}
+
+func newTestSourceRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	runGit := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	runGit("init", "-q", "-b", "main")
+	runGit("config", "user.email", "a@b.c")
+	runGit("config", "user.name", "a")
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+	runGit("add", "-A")
+	runGit("commit", "-q", "-m", "initial")
+	return dir
+}
+
+func buildNightshiftBinary(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "nightshift")
+	cmd := exec.Command("go", "build", "-o", bin, ".")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go build: %v: %s", err, out)
+	}
+	return bin
+}
+
+func TestCLIUsageAndExitCodes(t *testing.T) {
 	cases := []struct {
 		name       string
 		args       []string
@@ -22,7 +66,7 @@ func TestDispatchUsageAndHelp(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			got := dispatch(c.args, &stdout, &stderr)
+			got := dispatch(c.args, &stdout, &stderr, strings.NewReader(""))
 			if got != c.wantExit {
 				t.Fatalf("exit = %d, want %d", got, c.wantExit)
 			}
@@ -34,36 +78,124 @@ func TestDispatchUsageAndHelp(t *testing.T) {
 			}
 		})
 	}
-}
 
-func TestDispatchVersion(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	got := dispatch([]string{"version"}, &stdout, &stderr)
-	if got != 0 {
-		t.Fatalf("exit = %d, want 0", got)
-	}
-	want := "nightshift dev\n"
-	if stdout.String() != want {
-		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
-	}
-	if stderr.Len() != 0 {
-		t.Fatalf("stderr = %q, want empty", stderr.String())
-	}
-}
-
-func TestDispatchStubsNotImplemented(t *testing.T) {
-	for _, cmd := range []string{"init", "new", "ready", "done", "run", "status"} {
+	t.Run("version prints nightshift dev", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
-		got := dispatch([]string{cmd}, &stdout, &stderr)
+		got := dispatch([]string{"version"}, &stdout, &stderr, strings.NewReader(""))
+		if got != 0 {
+			t.Fatalf("exit = %d, want 0", got)
+		}
+		want := "nightshift dev\n"
+		if stdout.String() != want {
+			t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+		}
+		if stderr.Len() != 0 {
+			t.Fatalf("stderr = %q, want empty", stderr.String())
+		}
+	})
+
+	t.Run("run with two positionals exits 1", func(t *testing.T) {
+		homeDir := t.TempDir()
+		t.Setenv("NIGHTSHIFT_HOME", homeDir)
+		var stdout, stderr bytes.Buffer
+		got := dispatch([]string{"run", "a", "b"}, &stdout, &stderr, strings.NewReader(""))
 		if got != 1 {
-			t.Fatalf("%s: exit = %d, want 1", cmd, got)
+			t.Fatalf("exit = %d, want 1; stderr=%s", got, stderr.String())
 		}
-		wantErr := "nightshift: not implemented\n"
-		if stderr.String() != wantErr {
-			t.Fatalf("%s: stderr = %q, want %q", cmd, stderr.String(), wantErr)
+	})
+
+	t.Run("run --bogus exits 2", func(t *testing.T) {
+		// flag.ExitOnError calls os.Exit(2) directly on a bad flag, so
+		// this has to run as a real subprocess rather than calling
+		// dispatch in-process (which would kill the test binary itself).
+		bin := buildNightshiftBinary(t)
+		cmd := exec.Command(bin, "run", "--bogus")
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("expected an *exec.ExitError, got %v (stderr=%s)", err, stderr.String())
 		}
-		if stdout.Len() != 0 {
-			t.Fatalf("%s: stdout = %q, want empty", cmd, stdout.String())
+		if exitErr.ExitCode() != 2 {
+			t.Fatalf("exit code = %d, want 2 (stderr=%s)", exitErr.ExitCode(), stderr.String())
+		}
+	})
+}
+
+func TestSmokeInitNewReadyDryRunStatus(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("NIGHTSHIFT_HOME", homeDir)
+	srcRepo := newTestSourceRepo(t)
+
+	run := func(args ...string) (int, string, string) {
+		var stdout, stderr bytes.Buffer
+		got := dispatch(args, &stdout, &stderr, strings.NewReader(""))
+		return got, stdout.String(), stderr.String()
+	}
+
+	if exit, _, stderr := run("init"); exit != 0 {
+		t.Fatalf("init: exit=%d stderr=%s", exit, stderr)
+	}
+	if exit, _, stderr := run("new", "demo", "--repo", srcRepo, "--verify", "true"); exit != 0 {
+		t.Fatalf("new: exit=%d stderr=%s", exit, stderr)
+	}
+	if exit, _, stderr := run("ready", "demo"); exit != 0 {
+		t.Fatalf("ready: exit=%d stderr=%s", exit, stderr)
+	}
+
+	exit, stdout, stderr := run("run", "demo", "--dry-run")
+	if exit != 0 {
+		t.Fatalf("run --dry-run: exit=%d stderr=%s", exit, stderr)
+	}
+	if !strings.Contains(stdout, "home:        "+homeDir) {
+		t.Fatalf("dry-run output missing the home: line:\n%s", stdout)
+	}
+	if dirExistsForTest(filepath.Join(homeDir, "runs", "demo")) {
+		t.Fatalf("dry-run created a state dir")
+	}
+
+	exit, stdout, stderr = run("status")
+	if exit != 0 {
+		t.Fatalf("status: exit=%d stderr=%s", exit, stderr)
+	}
+	if !strings.Contains(stdout, "ready, not started: demo") {
+		t.Fatalf("status output missing the ready-not-started line:\n%s", stdout)
+	}
+}
+
+func TestUntilInvalidIsUsageError(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("NIGHTSHIFT_HOME", homeDir)
+	srcRepo := newTestSourceRepo(t)
+
+	run := func(args ...string) (int, string) {
+		var stdout, stderr bytes.Buffer
+		got := dispatch(args, &stdout, &stderr, strings.NewReader(""))
+		return got, stderr.String()
+	}
+
+	if exit, stderr := run("init"); exit != 0 {
+		t.Fatalf("init: exit=%d stderr=%s", exit, stderr)
+	}
+	if exit, stderr := run("new", "demo", "--repo", srcRepo, "--verify", "true"); exit != 0 {
+		t.Fatalf("new: exit=%d stderr=%s", exit, stderr)
+	}
+	if exit, stderr := run("ready", "demo"); exit != 0 {
+		t.Fatalf("ready: exit=%d stderr=%s", exit, stderr)
+	}
+
+	for _, bad := range []string{"25:99", "soon"} {
+		exit, stderr := run("run", "demo", "--until", bad)
+		if exit != 1 {
+			t.Fatalf("--until %q: exit = %d, want 1 (stderr=%s)", bad, exit, stderr)
+		}
+		want := fmt.Sprintf("nightshift: --until %q: want HH:MM (24h, local time)\n", bad)
+		if stderr != want {
+			t.Fatalf("--until %q: stderr = %q, want %q", bad, stderr, want)
+		}
+		if dirExistsForTest(filepath.Join(homeDir, "runs", "demo")) {
+			t.Fatalf("--until %q: a state dir was created", bad)
 		}
 	}
 }
