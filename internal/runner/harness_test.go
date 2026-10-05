@@ -34,6 +34,12 @@ type stubSandbox struct {
 
 	agent  func(ctx context.Context, iter int, dir string) error
 	verify func(iter int, dir string) error
+
+	// gitHook, if set, rewrites Git's real output (e.g. to simulate a
+	// corrupted sha); banner, if set, is prefixed to every Git result
+	// (e.g. to simulate an sbx startup banner line).
+	gitHook func(args []string, out string) string
+	banner  string
 }
 
 func newStubSandbox() *stubSandbox { return &stubSandbox{avail: true} }
@@ -83,7 +89,14 @@ func (s *stubSandbox) Git(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = s.mountDir
 	out, err := cmd.CombinedOutput()
-	return strings.TrimRight(string(out), " \t\r\n"), err
+	result := strings.TrimRight(string(out), " \t\r\n")
+	if s.gitHook != nil {
+		result = s.gitHook(args, result)
+	}
+	if s.banner != "" {
+		result = s.banner + result
+	}
+	return result, err
 }
 
 func (s *stubSandbox) ResetVerify() error {

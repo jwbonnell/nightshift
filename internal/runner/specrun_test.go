@@ -508,6 +508,32 @@ func TestNextNoFreeSlot(t *testing.T) {
 	}
 }
 
+// TestNextOnlyCandidateRunning: a free slot exists, but the only eligible
+// candidate is itself already running elsewhere — --next finds nothing
+// (not busy), naming it.
+func TestNextOnlyCandidateRunning(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "a", "", repo)
+	stateRoot := home.RunsDir(homeDir)
+
+	aLock, err := lock.TryAcquire(specLockPath(stateRoot, "a"), "a")
+	if err != nil {
+		t.Fatalf("TryAcquire: %v", err)
+	}
+	defer aLock.Release()
+
+	var stdout bytes.Buffer
+	opts := Options{Next: true, Home: homeDir, StateRoot: stateRoot, Stdout: &stdout, Stderr: io.Discard, Stdin: strings.NewReader("")}
+	status, err := Run(opts)
+	if status != statusNothing || err != nil {
+		t.Fatalf("status=%v err=%v, want nothing-eligible/nil", status, err)
+	}
+	if !strings.Contains(stdout.String(), "already running: a") {
+		t.Fatalf("stdout missing the running candidate's name: %q", stdout.String())
+	}
+}
+
 func TestNextNothingEligible(t *testing.T) {
 	homeDir := t.TempDir()
 	var stdout bytes.Buffer
@@ -519,6 +545,64 @@ func TestNextNothingEligible(t *testing.T) {
 	if !strings.Contains(stdout.String(), "no eligible spec in specs/ready/") {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
+}
+
+// TestUppercaseMDSpecFullRun completes TestUppercaseMDSpec's (spec_test.go)
+// resolveSpec-level coverage with a full run: found by a lowercase guess
+// and by --next, with the slug (and so the lock/state-dir name, which
+// share sp.Slug) resolved to DEMO, completing successfully.
+func TestUppercaseMDSpecFullRun(t *testing.T) {
+	repo := newSourceRepo(t)
+	content := "---\nrepo: " + repo + "\nverify: true\n---\n\n# demo\n"
+
+	t.Run("found by name", func(t *testing.T) {
+		homeDir := t.TempDir()
+		if err := os.MkdirAll(home.ReadyDir(homeDir), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(home.ReadyDir(homeDir), "DEMO.MD"), []byte(content), 0o644); err != nil {
+			t.Fatalf("write spec: %v", err)
+		}
+
+		sb := newStubSandbox()
+		sb.agent = completingAgent(t)
+		sb.verify = alwaysGreenVerify
+		opts := Options{
+			SpecArg: "demo", Home: homeDir, Sandbox: sb,
+			Stdout: io.Discard, Stderr: io.Discard, Stdin: strings.NewReader(""), Notifier: noopNotifierForTest{},
+		}
+		status, err := Run(opts)
+		if err != nil || status != StatusComplete {
+			t.Fatalf("status=%v err=%v, want Complete/nil", status, err)
+		}
+
+		stateRoot := home.RunsDir(homeDir)
+		if !dirExists(filepath.Join(stateRoot, "DEMO")) {
+			t.Fatalf("expected the state dir (and so the lock label) to be DEMO")
+		}
+	})
+
+	t.Run("found by --next", func(t *testing.T) {
+		homeDir := t.TempDir()
+		if err := os.MkdirAll(home.ReadyDir(homeDir), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(home.ReadyDir(homeDir), "DEMO.MD"), []byte(content), 0o644); err != nil {
+			t.Fatalf("write spec: %v", err)
+		}
+
+		sb := newStubSandbox()
+		sb.agent = completingAgent(t)
+		sb.verify = alwaysGreenVerify
+		opts := Options{
+			Next: true, Home: homeDir, Sandbox: sb,
+			Stdout: io.Discard, Stderr: io.Discard, Stdin: strings.NewReader(""), Notifier: noopNotifierForTest{},
+		}
+		status, err := Run(opts)
+		if err != nil || status != StatusComplete {
+			t.Fatalf("status=%v err=%v, want Complete/nil", status, err)
+		}
+	})
 }
 
 func TestConcurrentDifferentSpecs(t *testing.T) {

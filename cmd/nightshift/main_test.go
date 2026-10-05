@@ -11,6 +11,54 @@ import (
 	"testing"
 )
 
+// TestRunHelpMatchesD4 mechanically verifies the Acceptance criterion
+// "nightshift run -h match D4": extracts the reference's exact §3.1.3
+// stderr byte output from docs/reference/pensieve-spec-run.md, applies
+// the documented D1 renames, and diffs it against the real binary's
+// `run -h` output (a subprocess, since -h exits via flag.ExitOnError's
+// own os.Exit(0)).
+func TestRunHelpMatchesD4(t *testing.T) {
+	refData, err := os.ReadFile(filepath.Join("..", "..", "docs", "reference", "pensieve-spec-run.md"))
+	if err != nil {
+		t.Fatalf("read reference doc: %v", err)
+	}
+	ref := string(refData)
+
+	label := "exact stderr byte output"
+	i := strings.Index(ref, label)
+	if i < 0 {
+		t.Fatalf("label %q not found in reference doc", label)
+	}
+	rest := ref[i:]
+	fenceMarker := "```\n"
+	fenceStart := strings.Index(rest, fenceMarker)
+	if fenceStart < 0 {
+		t.Fatalf("no fenced block after %q", label)
+	}
+	rest = rest[fenceStart+len(fenceMarker):]
+	end := strings.Index(rest, "```")
+	if end < 0 {
+		t.Fatalf("unterminated fenced block after %q", label)
+	}
+	want := rest[:end]
+
+	want = strings.ReplaceAll(want, `\t`, "\t")
+	want = strings.ReplaceAll(want, "pensieve-spec-run", "nightshift run")
+	want = strings.ReplaceAll(want, "PENSIEVE_SPEC_BASE", "NIGHTSHIFT_BASE")
+	want = strings.ReplaceAll(want, "PENSIEVE_SPEC_MAX_CONCURRENT", "NIGHTSHIFT_MAX_CONCURRENT")
+	want = strings.ReplaceAll(want, "_specs/ready/", "specs/ready/")
+
+	bin := buildNightshiftBinary(t)
+	cmd := exec.Command(bin, "run", "-h")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	_ = cmd.Run() // -h exits 0; the exit status itself isn't under test here
+
+	if stderr.String() != want {
+		t.Fatalf("run -h output does not match D4\ngot:  %q\nwant: %q", stderr.String(), want)
+	}
+}
+
 func dirExistsForTest(path string) bool {
 	fi, err := os.Stat(path)
 	return err == nil && fi.IsDir()
