@@ -178,7 +178,7 @@ func Ready(home, slug string, stdout io.Writer) error {
 	}
 	fm := ParseFrontmatter(data)
 	for _, key := range []string{"repo", "verify"} {
-		if unquote(strings.TrimSpace(fm[key])) == "" {
+		if Unquote(strings.TrimSpace(fm[key])) == "" {
 			return fmt.Errorf("%s is missing '%s:' — fill it in before marking it ready", slug, key)
 		}
 	}

@@ -53,14 +53,14 @@ func ParseConfig(path string) (map[string]string, error) {
 		if !configKeys[key] {
 			return nil, fmt.Errorf("config %s line %d: %s", path, lineNo, fmt.Sprintf("unknown key %q", key))
 		}
-		cfg[key] = unquote(strings.TrimSpace(value))
+		cfg[key] = Unquote(strings.TrimSpace(value))
 	}
 	return cfg, nil
 }
 
-// unquote strips one pair of matching surrounding double or single quotes
+// Unquote strips one pair of matching surrounding double or single quotes
 // from s. Mismatched quotes are left exactly as written.
-func unquote(s string) string {
+func Unquote(s string) string {
 	if len(s) >= 2 {
 		first, last := s[0], s[len(s)-1]
 		if (first == '"' || first == '\'') && first == last {
