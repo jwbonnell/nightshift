@@ -85,7 +85,14 @@ func (r *run) iterCtx(deadline time.Time, clock func() time.Time) (context.Conte
 	if d <= 0 {
 		d = time.Millisecond
 	}
-	return context.WithTimeout(context.Background(), d)
+	// D8: derive from Options.Ctx so a signal-driven cancellation cuts the
+	// current agent or verify call short immediately, not just at the
+	// next checkpoint.
+	base := r.opts.Ctx
+	if base == nil {
+		base = context.Background()
+	}
+	return context.WithTimeout(base, d)
 }
 
 func (r *run) headSHA() (string, error) {
@@ -179,6 +186,9 @@ func (r *run) loop() Status {
 	redStreak, noProgress, session := 0, 0, 0
 
 	for session < sp.MaxIter {
+		if r.interrupted() { // D8: checked before each iteration
+			return StatusInterrupted
+		}
 		if !deadline.IsZero() && !clock().Before(deadline) {
 			r.logf("window closed before iteration")
 			return StatusWindowClosed
@@ -212,6 +222,11 @@ func (r *run) loop() Status {
 			r.logIter(st.Iterations, "iter %d stop agent: %v", st.Iterations, stopErr)
 		}
 
+		if r.interrupted() { // D8: the agent/verify ctx was just cut short by a signal
+			r.captureDirty(st.Iterations)
+			_ = r.saveState()
+			return StatusInterrupted
+		}
 		if !deadline.IsZero() && !clock().Before(deadline) {
 			r.captureDirty(st.Iterations)
 			_ = r.saveState()

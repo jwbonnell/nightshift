@@ -28,6 +28,7 @@ const (
 	StatusCapped       Status = "capped"
 	StatusWindowClosed Status = "window-closed"
 	StatusBusy         Status = "busy"
+	StatusInterrupted  Status = "interrupted"      // D8
 	statusDryRun       Status = "dry-run"          // internal
 	statusNothing      Status = "nothing-eligible" // internal: --next found nothing
 )
@@ -53,6 +54,8 @@ func ExitCode(s Status) int {
 		return 6
 	case StatusBusy:
 		return 7
+	case StatusInterrupted:
+		return 8
 	default:
 		return 1
 	}
@@ -81,6 +84,7 @@ type Options struct {
 	Stdin         io.Reader // not in the reference's Options (which reads os.Stdin directly); added for testability
 	IsTTY         bool
 	Notifier      notify.Notifier  // nil = resolve from NIGHTSHIFT_NOTIFY/config
+	Ctx           context.Context  // D8: cancellation source; nil = context.Background()
 	clock         func() time.Time // unexported: wall clock for --until and log stamps; nil = time.Now
 }
 
@@ -349,6 +353,14 @@ func runLocked(opts Options, sp *Spec, limit int, capSrc string, specLock *lock.
 // runSpec sets up the run, provisions the sandbox, drives the loop, and
 // hands the result back via finish.
 func runSpec(opts Options, sp *Spec, sb Sandbox) (Status, error) {
+	// D8: cancellation before setup creates no state dir, sandbox, or
+	// result note. Setup itself is never aborted midway — if cancellation
+	// arrives during setup, loop()'s first check catches it instead, and
+	// the run finishes interrupted with its result note.
+	if opts.interrupted() {
+		return StatusInterrupted, nil
+	}
+
 	r, err := setup(opts, sp)
 	if err != nil {
 		return StatusError, err

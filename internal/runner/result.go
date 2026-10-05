@@ -64,6 +64,8 @@ func summaryLine(status Status, st *runState) string {
 		return fmt.Sprintf("Hit the iteration cap (%d) before completing. Re-run to continue.", st.Iterations)
 	case StatusWindowClosed:
 		return "The time window closed mid-run. Uncommitted work was saved as a patch; re-run to continue."
+	case StatusInterrupted:
+		return "The run was interrupted. Uncommitted work was saved as a patch; re-run to continue."
 	case StatusError:
 		return "The runner hit an error and stopped; nothing was recorded from the failing step."
 	default:
