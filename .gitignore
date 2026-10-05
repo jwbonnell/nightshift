@@ -1,0 +1,4 @@
+bin/
+.claude/
+*.test
+/PROGRESS.md
