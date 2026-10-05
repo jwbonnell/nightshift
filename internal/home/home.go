@@ -32,3 +32,9 @@ func RunsDir(home string) string      { return filepath.Join(home, "runs") }
 func LogsDir(home string) string      { return filepath.Join(home, "logs") }
 func ConfigPath(home string) string   { return filepath.Join(home, "config") }
 func TemplatePath(home string) string { return filepath.Join(home, "spec-template.md") }
+
+// SpecLockPath is the per-spec lock file path under home's state root,
+// shared with internal/runner so both agree on the same convention.
+func SpecLockPath(home, slug string) string {
+	return filepath.Join(RunsDir(home), ".locks", "spec-"+slug+".lock")
+}
