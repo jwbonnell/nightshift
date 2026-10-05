@@ -36,16 +36,25 @@ type runState struct {
 	History    []string `json:"history"` // human-readable status trail
 }
 
-// run holds one spec's in-progress execution state. Sandbox (sb) is added
-// in Task 8, once internal/runner has a Sandbox type.
+// run holds one spec's in-progress execution state.
 type run struct {
 	opts  Options
 	spec  *Spec
+	sb    Sandbox
 	st    *runState
 	dir   string // state dir
 	clone string // dir/repo
 	log   *os.File
 	err   error // set by fail()/finalizeSync; returned alongside StatusError
+}
+
+// git runs args against the clone in the control sandbox, stripping any
+// leading sbx banner lines from the output.
+func (r *run) git(args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	out, err := r.sb.Git(ctx, args...)
+	return stripSbxBanner(out), err
 }
 
 func (r *run) attemptsDir() string  { return filepath.Join(r.dir, "attempts") }

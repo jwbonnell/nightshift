@@ -33,6 +33,8 @@ type Options struct {
 	IsTTY     bool
 	Stdout    io.Writer
 	Stdin     io.Reader
+	SbxBin    string // default "sbx"
+	ClaudeBin string // default "claude"
 }
 
 const (
