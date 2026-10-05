@@ -1,0 +1,10 @@
+[Unit]
+Description=nightshift: run one ready spec overnight
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/nightshift-nightly.sh
+TimeoutStartSec=9h
+Nice=10

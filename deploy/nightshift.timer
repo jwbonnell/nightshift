@@ -1,0 +1,10 @@
+[Unit]
+Description=nightshift nightly run at 22:00
+
+[Timer]
+OnCalendar=*-*-* 22:00:00
+Persistent=false
+Unit=nightshift.service
+
+[Install]
+WantedBy=timers.target
