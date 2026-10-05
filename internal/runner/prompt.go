@@ -46,16 +46,6 @@ You must NOT commit, edit code, or touch the spec. Only write PROGRESS.md. If th
 spec is under-specified in a way only a human can resolve, write the question to
 QUESTION.md and stop.`
 
-// readFile returns path's contents, or "" on any error.
-// TODO(Task 9): move into loop.go to match the reference's file split.
-func readFile(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	return string(data)
-}
-
 // buildPrompt assembles one iteration's (or planning pass's) full prompt.
 // It re-reads the spec file at every call, so edits between iterations
 // take effect immediately.

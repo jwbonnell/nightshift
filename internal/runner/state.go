@@ -7,12 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
+	"github.com/jwbonnell/go-libs/pkg/logx"
 	"github.com/jwbonnell/nightshift/internal/gitx"
 	"github.com/jwbonnell/nightshift/internal/lock"
 )
@@ -38,14 +39,16 @@ type runState struct {
 
 // run holds one spec's in-progress execution state.
 type run struct {
-	opts  Options
-	spec  *Spec
-	sb    Sandbox
-	st    *runState
-	dir   string // state dir
-	clone string // dir/repo
-	log   *os.File
-	err   error // set by fail()/finalizeSync; returned alongside StatusError
+	opts     Options
+	spec     *Spec
+	sb       Sandbox
+	st       *runState
+	dir      string // state dir
+	clone    string // dir/repo
+	logFile  *os.File
+	logger   *logx.Logger
+	agentLog *os.File
+	err      error // set by fail()/finalizeSync; returned alongside StatusError
 }
 
 // git runs args against the clone in the control sandbox, stripping any
@@ -77,27 +80,39 @@ func dirExists(path string) bool {
 	return err == nil && fi.IsDir()
 }
 
-var fullSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
-
-// validSHA reports an error if s does not look like a full commit id.
-// TODO(Task 9): move into loop.go to match the reference's file split.
-func validSHA(what, s string) error {
-	if !fullSHA.MatchString(s) {
-		return fmt.Errorf("%s returned %q, which is not a commit id — refusing to record it", what, s)
-	}
-	return nil
+// logf writes one JSON record to runner.log via logx (D5), with a slug
+// attr always and no iter attr. Level is chosen from the message's own
+// text, matching the reference's logf call sites one-for-one: a
+// "SECURITY:" prefix is Warn, an "error:" or "hand-back error:" prefix is
+// Error, everything else is Info.
+func (r *run) logf(format string, args ...any) {
+	r.logRecord(format, 0, false, args...)
 }
 
-// logf writes one plain timestamped line to runner.log. Task 9 (D5)
-// replaces this with JSON lines via go-libs logx; call sites' message
-// text is already written to match verbatim, so that task only needs to
-// change the OUTPUT mechanism, not the wording.
-func (r *run) logf(format string, args ...any) {
-	if r.log == nil {
+// logIter is logf for a message whose text names the current iteration
+// number, which also gets its own "iter" attr.
+func (r *run) logIter(iter int, format string, args ...any) {
+	r.logRecord(format, iter, true, args...)
+}
+
+func (r *run) logRecord(format string, iter int, hasIter bool, args ...any) {
+	if r.logger == nil {
 		return
 	}
-	line := fmt.Sprintf(format, args...)
-	fmt.Fprintf(r.log, "%s %s\n", time.Now().Format("15:04:05"), line)
+	msg := fmt.Sprintf(format, args...)
+	attrs := []any{"slug", r.spec.Slug}
+	if hasIter {
+		attrs = append(attrs, "iter", iter)
+	}
+	ctx := context.Background()
+	switch {
+	case strings.HasPrefix(format, "SECURITY:"):
+		r.logger.Warn(ctx, msg, attrs...)
+	case strings.HasPrefix(format, "error:"), strings.HasPrefix(format, "hand-back error:"):
+		r.logger.Error(ctx, msg, attrs...)
+	default:
+		r.logger.Info(ctx, msg, attrs...)
+	}
 }
 
 func (r *run) loadState() error {
@@ -173,14 +188,6 @@ func (r *run) seedProgress() {
 	body := fmt.Sprintf("# Progress — %s\n\nSpec: %s\nVerify: %s\n\n_This journal is your only memory across iterations. Append what you did, whether verify passed, and anything the next iteration would waste time rediscovering._\n\n",
 		r.spec.Slug, r.spec.Path, r.spec.Verify)
 	r.scaffoldWrite(r.progressPath(), body)
-}
-
-// appendProgress appends one dated line to PROGRESS.md. Task 9 (D11.9)
-// switches the timestamp to the wall clock at write time; for now it
-// matches the reference's use of the run's frozen start time.
-// TODO(Task 9): move into loop.go to match the reference's file split.
-func (r *run) appendProgress(line string) {
-	r.scaffoldAppend(r.progressPath(), fmt.Sprintf("\n- %s %s\n", r.opts.Now.Format("2006-01-02 15:04"), line))
 }
 
 // appendLines appends each of lines to path (each followed by "\n") that
@@ -259,6 +266,81 @@ func (r *run) cloneRepo() error {
 		Started:   r.opts.Now.Format(time.RFC3339),
 	}
 	return r.saveState()
+}
+
+// branchCheckedOut reports whether branch is checked out in a linked
+// worktree of repo (host git, since this inspects the SOURCE repo).
+func branchCheckedOut(repo, branch string) (bool, error) {
+	out, err := gitx.Run(repo, "worktree", "list", "--porcelain")
+	if err != nil {
+		return false, fmt.Errorf("git worktree list: %v: %s", err, out)
+	}
+	want := "branch refs/heads/" + branch
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) == want {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// pendingSyncRef is the D1 rename of the reference's refs/spec-runs/<slug>:
+// the runner-owned ref copy-back uses when spec/<slug> is checked out
+// elsewhere in the source repo.
+func (r *run) pendingSyncRef() string {
+	return "refs/nightshift/" + r.spec.Slug
+}
+
+func (r *run) syncPending() bool {
+	return r.st.SyncRef == r.pendingSyncRef()
+}
+
+// reviewRef is where a reviewer should look: the pending ref if the copy-
+// back landed there, otherwise the real branch.
+func (r *run) reviewRef() string {
+	if r.syncPending() {
+		return r.pendingSyncRef()
+	}
+	return r.st.Branch
+}
+
+// syncBranchBack copies the clone's spec/<slug> branch back to the source
+// repo: to refs/heads/spec/<slug> normally, or to the pending ref (forced)
+// if that branch is checked out elsewhere in the source repo right now.
+func (r *run) syncBranchBack() error {
+	sp := r.spec
+	st := r.st
+	branch := st.Branch
+	headsRef := "refs/heads/" + branch
+	pending := r.pendingSyncRef()
+
+	checkedOut, err := branchCheckedOut(sp.Repo, branch)
+	if err != nil {
+		return fmt.Errorf("check checked-out branch: %w", err)
+	}
+
+	dst := headsRef
+	refspec := branch + ":" + dst
+	if checkedOut {
+		dst = pending
+		refspec = "+" + branch + ":" + dst
+	}
+
+	err = withRepoLock(r.opts.StateRoot, sp.Repo, sp.Slug, func() error {
+		out, ferr := gitx.RunRetry(sp.Repo, "fetch", r.clone, refspec)
+		if ferr != nil {
+			return fmt.Errorf("copy back to %s failed: %v: %s", dst, ferr, out)
+		}
+		if !checkedOut && refExists(sp.Repo, pending) {
+			_, _ = gitx.RunRetry(sp.Repo, "update-ref", "-d", pending)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	st.SyncRef = dst
+	return nil
 }
 
 // repoHash is a stable 12-hex-char id for repoPath's git-common-dir, used
@@ -356,11 +438,18 @@ func setup(opts Options, sp *Spec) (*run, error) {
 	if err := os.MkdirAll(r.attemptsDir(), 0o755); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(dir, "runner.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	logFile, err := os.OpenFile(filepath.Join(dir, "runner.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return nil, err
 	}
-	r.log = f
+	r.logFile = logFile
+	r.logger = logx.New(logFile, slog.LevelInfo, "nightshift", nil)
+
+	agentLog, err := os.OpenFile(filepath.Join(dir, "agent.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	r.agentLog = agentLog
 
 	if resuming {
 		if err := r.loadState(); err != nil {

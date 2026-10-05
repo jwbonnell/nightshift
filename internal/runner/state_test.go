@@ -42,8 +42,8 @@ func setupRun(t *testing.T, homeDir, repo string, opts Options) (*run, *Spec) {
 		t.Fatalf("setup: %v", err)
 	}
 	t.Cleanup(func() {
-		if r.log != nil {
-			r.log.Close()
+		if r.logFile != nil {
+			r.logFile.Close()
 		}
 	})
 	return r, sp
@@ -120,7 +120,7 @@ func TestSetupResumeReusesClone(t *testing.T) {
 	}
 	mustGit(t, r1.clone, "add", "-A")
 	mustGit(t, r1.clone, "commit", "-q", "-m", "step1")
-	r1.log.Close()
+	r1.logFile.Close()
 
 	r2, _ := setupRun(t, homeDir, repo, Options{})
 	if !fileExistsT(filepath.Join(r2.clone, "step1.go")) {
@@ -138,7 +138,7 @@ func TestResumeRepoChangedRefuses(t *testing.T) {
 	writeReadySpec(t, homeDir, "demo", "", repo)
 
 	r1, _ := setupRun(t, homeDir, repo, Options{})
-	r1.log.Close()
+	r1.logFile.Close()
 
 	writeReadySpec(t, homeDir, "demo", "", otherRepo)
 	opts := Options{SpecArg: "demo", Home: homeDir, StateRoot: home.RunsDir(homeDir), Now: time.Now()}
@@ -172,7 +172,7 @@ func TestResumeBaseChangedRefuses(t *testing.T) {
 	homeDir := t.TempDir()
 	writeReadySpec(t, homeDir, "demo", "base: feat/x\n", repo)
 	r1, _ := setupRun(t, homeDir, repo, Options{})
-	r1.log.Close()
+	r1.logFile.Close()
 
 	writeReadySpec(t, homeDir, "demo", "base: main\n", repo)
 	opts := Options{SpecArg: "demo", Home: homeDir, StateRoot: home.RunsDir(homeDir), Now: time.Now()}
@@ -205,7 +205,7 @@ func TestFreshStartsOver(t *testing.T) {
 	mustGit(t, r1.clone, "add", "-A")
 	mustGit(t, r1.clone, "commit", "-q", "-m", "step1")
 	stateDir := r1.dir
-	r1.log.Close()
+	r1.logFile.Close()
 
 	// Simulate a prior sync so the branch also exists in the source repo,
 	// to confirm --fresh removes it from there too.
@@ -214,7 +214,7 @@ func TestFreshStartsOver(t *testing.T) {
 	}
 
 	r2, _ := setupRun(t, homeDir, repo, Options{Fresh: true, Yes: true})
-	defer r2.log.Close()
+	defer r2.logFile.Close()
 
 	if !dirExists(stateDir) {
 		t.Fatalf("expected a fresh state dir to exist after re-setup")
@@ -273,7 +273,6 @@ func TestScaffoldSymlinkSafety(t *testing.T) {
 	homeDir := t.TempDir()
 	writeReadySpec(t, homeDir, "demo", "", repo)
 	r, _ := setupRun(t, homeDir, repo, Options{})
-	defer r.log.Close()
 
 	secret := filepath.Join(t.TempDir(), "secret.txt")
 	if err := os.WriteFile(secret, []byte("do not leak"), 0o600); err != nil {
@@ -305,7 +304,7 @@ func TestScaffoldSymlinkSafety(t *testing.T) {
 		t.Fatalf("secret file was modified: %q", secretData)
 	}
 
-	r.log.Close()
+	r.logFile.Close()
 	logData, err := os.ReadFile(filepath.Join(r.dir, "runner.log"))
 	if err != nil {
 		t.Fatalf("read runner.log: %v", err)

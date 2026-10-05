@@ -33,8 +33,21 @@ type Options struct {
 	IsTTY     bool
 	Stdout    io.Writer
 	Stdin     io.Reader
-	SbxBin    string // default "sbx"
-	ClaudeBin string // default "claude"
+	SbxBin    string           // default "sbx"
+	ClaudeBin string           // default "claude"
+	Until     string           // "HH:MM" local deadline, or ""
+	clock     func() time.Time // unexported: wall clock for --until and log stamps; nil = time.Now
+}
+
+// clockFn returns o.clock if set, else time.Now. D11.9: PROGRESS.md and
+// history entries are stamped with this live clock, not the run's frozen
+// start time (opts.Now) — unlike the reference, which used opts.Now for
+// those and only the live clock for --until / result-note "ended".
+func (o Options) clockFn() func() time.Time {
+	if o.clock != nil {
+		return o.clock
+	}
+	return time.Now
 }
 
 const (
