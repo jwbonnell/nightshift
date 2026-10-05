@@ -4,11 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
-	"time"
-
-	"github.com/jwbonnell/nightshift/internal/lock"
 )
 
 // iterPreamble and planPreamble are byte-identical to reference §3.8.1 /
@@ -74,36 +70,6 @@ func joinPath(a, b string) string {
 
 func stateDirFor(opts Options, sp *Spec) string {
 	return joinPath(opts.StateRoot, sp.Slug)
-}
-
-// printHeldLocks is read-only and never creates <stateRoot>/.locks.
-// TODO(Task 11): move into locks.go to match the reference's file split.
-func printHeldLocks(w io.Writer, stateRoot string) {
-	entries, err := os.ReadDir(filepath.Join(stateRoot, ".locks"))
-	if err != nil {
-		fmt.Fprint(w, "held locks:  none\n")
-		return
-	}
-	var lines []string
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if (!strings.HasPrefix(name, "spec-") && !strings.HasPrefix(name, "slot-")) || !strings.HasSuffix(name, ".lock") {
-			continue
-		}
-		info, held := lock.Probe(filepath.Join(stateRoot, ".locks", name))
-		if !held {
-			continue
-		}
-		lines = append(lines, fmt.Sprintf("  %s: pid %d (%s, since %s)", name, info.PID, info.Label, info.Start.Format(time.RFC3339)))
-	}
-	if len(lines) == 0 {
-		fmt.Fprint(w, "held locks:  none\n")
-		return
-	}
-	fmt.Fprint(w, "held locks:\n"+strings.Join(lines, "\n")+"\n")
 }
 
 // printPlan is the --dry-run output: reference §3.1.10's format strings,

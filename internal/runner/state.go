@@ -2,8 +2,6 @@ package runner
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,7 +13,6 @@ import (
 
 	"github.com/jwbonnell/go-libs/pkg/logx"
 	"github.com/jwbonnell/nightshift/internal/gitx"
-	"github.com/jwbonnell/nightshift/internal/lock"
 )
 
 // runState is the on-disk run.json. Field order is the JSON field order.
@@ -341,40 +338,6 @@ func (r *run) syncBranchBack() error {
 	}
 	st.SyncRef = dst
 	return nil
-}
-
-// repoHash is a stable 12-hex-char id for repoPath's git-common-dir, used
-// to name its repo lock file. Worktrees and symlinked repo paths that
-// share a git dir canonicalize to the same hash.
-// TODO(Task 11): move into locks.go to match the reference's file split.
-func repoHash(repoPath string) (string, error) {
-	gitDir, err := gitx.GitDir(repoPath, "--git-common-dir")
-	if err != nil {
-		return "", fmt.Errorf("resolve git common dir for %s: %w", repoPath, err)
-	}
-	sum := sha256.Sum256([]byte(gitDir))
-	return hex.EncodeToString(sum[:])[:12], nil
-}
-
-var repoLockWait = 2 * time.Minute
-
-// withRepoLock serializes local ref writes against repoPath across
-// concurrent nightshift processes.
-// TODO(Task 11): move into locks.go to match the reference's file split.
-func withRepoLock(stateRoot, repoPath, label string, fn func() error) error {
-	hash, err := repoHash(repoPath)
-	if err != nil {
-		return err
-	}
-	lockPath := filepath.Join(stateRoot, ".locks", "repo-"+hash+".lock")
-	ctx, cancel := context.WithTimeout(context.Background(), repoLockWait)
-	defer cancel()
-	l, err := lock.Acquire(ctx, lockPath, label)
-	if err != nil {
-		return fmt.Errorf("repo lock for %s: %w", repoPath, err)
-	}
-	defer l.Release()
-	return fn()
 }
 
 // doFresh discards prior state for one spec before a run starts: with

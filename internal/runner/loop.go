@@ -11,19 +11,6 @@ import (
 	"time"
 )
 
-// Status is a run's terminal (or dry-run/busy) outcome.
-type Status string
-
-const (
-	StatusComplete     Status = "complete"
-	StatusError        Status = "error"
-	StatusBlocked      Status = "blocked"
-	StatusRed          Status = "red"
-	StatusStalled      Status = "stalled"
-	StatusCapped       Status = "capped"
-	StatusWindowClosed Status = "window-closed"
-)
-
 var fullSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 // validSHA reports an error if s does not look like a full commit id.

@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -17,40 +16,7 @@ import (
 
 	"github.com/jwbonnell/nightshift/internal/gitx"
 	"github.com/jwbonnell/nightshift/internal/home"
-	"github.com/jwbonnell/nightshift/internal/notify"
 )
-
-// Options configures a nightshift run. Fields are added incrementally as
-// later tasks need them — see PROGRESS.md for which task introduced which.
-type Options struct {
-	SpecArg   string // spec name or path (ignored when Next is set)
-	Base      string // "" = fall through to frontmatter/env/config/default
-	MaxIter   int    // 0 = unset
-	Home      string
-	StateRoot string    // default: <Home>/runs
-	Now       time.Time // stamps run.json "started" and PROGRESS.md lines; zero = time.Now()
-	Fresh     bool
-	Yes       bool
-	IsTTY     bool
-	Stdout    io.Writer
-	Stdin     io.Reader
-	SbxBin    string           // default "sbx"
-	ClaudeBin string           // default "claude"
-	Until     string           // "HH:MM" local deadline, or ""
-	Notifier  notify.Notifier  // nil = resolve from NIGHTSHIFT_NOTIFY/config
-	clock     func() time.Time // unexported: wall clock for --until and log stamps; nil = time.Now
-}
-
-// clockFn returns o.clock if set, else time.Now. D11.9: PROGRESS.md and
-// history entries are stamped with this live clock, not the run's frozen
-// start time (opts.Now) — unlike the reference, which used opts.Now for
-// those and only the live clock for --until / result-note "ended".
-func (o Options) clockFn() func() time.Time {
-	if o.clock != nil {
-		return o.clock
-	}
-	return time.Now
-}
 
 const (
 	defaultMaxIter     = 10
