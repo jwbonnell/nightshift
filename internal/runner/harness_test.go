@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/jwbonnell/nightshift/internal/gitx"
 	"github.com/jwbonnell/nightshift/internal/home"
 )
 
@@ -74,8 +75,15 @@ func (s *stubSandbox) StopAgent() error {
 	return nil
 }
 
+// Git shells out directly (not through gitx.Run, which TrimSpaces both
+// ends) so it matches the real sbxSandbox.Git's D11.7 trimming exactly:
+// only trailing whitespace is removed, preserving a leading space callers
+// like the result note's diffstat want to keep.
 func (s *stubSandbox) Git(ctx context.Context, args ...string) (string, error) {
-	return gitx.Run(s.mountDir, args...)
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = s.mountDir
+	out, err := cmd.CombinedOutput()
+	return strings.TrimRight(string(out), " \t\r\n"), err
 }
 
 func (s *stubSandbox) ResetVerify() error {

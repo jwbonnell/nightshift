@@ -17,6 +17,7 @@ import (
 
 	"github.com/jwbonnell/nightshift/internal/gitx"
 	"github.com/jwbonnell/nightshift/internal/home"
+	"github.com/jwbonnell/nightshift/internal/notify"
 )
 
 // Options configures a nightshift run. Fields are added incrementally as
@@ -36,6 +37,7 @@ type Options struct {
 	SbxBin    string           // default "sbx"
 	ClaudeBin string           // default "claude"
 	Until     string           // "HH:MM" local deadline, or ""
+	Notifier  notify.Notifier  // nil = resolve from NIGHTSHIFT_NOTIFY/config
 	clock     func() time.Time // unexported: wall clock for --until and log stamps; nil = time.Now
 }
 
