@@ -89,6 +89,28 @@ func TestStatusTableEmpty(t *testing.T) {
 	}
 }
 
+// TestStatusTableReadyOrDraftNoRuns is a regression test: with ready or
+// draft specs but no runs at all, the table header (SLUG/STATUS/...) must
+// not be printed above the trailer lines — there are no rows to put under
+// it.
+func TestStatusTableReadyOrDraftNoRuns(t *testing.T) {
+	homeDir := t.TempDir()
+	stateRoot := home.RunsDir(homeDir)
+
+	repo := newSourceRepo(t)
+	writeReadySpec(t, homeDir, "readyonly", "", repo)
+	writeDraftSpec(t, homeDir, "draftonly", "", repo)
+
+	var buf bytes.Buffer
+	if err := PrintStatusTable(&buf, homeDir, stateRoot); err != nil {
+		t.Fatalf("PrintStatusTable: %v", err)
+	}
+	want := "ready, not started: readyonly\ndrafts: draftonly\n"
+	if buf.String() != want {
+		t.Fatalf("output = %q, want %q (no empty table header)", buf.String(), want)
+	}
+}
+
 func TestStatusDetail(t *testing.T) {
 	homeDir := t.TempDir()
 	stateRoot := home.RunsDir(homeDir)

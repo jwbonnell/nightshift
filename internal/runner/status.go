@@ -105,19 +105,21 @@ func PrintStatusTable(w io.Writer, homeDir, stateRoot string) error {
 		return nil
 	}
 
-	slugs := make([]string, 0, len(rows))
-	for slug := range rows {
-		slugs = append(slugs, slug)
-	}
-	sort.Strings(slugs)
+	if len(rows) > 0 {
+		slugs := make([]string, 0, len(rows))
+		for slug := range rows {
+			slugs = append(slugs, slug)
+		}
+		sort.Strings(slugs)
 
-	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
-	fmt.Fprint(tw, "SLUG\tSTATUS\tITER\tCOMMITS\tUPDATED\tBRANCH\n")
-	for _, slug := range slugs {
-		r := rows[slug]
-		fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%s\t%s\n", r.slug, r.status, r.iterations, r.commits, r.updated, r.branch)
+		tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
+		fmt.Fprint(tw, "SLUG\tSTATUS\tITER\tCOMMITS\tUPDATED\tBRANCH\n")
+		for _, slug := range slugs {
+			r := rows[slug]
+			fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%s\t%s\n", r.slug, r.status, r.iterations, r.commits, r.updated, r.branch)
+		}
+		_ = tw.Flush()
 	}
-	_ = tw.Flush()
 
 	if len(readyNotStarted) > 0 {
 		fmt.Fprintf(w, "ready, not started: %s\n", strings.Join(readyNotStarted, ", "))
