@@ -241,7 +241,9 @@ func (r *run) loop() Status {
 			}
 			if commitsNow > commitsBefore {
 				r.logf("planner committed — resetting to last green, logging violation")
-				_ = r.resetTo(st.LastGreen) // D11.1: last_green, not base
+				if err := r.resetTo(st.LastGreen); err != nil { // D11.1: last_green, not base
+					return r.fail(err)
+				}
 				r.appendProgress("Runner: planning iteration committed code; reset to last green. The planner must only write PROGRESS.md.")
 			}
 			st.Planned = true

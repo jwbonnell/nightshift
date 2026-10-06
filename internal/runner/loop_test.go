@@ -115,6 +115,38 @@ func TestPlannerCommitResetsToLastGreenNotBase(t *testing.T) {
 	}
 }
 
+// TestPlannerCommitResetFailureIsError is a regression test: a failed
+// resetTo after a planner violation must fail the run (StatusError), not
+// get silently ignored and leave the illegal commit on spec/<slug> for the
+// next green iteration to copy back into the source repo.
+func TestPlannerCommitResetFailureIsError(t *testing.T) {
+	repo := newSourceRepo(t)
+	sb := newStubSandbox()
+	sb.agent = func(ctx context.Context, iter int, dir string) error {
+		if iter == 1 {
+			commitFile(t, dir, "violation.go", "oops\n", "planner violation")
+		}
+		return nil
+	}
+	sb.verify = func(iter int, dir string) error { return nil }
+	sb.failGit = func(args []string) bool {
+		return len(args) >= 1 && args[0] == "reset"
+	}
+
+	r := newTestRun(t, repo, "", Options{}, sb)
+	status := r.loop()
+
+	if status != StatusError {
+		t.Fatalf("status = %v, want Error", status)
+	}
+	if r.err == nil {
+		t.Fatalf("r.err is nil, want the reset failure recorded")
+	}
+	if refExists(repo, "refs/heads/spec/demo") {
+		t.Fatalf("the planner's illegal commit must never reach the source repo")
+	}
+}
+
 func TestRedResetsToLastGreen(t *testing.T) {
 	repo := newSourceRepo(t)
 	sb := newStubSandbox()

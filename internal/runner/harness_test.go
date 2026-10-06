@@ -40,6 +40,11 @@ type stubSandbox struct {
 	// (e.g. to simulate an sbx startup banner line).
 	gitHook func(args []string, out string) string
 	banner  string
+
+	// failGit, if set and it returns true for a given argv, makes Git
+	// fail with a synthetic error instead of running the real command —
+	// simulating e.g. a hard reset failing in the control sandbox.
+	failGit func(args []string) bool
 }
 
 func newStubSandbox() *stubSandbox { return &stubSandbox{avail: true} }
@@ -86,6 +91,9 @@ func (s *stubSandbox) StopAgent() error {
 // only trailing whitespace is removed, preserving a leading space callers
 // like the result note's diffstat want to keep.
 func (s *stubSandbox) Git(ctx context.Context, args ...string) (string, error) {
+	if s.failGit != nil && s.failGit(args) {
+		return "simulated git failure", errors.New("simulated git failure")
+	}
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = s.mountDir
 	out, err := cmd.CombinedOutput()
