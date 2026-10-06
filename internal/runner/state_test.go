@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -84,6 +85,56 @@ func TestSetupFreshCloneHasNoRemotes(t *testing.T) {
 		if !strings.Contains(string(exclude), name) {
 			t.Fatalf("info/exclude missing %s: %q", name, exclude)
 		}
+	}
+}
+
+// TestCloneObjectsNotHardlinked is a regression test for the security fix
+// found by the first real-sbx smoke run: a default `git clone` of a local
+// path hardlinks .git/objects, so the clone's objects are the same inodes
+// as the source repo's. The agent sandbox mounts the clone read-write
+// with root inside it, so a hostile agent overwriting an object in place
+// would silently corrupt the source repo's history. --no-local forces a
+// real copy; this asserts every object file has a link count of 1 and
+// that no objects/info/alternates (another way to share objects) exists.
+func TestCloneObjectsNotHardlinked(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "demo", "", repo)
+
+	r, _ := setupRun(t, homeDir, repo, Options{})
+
+	objectsDir := filepath.Join(r.clone, ".git", "objects")
+	found := false
+	err := filepath.WalkDir(objectsDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		found = true
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			t.Fatalf("no syscall.Stat_t for %s", path)
+		}
+		if stat.Nlink != 1 {
+			t.Fatalf("%s has link count %d, want 1 (hardlinked into the source repo's objects)", path, stat.Nlink)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", objectsDir, err)
+	}
+	if !found {
+		t.Fatalf("no object files found under %s", objectsDir)
+	}
+
+	if fileExistsT(filepath.Join(objectsDir, "info", "alternates")) {
+		t.Fatalf("objects/info/alternates should not exist")
 	}
 }
 

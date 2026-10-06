@@ -216,13 +216,18 @@ func appendLines(path string, lines ...string) error {
 
 // cloneRepo creates a fresh clone with no remotes, checked out onto
 // spec/<slug> at the spec's resolved base, with scaffold files excluded
-// and seeded.
+// and seeded. --no-local forces a real copy of the objects instead of
+// git's local-clone hardlink optimization: the agent sandbox mounts this
+// clone read-write with root inside it, and a hardlinked object file is
+// the same inode as the source repo's — a hostile agent overwriting one
+// in place would silently corrupt the source repo's history with no host
+// git ever involved.
 func (r *run) cloneRepo() error {
 	sp := r.spec
 	if err := os.MkdirAll(r.dir, 0o755); err != nil {
 		return err
 	}
-	if out, err := gitx.Run(r.dir, "clone", sp.Repo, "repo"); err != nil {
+	if out, err := gitx.Run(r.dir, "clone", "--no-local", sp.Repo, "repo"); err != nil {
 		return fmt.Errorf("clone %s: %v: %s", sp.Repo, err, out)
 	}
 

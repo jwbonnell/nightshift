@@ -243,6 +243,10 @@ same path, each with a different trust role:
   runs here, never on the host and never in the agent or verify sandbox.
   The clone's own `.git/config`/hooks are agent-writable and could be
   booby-trapped; running git here, not on the host, contains that.
+  The clone itself is also made with `git clone --no-local`, so its
+  objects are real copies rather than hardlinks into the source repo's
+  `.git/objects` — without that, the agent (root inside its own sandbox)
+  could overwrite a shared inode and corrupt the source repo's history.
 - **verify** (`nightshift-<slug>-verify`) — the spec's `verify:` command
   runs here, in a sandbox recreated from a clean image before *every*
   single verify call, so nothing a previous iteration (or verify itself)
