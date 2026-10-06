@@ -3,7 +3,7 @@ type: spec
 project: nightshift
 status: draft
 created: 2026-10-05T11:15:00-04:00
-repo: ~/dev/sbx/devkit/spec-runner
+repo: ~/dev/sbx/devkit/nightshift
 verify: test -z "$(gofmt -l cmd internal)" && go vet ./... && go test ./...
 max_iter: 40
 iter_timeout: 45m
