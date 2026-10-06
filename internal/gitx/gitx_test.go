@@ -7,7 +7,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jwbonnell/nightshift/internal/testenv"
 )
+
+func TestMain(m *testing.M) {
+	testenv.HermeticGit()
+	os.Exit(m.Run())
+}
 
 func mustGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()

@@ -9,7 +9,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jwbonnell/nightshift/internal/testenv"
 )
+
+func TestMain(m *testing.M) {
+	testenv.HermeticGit()
+	os.Exit(m.Run())
+}
 
 // TestRunHelpMatchesD4 mechanically verifies the Acceptance criterion
 // "nightshift run -h match D4": extracts the reference's exact §3.1.3

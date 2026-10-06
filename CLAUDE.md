@@ -75,6 +75,14 @@ test -z "$(gofmt -l cmd internal)" && go vet ./... && go test ./...
 That's the exact verify command from `SPEC.md`'s frontmatter — run it,
 green, before any commit.
 
+Also run `make test-hermetic` before any commit that touches a test
+spawning git: it re-runs the suite with a throwaway `$HOME` and
+`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_NOSYSTEM` pointed at nothing, catching
+tests that only pass because the host's `~/.gitconfig` happens to supply
+a commit identity — exactly the gap a real sbx verify sandbox's clean
+`$HOME` would expose. Every test package that shells out to git sets this
+up itself via `internal/testenv.HermeticGit()` in a `TestMain`.
+
 **Tests must never call the real `sbx`, `claude`, `notify-send`, or
 systemd, and must never touch your real `$HOME`.** Use:
 
