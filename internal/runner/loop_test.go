@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -442,6 +443,67 @@ func TestRunnerLogIsJSON(t *testing.T) {
 	if strings.Contains(string(data), "AGENT RAW OUTPUT") {
 		t.Fatalf("raw agent output leaked into runner.log")
 	}
+}
+
+// TestRunnerLogFileAttrNamesCaller is a regression test: logRecord wraps
+// logx's Info/Warn/Error through logf/logIter, two frames deep, so every
+// record's "file" attr named logRecord's own line inside state.go instead
+// of the real call site. This drives a real run through setup() (via
+// newTestRun), reads back the "start:" record setup() emits, and asserts
+// "file" points at setup()'s own logf call line — found by scanning the
+// source at test time, so the assertion doesn't rot if the file is
+// edited later — rather than naming logRecord's wrapper line.
+func TestRunnerLogFileAttrNamesCaller(t *testing.T) {
+	repo := newSourceRepo(t)
+	sb := newStubSandbox()
+	sb.verify = func(iter int, dir string) error { return nil }
+
+	r := newTestRun(t, repo, "", Options{}, sb)
+	r.logFile.Close()
+
+	data, err := os.ReadFile(filepath.Join(r.dir, "runner.log"))
+	if err != nil {
+		t.Fatalf("read runner.log: %v", err)
+	}
+
+	wantFile := fmt.Sprintf("state.go:%d", sourceLineContaining(t, "state.go", `r.logf("start: slug=`))
+
+	var gotFile string
+	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("line is not valid JSON: %q: %v", line, err)
+		}
+		if msg, _ := rec["msg"].(string); strings.HasPrefix(msg, "start:") {
+			gotFile, _ = rec["file"].(string)
+		}
+	}
+	if gotFile == "" {
+		t.Fatalf("no 'start:' record found in runner.log")
+	}
+	if gotFile != wantFile {
+		t.Fatalf("file = %q, want %q (the real call site, not logRecord's own wrapper line)", gotFile, wantFile)
+	}
+}
+
+// sourceLineContaining returns the 1-indexed line number of the first
+// line in internal/runner/<name> containing substr.
+func sourceLineContaining(t *testing.T, name, substr string) int {
+	t.Helper()
+	data, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatalf("read %s: %v", name, err)
+	}
+	for i, line := range strings.Split(string(data), "\n") {
+		if strings.Contains(line, substr) {
+			return i + 1
+		}
+	}
+	t.Fatalf("no line in %s containing %q", name, substr)
+	return 0
 }
 
 func TestAgentLogSeparate(t *testing.T) {

@@ -102,13 +102,18 @@ func (r *run) logRecord(format string, iter int, hasIter bool, args ...any) {
 		attrs = append(attrs, "iter", iter)
 	}
 	ctx := context.Background()
+	// callerSkip=2: one frame for this function's own call into logx
+	// (what callerSkip=0 already accounts for, same as plain Info/Warn/
+	// Error), plus one more for logf/logIter sitting above us — without
+	// it, every record's "file" attr names this line instead of the
+	// real call site.
 	switch {
 	case strings.HasPrefix(format, "SECURITY:"):
-		r.logger.Warn(ctx, msg, attrs...)
+		r.logger.Warnc(ctx, 2, msg, attrs...)
 	case strings.HasPrefix(format, "error:"), strings.HasPrefix(format, "hand-back error:"):
-		r.logger.Error(ctx, msg, attrs...)
+		r.logger.Errorc(ctx, 2, msg, attrs...)
 	default:
-		r.logger.Info(ctx, msg, attrs...)
+		r.logger.Infoc(ctx, 2, msg, attrs...)
 	}
 }
 
