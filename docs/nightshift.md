@@ -347,3 +347,16 @@ resumable, and the next night's run picks the same spec back up via
   the sync automatically on its next green iteration.
 - **Stale lock files**: don't delete them by hand — they're reclaimed
   automatically once their holder process is confirmed gone.
+
+### Interrupts
+
+- **One Ctrl+C** stops the run cleanly: nightshift prints
+  `nightshift: interrupt received — stopping the agent and saving state
+  (press Ctrl+C again to force quit)`, stops the agent, saves state, and
+  ends the run `interrupted` with a result note. It's resumable — see
+  above.
+- **A second Ctrl+C** force-quits immediately, with no cleanup. Any
+  sandboxes left behind are removed automatically on the next
+  `nightshift run` of that spec; you never need to `sbx rm` them by hand.
+- The same automatic sandbox cleanup applies after any other unclean
+  exit — a crash, `kill -9`, a reboot, or a systemd timeout.

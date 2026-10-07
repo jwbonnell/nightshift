@@ -47,6 +47,11 @@ declarations that got relocated once their target file existed.
 `<date> <time> <LEVEL> <message>`, with no attrs and no source location —
 see `docs/nightshift.md` for the level mapping and a sample line.
 
+One Ctrl+C ends a run `interrupted` and resumable (state saved, agent
+stopped); a second force-quits with no cleanup, and any leftover sandboxes
+it left behind are removed automatically on the next run of that spec —
+see `docs/nightshift.md`'s Interrupts section.
+
 ## Trust model — read this before touching sandbox.go or loop.go
 
 - **The agent never runs on the host.** It runs only inside the `agent`
