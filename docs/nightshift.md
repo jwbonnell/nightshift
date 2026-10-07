@@ -200,6 +200,18 @@ commit per result, touching only that note); if you don't, they're just
 written as plain files — either way nothing else about the run depends on
 it.
 
+`runner.log` holds plain-text lines, `<date> <time> <LEVEL> <message>`,
+written via `logx.NewText`. A `SECURITY:`-prefixed message logs at `WARN`;
+`error:`/`hand-back error:` messages log at `ERROR`; everything else is
+`INFO`. For example:
+
+```
+2026-10-05 21:52:05 INFO  start: repo=~/dev/myapp branch=spec/demo base=1a2b3c4d
+2026-10-05 21:52:05 INFO  iter 2 verify GREEN at cb9eef57
+```
+
+`agent.log` holds the agent's raw output instead, unformatted.
+
 ## Configuration
 
 Precedence, highest first: **CLI flag > spec frontmatter > `NIGHTSHIFT_*`

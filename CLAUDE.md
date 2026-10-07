@@ -43,6 +43,10 @@ and clone management, `sandbox.go`/`prompt.go` the sbx backend and prompts,
 for exactly how each piece arrived, including a few deliberate forward-
 declarations that got relocated once their target file existed.
 
+`runner.log` (built in `state.go` via `logx.NewText`) is plain-text lines,
+`<date> <time> <LEVEL> <message>`, with no attrs and no source location —
+see `docs/nightshift.md` for the level mapping and a sample line.
+
 ## Trust model — read this before touching sandbox.go or loop.go
 
 - **The agent never runs on the host.** It runs only inside the `agent`
