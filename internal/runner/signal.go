@@ -2,10 +2,20 @@ package runner
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
 )
+
+// interruptOut is where NewInterruptContext writes the first-signal
+// message. A package var so tests can swap it for a buffer.
+var interruptOut io.Writer = os.Stderr
+
+// interruptMessage is printed once, on the first SIGINT/SIGTERM, so a
+// terminal Ctrl+C gives visible feedback instead of inviting a second one.
+const interruptMessage = "nightshift: interrupt received — stopping the agent and saving state (press Ctrl+C again to force quit)"
 
 // interrupted reports whether o.Ctx has been cancelled (D8). A nil Ctx is
 // never interrupted.
@@ -28,6 +38,7 @@ func (r *run) interrupted() bool {
 func NewInterruptContext() (context.Context, func()) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	done := make(chan struct{})
+	out := interruptOut // captured once, so a test restoring the var later doesn't race this goroutine
 
 	go func() {
 		select {
@@ -35,6 +46,8 @@ func NewInterruptContext() (context.Context, func()) {
 		case <-done:
 			return
 		}
+
+		fmt.Fprintln(out, interruptMessage)
 
 		// The first signal already cancelled ctx above. Arm a second,
 		// independent registration so a further signal force-exits

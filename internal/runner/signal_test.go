@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -14,11 +15,34 @@ import (
 	"github.com/jwbonnell/nightshift/internal/home"
 )
 
+// syncBuffer is a mutex-guarded buffer: NewInterruptContext's goroutine
+// writes the interrupt message concurrently with the test's own reads.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // TestNewInterruptContextFirstSignal exercises only the graceful path (ctx
 // cancelled on the first signal). The force-exit-on-a-second-signal path
 // calls os.Exit and cannot be exercised in-process without killing the
 // test binary; it's reviewed by inspection instead.
 func TestNewInterruptContextFirstSignal(t *testing.T) {
+	old := interruptOut
+	interruptOut = io.Discard
+	t.Cleanup(func() { interruptOut = old })
+
 	ctx, stop := NewInterruptContext()
 	defer stop()
 
@@ -144,5 +168,102 @@ func TestInterruptIsResumable(t *testing.T) {
 	}
 	if final.Iterations <= 2 {
 		t.Fatalf("Iterations = %d, want > 2 (continuing from the interrupted run, not restarting)", final.Iterations)
+	}
+}
+
+func TestInterruptMessage(t *testing.T) {
+	var buf syncBuffer
+	old := interruptOut
+	interruptOut = &buf
+	t.Cleanup(func() { interruptOut = old })
+
+	ctx, stop := NewInterruptContext()
+
+	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
+		t.Fatalf("self-signal: %v", err)
+	}
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatalf("ctx was not cancelled within 2s of SIGINT")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(buf.String(), interruptMessage) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stop()
+
+	if got := strings.Count(buf.String(), interruptMessage); got != 1 {
+		t.Fatalf("interrupt message printed %d times, want 1 (buf=%q)", got, buf.String())
+	}
+}
+
+// TestInterruptedRunFinishesClean cancels during iteration 1 (the planning
+// iteration, before any verify) and checks the whole interrupt path runs
+// to completion: StopAgent and Remove are both called, a result note is
+// written, and run.json records the interrupted status.
+func TestInterruptedRunFinishesClean(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "demo", "", repo)
+	stateDir := filepath.Join(home.RunsDir(homeDir), "demo")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	sb := newStubSandbox()
+	sb.agent = func(c context.Context, iter int, dir string) error {
+		if iter == 1 {
+			cancel()
+			<-c.Done()
+			return c.Err()
+		}
+		return nil
+	}
+	sb.verify = alwaysGreenVerify
+
+	opts := Options{
+		SpecArg: "demo", Home: homeDir, Sandbox: sb, Ctx: ctx,
+		Stdout: io.Discard, Stderr: io.Discard, Stdin: strings.NewReader(""), Notifier: noopNotifierForTest{},
+	}
+	status, err := Run(opts)
+	if status != StatusInterrupted || err != nil {
+		t.Fatalf("status=%v err=%v, want Interrupted/nil", status, err)
+	}
+
+	if sb.stopN < 1 || sb.stopN != sb.agentN {
+		t.Fatalf("StopAgent not called before giving up: stopN=%d agentN=%d", sb.stopN, sb.agentN)
+	}
+	if !sb.removed {
+		t.Fatalf("the deferred sandbox Remove should still run on interrupt")
+	}
+
+	entries, err := os.ReadDir(home.ResultsDir(homeDir))
+	if err != nil {
+		t.Fatalf("readdir results: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly 1 result note, got %d", len(entries))
+	}
+
+	data, err := os.ReadFile(filepath.Join(stateDir, "run.json"))
+	if err != nil {
+		t.Fatalf("read run.json: %v", err)
+	}
+	var st struct {
+		Status  string   `json:"status"`
+		History []string `json:"history"`
+	}
+	if err := json.Unmarshal(data, &st); err != nil {
+		t.Fatalf("parse run.json: %v", err)
+	}
+	if st.Status != "interrupted" {
+		t.Fatalf("run.json status = %q, want interrupted", st.Status)
+	}
+	if len(st.History) == 0 || !strings.HasSuffix(st.History[len(st.History)-1], " interrupted") {
+		t.Fatalf("run.json history last entry = %q, want suffix \" interrupted\"", st.History)
 	}
 }

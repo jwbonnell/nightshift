@@ -17,6 +17,12 @@ import (
 // grandchild that inherited the pipe could hang Wait forever.
 const childWaitDelay = 10 * time.Second
 
+// cleanupTimeout bounds StopAgent and Remove. Both run on the interrupt
+// path after Options.Ctx is already cancelled, so they derive their own
+// context from context.Background() rather than ctx — deriving from the
+// cancelled ctx would make them no-ops exactly when cleanup matters most.
+const cleanupTimeout = 60 * time.Second
+
 // Sandbox abstracts the three-sandbox (agent/ctl/verify) Docker Sandboxes
 // backend so tests can substitute a stub. See reference §3.4.1 for the
 // exact contract each method must honor:
@@ -120,7 +126,9 @@ func (s *sbxSandbox) RunAgent(ctx context.Context, model, prompt string, logw io
 }
 
 func (s *sbxSandbox) StopAgent() error {
-	_, err := execStream(context.Background(), nil, io.Discard, s.bin, "stop", s.agentName)
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
+	_, err := execStream(ctx, nil, io.Discard, s.bin, "stop", s.agentName)
 	return err
 }
 
@@ -152,7 +160,9 @@ func (s *sbxSandbox) Remove() error {
 	if !s.created {
 		return nil
 	}
-	_, err := execStream(context.Background(), nil, io.Discard, s.bin, "rm", "-f", s.agentName, s.ctlName, s.verifyName)
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
+	_, err := execStream(ctx, nil, io.Discard, s.bin, "rm", "-f", s.agentName, s.ctlName, s.verifyName)
 	return err
 }
 
