@@ -208,18 +208,18 @@ func (r *run) loop() Status {
 		}
 
 		ctx, cancel := r.iterCtx(deadline, clock)
-		r.logIter(st.Iterations, "iter %d (session %d) model=%s planning=%v", st.Iterations, session, model, planning)
+		r.logf("iter %d (session %d) model=%s planning=%v", st.Iterations, session, model, planning)
 		r.writeAgentHeader(st.Iterations, session, model, planning, clock)
 		agentErr := r.sb.RunAgent(ctx, model, buildPrompt(sp, planning), r.agentLog)
 		cancel()
 		switch {
 		case agentErr == context.DeadlineExceeded:
-			r.logIter(st.Iterations, "iter %d timed out after %s", st.Iterations, sp.IterTimeout)
+			r.logf("iter %d timed out after %s", st.Iterations, sp.IterTimeout)
 		case agentErr != nil:
-			r.logIter(st.Iterations, "iter %d agent exited: %v", st.Iterations, agentErr)
+			r.logf("iter %d agent exited: %v", st.Iterations, agentErr)
 		}
 		if stopErr := r.sb.StopAgent(); stopErr != nil {
-			r.logIter(st.Iterations, "iter %d stop agent: %v", st.Iterations, stopErr)
+			r.logf("iter %d stop agent: %v", st.Iterations, stopErr)
 		}
 
 		if r.interrupted() { // D8: the agent/verify ctx was just cut short by a signal
@@ -255,7 +255,7 @@ func (r *run) loop() Status {
 		}
 
 		if err := r.sb.ResetVerify(); err != nil {
-			r.logIter(st.Iterations, "iter %d reset verify sandbox: %v", st.Iterations, err)
+			r.logf("iter %d reset verify sandbox: %v", st.Iterations, err)
 		}
 		vctx, vcancel := r.iterCtx(deadline, clock)
 		vout, verr := r.sb.RunVerify(vctx, sp.Verify)
@@ -268,16 +268,16 @@ func (r *run) loop() Status {
 				return r.fail(err)
 			}
 			st.LastGreen = sha
-			r.logIter(st.Iterations, "iter %d verify GREEN at %s", st.Iterations, short(st.LastGreen))
+			r.logf("iter %d verify GREEN at %s", st.Iterations, short(st.LastGreen))
 			if err := r.syncBranchBack(); err != nil {
-				r.logIter(st.Iterations, "iter %d sync to %s failed (will retry after the next green iteration): %v", st.Iterations, sp.Repo, err)
+				r.logf("iter %d sync to %s failed (will retry after the next green iteration): %v", st.Iterations, sp.Repo, err)
 				st.SyncOwed = true
 			} else {
 				st.SyncOwed = false
 			}
 			redStreak = 0
 		} else {
-			r.logIter(st.Iterations, "iter %d verify RED (streak %d)", st.Iterations, redStreak+1)
+			r.logf("iter %d verify RED (streak %d)", st.Iterations, redStreak+1)
 			r.saveRed(st.Iterations, vout)
 			if err := r.resetTo(st.LastGreen); err != nil {
 				return r.fail(err)

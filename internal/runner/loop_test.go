@@ -2,11 +2,10 @@ package runner
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -389,7 +388,9 @@ func TestAgentKilledBeforeVerify(t *testing.T) {
 	}
 }
 
-func TestRunnerLogIsJSON(t *testing.T) {
+var runnerLogLineRE = regexp.MustCompile(`^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (DEBUG|INFO |WARN |ERROR) .+$`)
+
+func TestRunnerLogIsText(t *testing.T) {
 	repo := newSourceRepo(t)
 	sb := newStubSandbox()
 	sb.agent = func(ctx context.Context, iter int, dir string) error {
@@ -412,98 +413,30 @@ func TestRunnerLogIsJSON(t *testing.T) {
 		t.Fatalf("read runner.log: %v", err)
 	}
 
-	foundIterAttr := false
+	wantSuffix := "iter 2 verify GREEN at " + short(r.st.LastGreen)
+	foundGreen := false
 	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
 		if line == "" {
 			continue
 		}
-		var rec map[string]any
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			t.Fatalf("line is not valid JSON: %q: %v", line, err)
+		if !runnerLogLineRE.MatchString(line) {
+			t.Fatalf("line doesn't match plain-text format: %q", line)
 		}
-		if rec["service"] != "nightshift" {
-			t.Fatalf("record missing service=nightshift: %v", rec)
-		}
-		if _, ok := rec["msg"]; !ok {
-			t.Fatalf("record missing msg: %v", rec)
-		}
-		if _, ok := rec["slug"]; !ok {
-			t.Fatalf("record missing slug: %v", rec)
-		}
-		if msg, _ := rec["msg"].(string); strings.Contains(msg, "verify GREEN") {
-			if _, ok := rec["iter"]; !ok {
-				t.Fatalf("verify GREEN record missing iter attr: %v", rec)
+		for _, bad := range []string{"{", "slug=", "iter=", "service", "file="} {
+			if strings.Contains(line, bad) {
+				t.Fatalf("line contains %q, want no attrs: %q", bad, line)
 			}
-			foundIterAttr = true
+		}
+		if strings.HasSuffix(line, wantSuffix) {
+			foundGreen = true
 		}
 	}
-	if !foundIterAttr {
-		t.Fatalf("no 'verify GREEN' record found in runner.log")
+	if !foundGreen {
+		t.Fatalf("no line ending in %q found in runner.log", wantSuffix)
 	}
 	if strings.Contains(string(data), "AGENT RAW OUTPUT") {
 		t.Fatalf("raw agent output leaked into runner.log")
 	}
-}
-
-// TestRunnerLogFileAttrNamesCaller is a regression test: logRecord wraps
-// logx's Info/Warn/Error through logf/logIter, two frames deep, so every
-// record's "file" attr named logRecord's own line inside state.go instead
-// of the real call site. This drives a real run through setup() (via
-// newTestRun), reads back the "start:" record setup() emits, and asserts
-// "file" points at setup()'s own logf call line — found by scanning the
-// source at test time, so the assertion doesn't rot if the file is
-// edited later — rather than naming logRecord's wrapper line.
-func TestRunnerLogFileAttrNamesCaller(t *testing.T) {
-	repo := newSourceRepo(t)
-	sb := newStubSandbox()
-	sb.verify = func(iter int, dir string) error { return nil }
-
-	r := newTestRun(t, repo, "", Options{}, sb)
-	r.logFile.Close()
-
-	data, err := os.ReadFile(filepath.Join(r.dir, "runner.log"))
-	if err != nil {
-		t.Fatalf("read runner.log: %v", err)
-	}
-
-	wantFile := fmt.Sprintf("state.go:%d", sourceLineContaining(t, "state.go", `r.logf("start: slug=`))
-
-	var gotFile string
-	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
-		if line == "" {
-			continue
-		}
-		var rec map[string]any
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			t.Fatalf("line is not valid JSON: %q: %v", line, err)
-		}
-		if msg, _ := rec["msg"].(string); strings.HasPrefix(msg, "start:") {
-			gotFile, _ = rec["file"].(string)
-		}
-	}
-	if gotFile == "" {
-		t.Fatalf("no 'start:' record found in runner.log")
-	}
-	if gotFile != wantFile {
-		t.Fatalf("file = %q, want %q (the real call site, not logRecord's own wrapper line)", gotFile, wantFile)
-	}
-}
-
-// sourceLineContaining returns the 1-indexed line number of the first
-// line in internal/runner/<name> containing substr.
-func sourceLineContaining(t *testing.T, name, substr string) int {
-	t.Helper()
-	data, err := os.ReadFile(name)
-	if err != nil {
-		t.Fatalf("read %s: %v", name, err)
-	}
-	for i, line := range strings.Split(string(data), "\n") {
-		if strings.Contains(line, substr) {
-			return i + 1
-		}
-	}
-	t.Fatalf("no line in %s containing %q", name, substr)
-	return 0
 }
 
 func TestAgentLogSeparate(t *testing.T) {
@@ -555,18 +488,12 @@ func TestScaffoldSymlinkRejected(t *testing.T) {
 		if line == "" {
 			continue
 		}
-		var rec map[string]any
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			t.Fatalf("line is not valid JSON: %q: %v", line, err)
-		}
-		if rec["level"] == "WARN" {
-			if msg, _ := rec["msg"].(string); strings.Contains(msg, "not a regular file") {
-				found = true
-			}
+		if strings.Contains(line, " WARN ") && strings.Contains(line, "not a regular file") {
+			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("no WARN record mentioning 'not a regular file' in runner.log: %s", data)
+		t.Fatalf("no WARN line mentioning 'not a regular file' in runner.log: %s", data)
 	}
 
 	secretData, err := os.ReadFile(secret)

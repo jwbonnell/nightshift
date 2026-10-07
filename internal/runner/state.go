@@ -77,43 +77,23 @@ func dirExists(path string) bool {
 	return err == nil && fi.IsDir()
 }
 
-// logf writes one JSON record to runner.log via logx (D5), with a slug
-// attr always and no iter attr. Level is chosen from the message's own
-// text, matching the reference's logf call sites one-for-one: a
-// "SECURITY:" prefix is Warn, an "error:" or "hand-back error:" prefix is
-// Error, everything else is Info.
+// logf writes one plain-text line to runner.log via logx (D5). Level is
+// chosen from the message's own text, matching the reference's logf call
+// sites one-for-one: a "SECURITY:" prefix is Warn, an "error:" or
+// "hand-back error:" prefix is Error, everything else is Info.
 func (r *run) logf(format string, args ...any) {
-	r.logRecord(format, 0, false, args...)
-}
-
-// logIter is logf for a message whose text names the current iteration
-// number, which also gets its own "iter" attr.
-func (r *run) logIter(iter int, format string, args ...any) {
-	r.logRecord(format, iter, true, args...)
-}
-
-func (r *run) logRecord(format string, iter int, hasIter bool, args ...any) {
 	if r.logger == nil {
 		return
 	}
 	msg := fmt.Sprintf(format, args...)
-	attrs := []any{"slug", r.spec.Slug}
-	if hasIter {
-		attrs = append(attrs, "iter", iter)
-	}
 	ctx := context.Background()
-	// callerSkip=2: one frame for this function's own call into logx
-	// (what callerSkip=0 already accounts for, same as plain Info/Warn/
-	// Error), plus one more for logf/logIter sitting above us — without
-	// it, every record's "file" attr names this line instead of the
-	// real call site.
 	switch {
 	case strings.HasPrefix(format, "SECURITY:"):
-		r.logger.Warnc(ctx, 2, msg, attrs...)
+		r.logger.Warn(ctx, msg)
 	case strings.HasPrefix(format, "error:"), strings.HasPrefix(format, "hand-back error:"):
-		r.logger.Errorc(ctx, 2, msg, attrs...)
+		r.logger.Error(ctx, msg)
 	default:
-		r.logger.Infoc(ctx, 2, msg, attrs...)
+		r.logger.Info(ctx, msg)
 	}
 }
 
@@ -416,7 +396,7 @@ func setup(opts Options, sp *Spec) (*run, error) {
 		return nil, err
 	}
 	r.logFile = logFile
-	r.logger = logx.New(logFile, slog.LevelInfo, "nightshift", nil)
+	r.logger = logx.NewText(logFile, slog.LevelInfo, nil)
 
 	agentLog, err := os.OpenFile(filepath.Join(dir, "agent.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
@@ -444,13 +424,13 @@ func setup(opts Options, sp *Spec) (*run, error) {
 			r.logf("resume: cleared stale .spec-complete")
 			r.appendProgress("Runner: cleared a stale .spec-complete left by a previous session; re-claim completion when done.")
 		}
-		r.logf("resume: slug=%s branch=%s base=%s last_green=%s", sp.Slug, r.st.Branch, short(r.st.Base), short(r.st.LastGreen))
+		r.logf("resume: branch=%s base=%s last_green=%s", r.st.Branch, short(r.st.Base), short(r.st.LastGreen))
 		return r, nil
 	}
 
 	if err := r.cloneRepo(); err != nil {
 		return nil, err
 	}
-	r.logf("start: slug=%s repo=%s branch=%s base=%s", sp.Slug, sp.Repo, r.st.Branch, short(r.st.Base))
+	r.logf("start: repo=%s branch=%s base=%s", sp.Repo, r.st.Branch, short(r.st.Base))
 	return r, nil
 }
