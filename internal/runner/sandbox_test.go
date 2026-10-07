@@ -35,6 +35,21 @@ if [ -n "$FAKE_SBX_FAIL_SUBSTR" ]; then
     *"$FAKE_SBX_FAIL_SUBSTR"*) exit_code=1 ;;
   esac
 fi
+if [ -n "$FAKE_SBX_STATE" ] && [ "$exit_code" = 0 ]; then
+  case "$1" in
+    create)
+      name="$3"
+      if [ -e "$FAKE_SBX_STATE/$name" ]; then
+        printf "error: sandbox '%s' already exists; connect to the existing sandbox\n" "$name" >&2
+        exit 1
+      fi
+      : > "$FAKE_SBX_STATE/$name" ;;
+    rm)
+      shift
+      [ "$1" = "-f" ] && shift
+      for n in "$@"; do rm -f "$FAKE_SBX_STATE/$n"; done ;;
+  esac
+fi
 exit "$exit_code"
 `
 
@@ -50,7 +65,27 @@ func newFakeSbx(t *testing.T) (bin, logPath string) {
 	}
 	logPath = filepath.Join(dir, "log")
 	t.Setenv("FAKE_SBX_LOG", logPath)
+
+	stateDir := filepath.Join(dir, "state")
+	if err := os.Mkdir(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir fake sbx state: %v", err)
+	}
+	t.Setenv("FAKE_SBX_STATE", stateDir)
+
 	return bin, logPath
+}
+
+// fakeSbxTouchMarker simulates a sandbox left over from a prior process:
+// the fake sbx script's "create" will fail for name until "rm -f" clears it.
+func fakeSbxTouchMarker(t *testing.T, name string) {
+	t.Helper()
+	stateDir := os.Getenv("FAKE_SBX_STATE")
+	if stateDir == "" {
+		t.Fatalf("FAKE_SBX_STATE not set; call newFakeSbx first")
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, name), nil, 0o644); err != nil {
+		t.Fatalf("touch marker %s: %v", name, err)
+	}
 }
 
 func readLog(t *testing.T, path string) []string {
@@ -78,6 +113,7 @@ func TestSbxArgv(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	want := []string{
+		"rm -f nightshift-demo nightshift-demo-ctl nightshift-demo-verify",
 		"create --name nightshift-demo claude " + mountDir,
 		"policy allow network --sandbox nightshift-demo api.example.com",
 		"policy allow network --sandbox nightshift-demo cdn.example.com",
@@ -182,12 +218,52 @@ func TestCreateCtlFailureRemovesAgent(t *testing.T) {
 
 	got := readLog(t, logPath)
 	want := []string{
+		"rm -f nightshift-demo nightshift-demo-ctl nightshift-demo-verify",
 		"create --name nightshift-demo claude /mnt/demo/repo",
 		"create --name nightshift-demo-ctl claude /mnt/demo/repo",
 		"rm -f nightshift-demo",
 	}
 	if !equalLines(got, want) {
 		t.Fatalf("argv = %q, want %q (D11.8: agent sandbox must be cleaned up)", got, want)
+	}
+}
+
+func TestCreateRemovesLeftoverSandboxes(t *testing.T) {
+	bin, logPath := newFakeSbx(t)
+	sb := newSbxSandbox(bin, "claude", "demo")
+
+	fakeSbxTouchMarker(t, sb.agentName)
+	fakeSbxTouchMarker(t, sb.ctlName)
+	fakeSbxTouchMarker(t, sb.verifyName)
+
+	if err := sb.Create("/mnt/demo/repo", nil); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got := readLog(t, logPath)
+	want := []string{
+		"rm -f nightshift-demo nightshift-demo-ctl nightshift-demo-verify",
+		"create --name nightshift-demo claude /mnt/demo/repo",
+		"create --name nightshift-demo-ctl claude /mnt/demo/repo",
+	}
+	if !equalLines(got, want) {
+		t.Fatalf("argv = %q, want %q (leading rm -f must clear leftover markers before both creates)", got, want)
+	}
+}
+
+func TestCreateTwiceWithoutRemove(t *testing.T) {
+	bin, _ := newFakeSbx(t)
+
+	sb1 := newSbxSandbox(bin, "claude", "demo")
+	if err := sb1.Create("/mnt/demo/repo", nil); err != nil {
+		t.Fatalf("first Create: %v", err)
+	}
+
+	// Simulates a process that died before calling Remove: a second
+	// sbxSandbox for the same slug must still be able to Create.
+	sb2 := newSbxSandbox(bin, "claude", "demo")
+	if err := sb2.Create("/mnt/demo/repo", nil); err != nil {
+		t.Fatalf("second Create: %v", err)
 	}
 }
 

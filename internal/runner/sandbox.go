@@ -80,12 +80,19 @@ func (s *sbxSandbox) mk(name string) error {
 }
 
 // Create provisions the agent and control sandboxes; the verify sandbox
-// is created lazily by ResetVerify. D11.8: if creating the control
-// sandbox fails after the agent sandbox was already created, the agent
-// sandbox is removed before returning the error (the reference leaked it).
+// is created lazily by ResetVerify. The three names are runner-owned and
+// all run state lives in the mounted clone, so Create always removes any
+// leftover sandboxes under these names first (one best-effort "rm -f") —
+// idempotent recovery from an unclean prior exit, and safer too: a
+// leftover agent sandbox may have been modified by its previous agent.
+// D11.8: if creating the control sandbox fails after the agent sandbox
+// was already created, the agent sandbox is removed before returning the
+// error (the reference leaked it).
 func (s *sbxSandbox) Create(mountDir string, egress []string) error {
 	s.mountDir = mountDir
 	s.egress = egress
+
+	_, _ = execStream(context.Background(), nil, io.Discard, s.bin, "rm", "-f", s.agentName, s.ctlName, s.verifyName)
 
 	if err := s.mk(s.agentName); err != nil {
 		return err
