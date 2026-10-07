@@ -8,7 +8,14 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 )
+
+// childWaitDelay bounds how long execStream/execSplit wait for a child's
+// pipes to close after the child itself has exited, once the process group
+// it was placed in (setProcGroup) has been killed. Without this, a
+// grandchild that inherited the pipe could hang Wait forever.
+const childWaitDelay = 10 * time.Second
 
 // Sandbox abstracts the three-sandbox (agent/ctl/verify) Docker Sandboxes
 // backend so tests can substitute a stub. See reference §3.4.1 for the
@@ -156,6 +163,8 @@ func (s *sbxSandbox) Remove() error {
 func execStream(ctx context.Context, stdin io.Reader, out io.Writer, bin string, args ...string) (string, error) {
 	var tail bytes.Buffer
 	cmd := exec.CommandContext(ctx, bin, args...)
+	setProcGroup(cmd)
+	cmd.WaitDelay = childWaitDelay
 	cmd.Stdin = stdin
 	mw := io.MultiWriter(out, &tail)
 	cmd.Stdout = mw
@@ -170,6 +179,8 @@ func execStream(ctx context.Context, stdin io.Reader, out io.Writer, bin string,
 // execSplit is execStream with stdout and stderr captured separately.
 func execSplit(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, bin string, args ...string) error {
 	cmd := exec.CommandContext(ctx, bin, args...)
+	setProcGroup(cmd)
+	cmd.WaitDelay = childWaitDelay
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
