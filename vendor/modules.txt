@@ -1,3 +1,3 @@
-# github.com/jwbonnell/go-libs v0.0.0-20260601110510-d557d3dc837f
+# github.com/jwbonnell/go-libs v0.0.0-20261007104623-3c69dec0225a
 ## explicit; go 1.25.3
 github.com/jwbonnell/go-libs/pkg/logx

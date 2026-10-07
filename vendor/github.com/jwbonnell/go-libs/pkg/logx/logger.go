@@ -138,9 +138,15 @@ func newLogger(w io.Writer, minLevel Level, serviceName string, traceIDFn TraceI
 	// Add those attributes to the handler.
 	handler = handler.WithAttrs(attrs)
 
+	return newLoggerWithHandler(handler, w == io.Discard, traceIDFn)
+}
+
+// newLoggerWithHandler builds a Logger around an already-constructed handler,
+// shared by every constructor regardless of output format.
+func newLoggerWithHandler(h slog.Handler, discard bool, traceIDFn TraceIDFn) *Logger {
 	return &Logger{
-		discard:   w == io.Discard,
-		handler:   handler,
+		discard:   discard,
+		handler:   h,
 		traceIDFn: traceIDFn,
 	}
 }
