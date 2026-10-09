@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 )
 
@@ -30,21 +31,45 @@ func (r *run) interrupted() bool {
 // NewInterruptContext returns a context cancelled on the first SIGINT or
 // SIGTERM, for cmd/nightshift to pass as Options.Ctx (D8). Callers must
 // call the returned stop function (typically via defer) once the run is
-// done, to restore default signal handling.
+// done, to restore default signal handling. The stop function is safe to
+// call more than once.
 //
 // A second signal, received after the first but before stop is called,
 // exits the process immediately with code 130, without cleanup — the
 // lock files held at that point are reclaimed as stale on the next run.
 func NewInterruptContext() (context.Context, func()) {
+	ctx, stop, _ := newInterruptContext()
+	return ctx, stop
+}
+
+// newInterruptContext is NewInterruptContext's implementation. The third
+// return value, exited, is closed when the goroutine below returns — tests
+// use it to know the goroutine has finished (and so can no longer write to
+// interruptOut) rather than racily polling an output buffer.
+func newInterruptContext() (context.Context, func(), <-chan struct{}) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	done := make(chan struct{})
+	exited := make(chan struct{})
 	out := interruptOut // captured once, so a test restoring the var later doesn't race this goroutine
 
 	go func() {
+		defer close(exited)
+
 		select {
 		case <-ctx.Done():
 		case <-done:
 			return
+		}
+
+		// ctx.Done() can also fire because stop() was called on a normal
+		// exit (it cancels ctx too). Closing done happens before stop() in
+		// the returned stop func below, so if this was a normal exit, done
+		// is already closed by the time we get here — check it instead of
+		// trusting which case the select above happened to pick.
+		select {
+		case <-done:
+			return
+		default:
 		}
 
 		fmt.Fprintln(out, interruptMessage)
@@ -63,8 +88,13 @@ func NewInterruptContext() (context.Context, func()) {
 		}
 	}()
 
-	return ctx, func() {
-		stop()
-		close(done)
+	var once sync.Once
+	stopFn := func() {
+		once.Do(func() {
+			close(done) // first, so the goroutine sees it when ctx.Done fires
+			stop()      // signal.NotifyContext's stop also cancels ctx
+		})
 	}
+
+	return ctx, stopFn, exited
 }

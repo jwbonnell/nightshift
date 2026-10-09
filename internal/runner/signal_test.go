@@ -203,6 +203,65 @@ func TestInterruptMessage(t *testing.T) {
 	}
 }
 
+// TestInterruptContextStopIsSilent is a regression test for the bug where
+// a normal exit (stop() called with no signal ever received) could still
+// print interruptMessage: signal.NotifyContext's stop() cancels ctx, which
+// is the same event the goroutine watches for an actual signal, and
+// select picks at random when multiple cases are ready. Looping catches
+// scheduling-dependent failures that a single run would miss.
+func TestInterruptContextStopIsSilent(t *testing.T) {
+	old := interruptOut
+	t.Cleanup(func() { interruptOut = old })
+
+	for i := 0; i < 200; i++ {
+		var buf syncBuffer
+		interruptOut = &buf
+
+		ctx, stop, exited := newInterruptContext()
+		stop()
+
+		select {
+		case <-exited:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("iteration %d: goroutine did not exit within 2s of stop()", i)
+		}
+
+		if ctx.Err() == nil {
+			t.Fatalf("iteration %d: ctx not done after stop()", i)
+		}
+		if got := buf.String(); got != "" {
+			t.Fatalf("iteration %d: interruptOut not empty after a normal stop(): %q", i, got)
+		}
+	}
+}
+
+// TestInterruptContextStopTwiceSafe checks the stop function returned by
+// newInterruptContext can be called more than once without panicking.
+func TestInterruptContextStopTwiceSafe(t *testing.T) {
+	old := interruptOut
+	t.Cleanup(func() { interruptOut = old })
+
+	var buf syncBuffer
+	interruptOut = &buf
+
+	ctx, stop, exited := newInterruptContext()
+	stop()
+	stop()
+
+	select {
+	case <-exited:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("goroutine did not exit within 2s of stop()")
+	}
+
+	if ctx.Err() == nil {
+		t.Fatalf("ctx not done after stop()")
+	}
+	if got := buf.String(); got != "" {
+		t.Fatalf("interruptOut not empty after a normal stop(): %q", got)
+	}
+}
+
 // TestInterruptedRunFinishesClean cancels during iteration 1 (the planning
 // iteration, before any verify) and checks the whole interrupt path runs
 // to completion: StopAgent and Remove are both called, a result note is
