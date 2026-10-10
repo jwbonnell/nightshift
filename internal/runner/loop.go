@@ -196,7 +196,7 @@ func (r *run) loop() Status {
 		}
 		session++
 		st.Iterations++
-		planning := needPlan && session == 1
+		planning := needPlan
 		model := sp.Model
 		if planning {
 			model = sp.Planner
@@ -256,10 +256,30 @@ func (r *run) loop() Status {
 				}
 				r.appendProgress("Runner: planning iteration committed code; reset to last green. The planner must only write PROGRESS.md.")
 			}
-			st.Planned = true
+
+			progressAfter := r.scaffoldRead(r.progressPath())
+			planSucceeded := agentErr == nil && !res.IsError && progressAfter != progressBefore
+			if planSucceeded {
+				st.Planned = true
+				needPlan = false
+				noProgress = 0
+			} else {
+				reason := res.Message
+				if reason == "" && agentErr != nil {
+					reason = agentErr.Error()
+				}
+				if reason == "" {
+					reason = "no PROGRESS.md change"
+				}
+				r.logf("planning iteration failed (%s) — will plan again", reason)
+				noProgress++
+			}
 			_ = r.saveState()
 			if r.scaffoldExists(r.questionPath()) {
 				return StatusBlocked
+			}
+			if !planSucceeded && noProgress >= 2 {
+				return StatusStalled
 			}
 			continue
 		}
