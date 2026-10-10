@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -294,13 +295,22 @@ func Lint(o LintOptions) (LintResult, error) {
 
 // checkVerifyOnBase runs check 8: a throwaway --no-local clone of
 // sp.Repo checked out at baseSHA, with sp.Verify run against it through
-// o.Verifier. o.Verifier == nil is the "no sbx implementation wired up
-// yet" case — a real default lands in a follow-up commit.
+// a BaseVerifier — o.Verifier if set, else a real sbxBaseVerifier named
+// "nightshift-lint-<slug>-verify".
 func checkVerifyOnBase(o LintOptions, sp *Spec, baseSHA string, res *LintResult) {
-	if o.Verifier == nil {
-		lintLine(o.Stdout, "FAIL", "verify-on-base: no verifier")
-		res.Fails++
-		return
+	verifier := o.Verifier
+	if verifier == nil {
+		bin := o.SbxBin
+		if bin == "" {
+			cfg, _ := home.ParseConfig(home.ConfigPath(o.Home))
+			bin = envConfigDefault("NIGHTSHIFT_SBX_BIN", cfg, "sbx")
+		}
+		if _, err := exec.LookPath(bin); err != nil {
+			lintLine(o.Stdout, "FAIL", fmt.Sprintf("verify-on-base: %s not found on PATH", bin))
+			res.Fails++
+			return
+		}
+		verifier = sbxBaseVerifier{bin: bin, name: "nightshift-lint-" + sp.Slug + "-verify"}
 	}
 
 	tmp := filepath.Join(home.RunsDir(o.Home), ".lint", fmt.Sprintf("%s-%d", sp.Slug, time.Now().UnixNano()))
@@ -344,7 +354,7 @@ func checkVerifyOnBase(o LintOptions, sp *Spec, baseSHA string, res *LintResult)
 	ctx, cancel := context.WithTimeout(base, sp.IterTimeout)
 	defer cancel()
 
-	out, err := o.Verifier.Verify(ctx, clone, sp.Egress, sp.Verify)
+	out, err := verifier.Verify(ctx, clone, sp.Egress, sp.Verify)
 	if err != nil {
 		lintLine(o.Stdout, "FAIL", "verify-on-base: exit: "+err.Error())
 		res.Fails++

@@ -166,6 +166,41 @@ func (s *sbxSandbox) Remove() error {
 	return err
 }
 
+// sbxBaseVerifier is the real BaseVerifier (lint's check 8), used
+// whenever LintOptions.Verifier is nil. Its sandbox name is
+// "nightshift-lint-<slug>-verify" — distinct from a running spec's own
+// "nightshift-<slug>-verify" — so linting a spec never collides with a
+// concurrent run of that same spec.
+type sbxBaseVerifier struct {
+	bin, name string
+}
+
+// Verify creates a fresh sandbox mounting dir, allows egress to each
+// host, runs cmd in it, and always removes the sandbox afterward — even
+// when create or exec fails — via a deferred cleanup registered right
+// after the leading best-effort "rm -f", on its own timeout so it still
+// runs if ctx is what failed.
+func (v sbxBaseVerifier) Verify(ctx context.Context, dir string, egress []string, cmd string) (string, error) {
+	_, _ = execStream(context.Background(), nil, io.Discard, v.bin, "rm", "-f", v.name)
+	defer func() {
+		cctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		defer cancel()
+		_, _ = execStream(cctx, nil, io.Discard, v.bin, "rm", "-f", v.name)
+	}()
+
+	if out, err := execStream(context.Background(), nil, io.Discard, v.bin, "create", "--name", v.name, "claude", dir); err != nil {
+		return out, fmt.Errorf("create: %w", err)
+	}
+	for _, host := range egress {
+		if out, err := execStream(context.Background(), nil, io.Discard, v.bin, "policy", "allow", "network", "--sandbox", v.name, host); err != nil {
+			return out, fmt.Errorf("policy allow %s: %w", host, err)
+		}
+	}
+
+	out, err := execStream(ctx, nil, io.Discard, v.bin, "exec", "-w", dir, v.name, "sh", "-c", cmd)
+	return stripSbxBanner(out), err
+}
+
 // execStream runs one sbx command, writing its combined output to both
 // out and an internal tail buffer, and returns the tail's full content.
 // A context deadline reports as context.DeadlineExceeded specifically (the

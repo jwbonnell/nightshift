@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"os"
@@ -8,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jwbonnell/nightshift/internal/home"
 )
 
 const fakeSbxScript = `#!/bin/sh
@@ -356,6 +359,106 @@ func TestStripSbxBanner(t *testing.T) {
 				t.Fatalf("stripSbxBanner(%q) = %q, want %q", c.in, got, c.want)
 			}
 		})
+	}
+}
+
+func TestSbxBaseVerifierArgv(t *testing.T) {
+	t.Run("exec fails, cleanup still runs", func(t *testing.T) {
+		bin, logPath := newFakeSbx(t)
+		t.Setenv("FAKE_SBX_FAIL_SUBSTR", "exec -w")
+
+		repo := newSourceRepo(t)
+		homeDir := t.TempDir()
+		writeLintSpec(t, home.DraftDir(homeDir), "demo", "egress: a.example,b.example\n", repo, fullSpecBody)
+
+		var buf bytes.Buffer
+		res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", SbxBin: bin, Stdout: &buf})
+		if err != nil {
+			t.Fatalf("Lint: %v", err)
+		}
+		if res.Fails == 0 {
+			t.Fatalf("expected a FAIL, got %+v\n%s", res, buf.String())
+		}
+		if !strings.Contains(buf.String(), "FAIL  verify-on-base:") {
+			t.Fatalf("output missing FAIL line:\n%s", buf.String())
+		}
+
+		name := "nightshift-lint-demo-verify"
+		want := []string{
+			"rm -f " + name,
+			"create --name " + name + " claude",
+			"policy allow network --sandbox " + name + " a.example",
+			"policy allow network --sandbox " + name + " b.example",
+			"exec",
+			"rm -f " + name,
+		}
+		got := readLog(t, logPath)
+		if len(got) != len(want) {
+			t.Fatalf("argv = %q, want %d lines matching %q", got, len(want), want)
+		}
+		for i, w := range want {
+			if !strings.HasPrefix(got[i], w) {
+				t.Fatalf("argv[%d] = %q, want prefix %q (full argv %q)", i, got[i], w, got)
+			}
+		}
+	})
+
+	t.Run("passing", func(t *testing.T) {
+		bin, logPath := newFakeSbx(t)
+
+		repo := newSourceRepo(t)
+		homeDir := t.TempDir()
+		writeLintSpec(t, home.DraftDir(homeDir), "demo", "", repo, fullSpecBody)
+
+		var buf bytes.Buffer
+		res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", SbxBin: bin, Stdout: &buf})
+		if err != nil {
+			t.Fatalf("Lint: %v", err)
+		}
+		if res.Fails != 0 {
+			t.Fatalf("res = %+v, want zero fails\n%s", res, buf.String())
+		}
+		if !strings.Contains(buf.String(), "ok    verify-on-base\n") {
+			t.Fatalf("output missing ok line:\n%s", buf.String())
+		}
+
+		name := "nightshift-lint-demo-verify"
+		got := readLog(t, logPath)
+		want := []string{"rm -f " + name}
+		if len(got) == 0 || !strings.HasPrefix(got[0], want[0]) {
+			t.Fatalf("argv = %q, want to start with %q", got, want[0])
+		}
+		if last := got[len(got)-1]; last != "rm -f "+name {
+			t.Fatalf("last argv entry = %q, want final cleanup %q", last, "rm -f "+name)
+		}
+	})
+}
+
+func TestSbxBaseVerifierMissingBinary(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeLintSpec(t, home.DraftDir(homeDir), "demo", "", repo, fullSpecBody)
+
+	var buf bytes.Buffer
+	res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", SbxBin: "/nonexistent/sbx", Stdout: &buf})
+	if err != nil {
+		t.Fatalf("Lint: %v", err)
+	}
+	if res.Fails == 0 {
+		t.Fatalf("expected a FAIL, got %+v\n%s", res, buf.String())
+	}
+	want := "FAIL  verify-on-base: /nonexistent/sbx not found on PATH\n"
+	if !strings.Contains(buf.String(), want) {
+		t.Fatalf("output missing %q:\n%s", want, buf.String())
+	}
+
+	lintRoot := filepath.Join(home.RunsDir(homeDir), ".lint")
+	entries, err := os.ReadDir(lintRoot)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("read .lint dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf(".lint dir has entries %v, want none (clone must never happen when the sbx binary is missing)", entries)
 	}
 }
 
