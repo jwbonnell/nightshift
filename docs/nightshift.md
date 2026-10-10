@@ -52,7 +52,9 @@ plain `go build` without the Makefile reports `nightshift dev`.
 nightshift init                       create the nightshift home (~/.nightshift or $NIGHTSHIFT_HOME)
 nightshift new <slug> [--repo PATH] [--verify CMD]
                                       start a draft spec from the template
-nightshift ready <slug>               move a draft spec to specs/ready/
+nightshift ready <slug> [--no-verify] [--no-lint]
+                                      lint a draft, then move it to specs/ready/
+nightshift lint <spec> [--no-verify]  check a draft or ready spec (verify runs on the base commit in sbx)
 nightshift done <slug>                move a ready spec to specs/done/
 nightshift run <spec> [flags]         run one ready spec (nightshift run -h for flags)
 nightshift run --next [flags]         run the oldest eligible ready spec
@@ -79,11 +81,53 @@ slug already exists in `draft/`, `ready/`, or `done/`. Copies
 haven't customized it), stamps `created:` to now, and substitutes `repo:`/
 `verify:` if given. Flags may come before or after the slug.
 
-### `ready <slug>`
+### `ready <slug> [--no-verify] [--no-lint]`
 
-Moves `specs/draft/<slug>.md` to `specs/ready/<slug>.md`, refusing if
-`repo:` or `verify:` is empty, or if a ready spec with that slug already
-exists.
+Lints the draft (see `lint` below), then moves `specs/draft/<slug>.md` to
+`specs/ready/<slug>.md`. The lint output always prints before anything
+else. Any `FAIL` line refuses the move: `nightshift: <slug> failed lint —
+not moved to specs/ready/`, exit `1`, draft left untouched. `--no-verify`
+passes through to lint, skipping check 8. `--no-lint` restores the old
+behavior exactly — only the `repo:`/`verify:`-non-empty check, no lint
+call at all — for when you already know the spec is fine and don't want
+to wait on a sandboxed verify run.
+
+### `lint <spec> [--no-verify]`
+
+Checks a draft or ready spec — by slug (tried in `draft/` then `ready/`)
+or by path — without moving it anywhere. Prints one line per check, then
+`lint: <N> failed, <N> warnings`; exits `0` with zero FAILs, `1` with any
+FAIL or an operational error (spec not found, unreadable), `2` on a usage
+error.
+
+| # | check | FAILs when | warns when |
+|---|---|---|---|
+| 1 | `frontmatter` | `repo:`/`verify:` empty, `max_iter`/`iter_timeout` unparsable, or `repo:` isn't a git repo | an unrecognized frontmatter key (one warn per key) |
+| 2 | `sections` | `## Goal`, `## Context`, `## Tasks`, `## Acceptance criteria`, or `## Out of scope` is missing | `## Constraints` missing |
+| 3 | `placeholders` | the template's `<short imperative title>`, an empty `- [ ]` line, or a bare `- ` bullet survived into the body | — |
+| 4 | `tasks` | `## Tasks` has no `- [ ]` items | more than 8 — consider splitting the spec |
+| 5 | `acceptance` | `## Acceptance criteria` has no `- [ ]` items | — |
+| 6 | `max_iter` | — | `max_iter` is less than tasks + 2 (no room for a planning iteration plus a retry) |
+| 7 | `base` | the spec's `base:` doesn't resolve in `repo:` | — |
+| 8 | `verify-on-base` | the verify command fails on the resolved base commit | — (skipped on `--no-verify`, or after a check 1/7 FAIL) |
+
+Check 8 is the one that matters most: it's the only check that actually
+runs your `verify:` command, inside a throwaway sandbox, against the
+exact commit a run would start from. A spec whose verify is already red
+on its base fails its first real iteration before any work happens, and
+a second red iteration right after ends the run `red` — lint catches
+that before you ever start a run. It clones `repo:` with `--no-local`
+into a temp dir under `runs/.lint/` (never hardlinked — a `-ctl`-style
+verify command must not be able to corrupt the source repo through
+shared objects), checks out the base SHA detached, drops the `origin`
+remote, and runs verify in a sandbox named `nightshift-lint-<slug>-
+verify` — distinct from a real run's `nightshift-<slug>-verify`, so
+linting a spec never collides with a run of the same spec in progress.
+Both the clone and the sandbox are removed afterward, success or failure.
+`--no-verify` skips it outright (useful when `sbx` isn't available, or
+you just want the static checks); it's also skipped if the frontmatter
+or base checks already failed, since there's nothing valid to verify
+against.
 
 ### `done <slug>`
 

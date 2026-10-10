@@ -39,9 +39,11 @@ freely; `runner` is the only package that imports all four.
 and clone management, `sandbox.go`/`prompt.go` the sbx backend and prompts,
 `loop.go` the Ralph loop, `result.go` the result note, `locks.go`/`next.go`/
 `specrun.go` the top-level `Run`/concurrency, `signal.go` D8 interrupts,
-`status.go` the `status` command) — see `PROGRESS.md` (local, gitignored)
-for exactly how each piece arrived, including a few deliberate forward-
-declarations that got relocated once their target file existed.
+`status.go` the `status` command, `lint.go` the `lint` checks and the
+`BaseVerifier` interface behind check 8's sandboxed verify-on-base) — see
+`PROGRESS.md` (local, gitignored) for exactly how each piece arrived,
+including a few deliberate forward-declarations that got relocated once
+their target file existed.
 
 `runner.log` (built in `state.go` via `logx.NewText`) is plain-text lines,
 `<date> <time> <LEVEL> <message>`, with no attrs and no source location —
