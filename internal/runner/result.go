@@ -84,8 +84,8 @@ func (r *run) resultBody(status Status) string {
 	var b strings.Builder
 
 	ended := r.opts.clockFn()().Format("2006-01-02T15:04:05Z07:00")
-	fmt.Fprintf(&b, "---\ntype: nightshift-result\nspec: %s\nstatus: %s\nstarted: %s\nended: %s\niterations: %d\ncommits: %d\nbranch: %s\nrepo: %s\nbase_ref: %s\nbase: %s\n---\n\n",
-		sp.Slug, status, st.Started, ended, st.Iterations, st.Commits, st.Branch, sp.Repo, st.BaseRef, short(st.Base))
+	fmt.Fprintf(&b, "---\ntype: nightshift-result\nspec: %s\nstatus: %s\nstarted: %s\nended: %s\niterations: %d\ncommits: %d\nbranch: %s\nrepo: %s\nbase_ref: %s\nbase: %s\nnightshift: %s\n---\n\n",
+		sp.Slug, status, st.Started, ended, st.Iterations, st.Commits, st.Branch, sp.Repo, st.BaseRef, short(st.Base), r.version)
 
 	switch {
 	case st.SyncOwed:

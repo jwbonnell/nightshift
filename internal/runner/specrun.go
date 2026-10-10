@@ -88,6 +88,7 @@ type Options struct {
 	IsTTY         bool
 	Notifier      notify.Notifier  // nil = resolve from NIGHTSHIFT_NOTIFY/config
 	Ctx           context.Context  // D8: cancellation source; nil = context.Background()
+	Version       string           // the running binary's version; "" is recorded as "dev"
 	clock         func() time.Time // unexported: wall clock for --until and log stamps; nil = time.Now
 }
 

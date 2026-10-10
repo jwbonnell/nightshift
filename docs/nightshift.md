@@ -365,7 +365,7 @@ written via `logx.NewText`. A `SECURITY:`-prefixed message logs at `WARN`;
 `INFO`. For example:
 
 ```
-2026-10-05 21:52:05 INFO  start: repo=~/dev/myapp branch=spec/demo base=1a2b3c4d
+2026-10-05 21:52:05 INFO  start: repo=~/dev/myapp branch=spec/demo base=1a2b3c4d version=v1.2.3
 2026-10-05 21:52:05 INFO  iter 2 verify GREEN at cb9eef57
 ```
 
