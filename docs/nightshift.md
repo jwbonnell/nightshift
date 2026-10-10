@@ -50,8 +50,9 @@ plain `go build` without the Makefile reports `nightshift dev`.
 
 ```
 nightshift init                       create the nightshift home (~/.nightshift or $NIGHTSHIFT_HOME)
-nightshift new <slug> [--repo PATH] [--verify CMD]
-                                      start a draft spec from the template
+nightshift new <slug> [--repo PATH] [--verify CMD] [--no-interview]
+                                      start a draft and interview you to write it
+nightshift refine <slug>              reopen the interview on a draft
 nightshift ready <slug> [--no-verify] [--no-lint]
                                       lint a draft, then move it to specs/ready/
 nightshift lint <spec> [--no-verify]  check a draft or ready spec (verify runs on the base commit in sbx)
@@ -73,13 +74,41 @@ if missing, the embedded spec template and a config file with every known
 key listed, commented out, next to its default. Never overwrites an
 existing template or config.
 
-### `new <slug> [--repo PATH] [--verify CMD]`
+### `new <slug> [--repo PATH] [--verify CMD] [--no-interview]`
 
 `<slug>` must match `^[a-z0-9][a-z0-9._-]*$`. Refused if a spec with that
 slug already exists in `draft/`, `ready/`, or `done/`. Copies
 `~/.nightshift/spec-template.md` (or the binary's embedded default if you
 haven't customized it), stamps `created:` to now, and substitutes `repo:`/
 `verify:` if given. Flags may come before or after the slug.
+
+After the draft is created, `new` interviews you to write it — see
+[Interview](#interview) below — but only if every one of these holds:
+not `--no-interview`; stdin and stdout are both TTYs; a host `claude` is
+found on `PATH` (or `NIGHTSHIFT_HOST_CLAUDE_BIN`); `--repo` was given; and
+that path is a git repository. The first one of these that fails prints a
+one-line hint to stdout and exits `0` instead, leaving the draft for you
+to edit by hand:
+
+| Reason | Hint |
+|---|---|
+| `--no-interview`, or no TTY | `edit the draft, then: nightshift lint <slug>` |
+| no `claude` on `PATH` | `claude not found on PATH — edit the draft by hand, then: nightshift lint <slug>` |
+| no `--repo` | `pass --repo PATH to be interviewed, or edit the draft by hand` |
+| `--repo` isn't a git repo | `--repo <path> is not a git repository — fix it, or edit the draft by hand` |
+
+### `refine <slug>`
+
+Reopens the interview on an existing draft, this time asking the session
+to critique it against the [spec checklist](#interview) before continuing
+the conversation. The draft must already exist in `specs/draft/`, else
+`nightshift: no draft named <slug> in specs/draft/ — 'refine' only works
+on drafts`, exit `1`. Its frontmatter `repo:` is read (not a `--repo`
+flag); if it's blank or not a git repository: `nightshift: set 'repo:' in
+the draft to a git checkout first`, exit `1`. Unlike `new`, there's no
+non-interactive fallback: without a TTY or without `claude` on `PATH`,
+`refine` errors `nightshift: refine needs an interactive terminal and
+claude on PATH` and exits `1` rather than printing a hint.
 
 ### `ready <slug> [--no-verify] [--no-lint]`
 
@@ -219,6 +248,90 @@ log`/`diff` command to review the work. An unknown slug exits `1`.
 
 Prints `nightshift <version>`.
 
+## Interview
+
+`nightshift new` and `nightshift refine` hand off to a host `claude`
+session (not the sandboxed `claude` a run uses — this one runs directly
+on your machine, interactively) whose only job is to interview you and
+write the spec into the one draft file you started from. It replaces the
+`nightshift` process (`syscall.Exec`), so once it starts, `nightshift`
+prints nothing further — just the one stderr line right before the
+handoff: `nightshift: starting spec interview for <slug> (draft: <path>)
+— exit Claude when done, then run: nightshift lint <slug>`.
+
+**What the session can and cannot do, and why.** The owner writes specs
+in Claude Desktop because Claude Code kept drifting into implementing
+them. The fix here is structural, not a prompt instruction the model
+could ignore:
+
+- `--tools Read,Grep,Glob,Edit,Write` is the session's entire built-in
+  tool set — there is no Bash, so it cannot run a command even if asked.
+  It can read and search your repo freely (grounding the spec in real
+  file, function, and test names), but editing is the only kind of
+  *write* available.
+- `--disallowedTools mcp__*` removes every MCP tool, so no MCP server
+  configured on your machine can be used to work around the missing
+  shell.
+- `--settings <Home>/interview/<slug>/settings.json` allows `Edit` (which
+  covers `Write` too) only on the one draft file, and explicitly denies
+  it everywhere else nightshift keeps state — your repo, `specs/ready/`,
+  `specs/done/`, `runs/`, `results/`, `context/`, `interview/`, `config`,
+  and `spec-template.md`. Deny beats allow, so even if a future tool
+  grants broader access, these paths stay closed. The permission-bypass
+  flag (`--dangerously-skip-permissions`/`bypassPermissions`) is never
+  passed — the deny rules always apply.
+- `--append-system-prompt-file` *adds* to Claude Code's default system
+  prompt rather than replacing it, so the usual safety rules and tool
+  guidance stay in effect; the appended file carries the interview's own
+  role, instructions, and context instead of a full prompt rewrite.
+
+**Context, and how to curate it.** Every launch regenerates
+`<Home>/interview/<slug>/prompt.md` from scratch — nothing about it is
+state (the file itself does persist on disk, but it's overwritten
+completely on the next `new`/`refine`, so there's nothing to clean up by
+hand). It has ten sections, always in this order: your role
+(`internal/interview/instructions.md`, embedded, verbatim), this
+session's slug/draft/repo/date/mode, the exact planning and iteration
+preambles a nightshift agent sees during a real run, the spec checklist
+(`internal/interview/checklist.md`, embedded, verbatim), the current spec
+template, `<Home>/context/sandbox.md`, `<Home>/context/lessons.md`,
+`<Repo>/.nightshift.md`, the newest 3 result notes under
+`<Home>/results/` whose `repo:` frontmatter matches this repo, and the
+newest 2 completed specs under `specs/done/`. A source that doesn't exist
+yet renders as `(none yet)`; each file-sourced section is capped (16 KiB
+for context/repo-card/done-example sections, 6 KiB per result note) and,
+if truncated, ends with a `[truncated — read <path> for the rest]`
+pointer back to the full file.
+
+The two you're expected to hand-edit are `context/sandbox.md` and
+`context/lessons.md` — `nightshift init` seeds both once from built-in
+defaults (see the layout below) and never touches either again, so
+anything you add (a sandbox quirk you hit, a lesson from a run that went
+sideways) is there for every future interview on every spec, across every
+repo. `<Repo>/.nightshift.md` (a "repo card") is the same idea but
+per-repo and entirely your responsibility to write — nightshift never
+creates one.
+
+**Refine.** `nightshift refine <slug>` reopens the interview on an
+existing draft with a different opening move: instead of asking what you
+want first, it reads the draft and tells you its weakest points against
+the spec checklist before continuing the conversation. See the `refine`
+subcommand above for its preconditions.
+
+**Resuming.** Every interview session is named `spec-<slug>` (the
+`-n spec-<slug>` flag), so if you exit Claude mid-interview without
+finishing, `claude --resume spec-<slug>` picks the conversation back up
+with full history — you don't have to start over, and you don't need
+`nightshift refine` just to continue a session you haven't left yet.
+
+**Configuration.** Two config keys govern the interview, both env >
+config > default like the other bin/model settings: `NIGHTSHIFT_HOST_CLAUDE_BIN`
+(default `claude`) names the *host* `claude` binary the interview execs —
+deliberately separate from `NIGHTSHIFT_CLAUDE_BIN`, which names `claude`
+*inside* the sandbox a run uses and must never be reused here; and
+`NIGHTSHIFT_INTERVIEW_MODEL` (default `opus`) sets the interview's
+`--model`, independent of a run's `model:`/`planner_model:`.
+
 ## Home directory layout
 
 `$NIGHTSHIFT_HOME`, or `~/.nightshift` if unset:
@@ -231,6 +344,8 @@ Prints `nightshift <version>`.
     draft/               `new` writes here
     ready/                the only place `run` accepts specs from
     done/                 `done` moves specs here; the runner never does
+  context/                sandbox.md/lessons.md; seeded by `init`, hand-edited after
+  interview/              <slug>/{settings.json,prompt.md}; regenerated every launch
   results/                <slug>-<YYYY-MM-DD>[-N].md result notes
   runs/                   state dirs + <slug>/run.json/runner.log/agent.log, and .locks/
   logs/                   nightly.log (written by the systemd wrapper, not the binary)
@@ -261,8 +376,9 @@ written via `logx.NewText`. A `SECURITY:`-prefixed message logs at `WARN`;
 Precedence, highest first: **CLI flag > spec frontmatter > `NIGHTSHIFT_*`
 env var > `~/.nightshift/config` > built-in default.** (`max_concurrent` has
 no frontmatter tier — flag > env > config > `2`. `NIGHTSHIFT_SBX_BIN`/
-`NIGHTSHIFT_CLAUDE_BIN`/`NIGHTSHIFT_NOTIFY` have no flag or frontmatter tier
-at all — env > config > default.)
+`NIGHTSHIFT_CLAUDE_BIN`/`NIGHTSHIFT_NOTIFY`/`NIGHTSHIFT_HOST_CLAUDE_BIN`/
+`NIGHTSHIFT_INTERVIEW_MODEL` have no flag or frontmatter tier at all —
+env > config > default.)
 
 | Spec frontmatter | Env var | Config key | Default |
 |---|---|---|---|
@@ -275,6 +391,8 @@ at all — env > config > default.)
 | — | `NIGHTSHIFT_SBX_BIN` | `NIGHTSHIFT_SBX_BIN` | `sbx` |
 | — | `NIGHTSHIFT_CLAUDE_BIN` | `NIGHTSHIFT_CLAUDE_BIN` | `claude` |
 | — | `NIGHTSHIFT_NOTIFY` | `NIGHTSHIFT_NOTIFY` | `on` (`off` disables desktop notifications) |
+| — | `NIGHTSHIFT_HOST_CLAUDE_BIN` | `NIGHTSHIFT_HOST_CLAUDE_BIN` | `claude` (the *host* claude the interview execs; see [Interview](#interview)) |
+| — | `NIGHTSHIFT_INTERVIEW_MODEL` | `NIGHTSHIFT_INTERVIEW_MODEL` | `opus` (the interview's `--model`) |
 | `repo:`, `verify:`, `egress:` | — | — | frontmatter only, required (`repo:`/`verify:`) |
 
 The config file is `KEY=value` lines; blank lines and lines starting with

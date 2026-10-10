@@ -26,6 +26,11 @@ internal/gitx/         Host git operations (Run/IsRepo/GitDir/RunRetry/Commit)
 internal/lock/         Cross-process file locks (std-lib only, no deps on
                         anything else in this module)
 internal/notify/       Desktop notifications (notify-send) + a no-op
+internal/interview/    `new`/`refine`'s host claude session: settings.json
+                        (Edit allowed only on the draft) and prompt.md
+                        generation, argv building. The one place nightshift
+                        launches a *host* claude — no shell in its tool set,
+                        no bypass-permissions flag, ever.
 deploy/                systemd units, shipped disabled — never install/enable these
 vendor/                github.com/jwbonnell/go-libs/pkg/logx only
 ```
