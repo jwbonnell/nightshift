@@ -87,7 +87,7 @@ func TestLintOutputFormat(t *testing.T) {
 	if gerr != nil {
 		t.Fatalf("sha: %v", gerr)
 	}
-	sha := full[:7]
+	sha := short(full)
 	want := "ok    frontmatter\n" +
 		"ok    sections\n" +
 		"ok    placeholders\n" +
@@ -735,7 +735,7 @@ func TestLintFetchesOriginBeforeBase(t *testing.T) {
 	if res.Fails != 0 {
 		t.Fatalf("res = %+v, want no fails\n%s", res, buf.String())
 	}
-	want := "ok    base: main @ " + newSHA[:7] + "\n"
+	want := "ok    base: main @ " + short(newSHA) + "\n"
 	if !strings.Contains(buf.String(), want) {
 		t.Fatalf("output missing %q:\n%s", want, buf.String())
 	}
@@ -761,7 +761,7 @@ func TestLintNoOriginNoFetch(t *testing.T) {
 	if gerr != nil {
 		t.Fatalf("sha: %v", gerr)
 	}
-	sha := full[:7]
+	sha := short(full)
 	want := "ok    frontmatter\n" +
 		"ok    sections\n" +
 		"ok    placeholders\n" +
@@ -806,7 +806,7 @@ func TestLintFetchFailureWarns(t *testing.T) {
 		t.Fatalf("sha: %v", gerr)
 	}
 	want := "warn  base: fetch origin failed (using local refs): "
-	wantBase := "ok    base: main @ " + full[:7] + "\n"
+	wantBase := "ok    base: main @ " + short(full) + "\n"
 	idx := strings.Index(buf.String(), want)
 	if idx < 0 {
 		t.Fatalf("output missing expected warn line:\n%s", buf.String())

@@ -320,7 +320,7 @@ func Lint(o LintOptions) (LintResult, error) {
 			lintLine(o.Stdout, "FAIL", "base: "+err.Error())
 			res.Fails++
 		} else {
-			lintLine(o.Stdout, "ok", fmt.Sprintf("base: %s @ %s", sp.Base, sha[:7]))
+			lintLine(o.Stdout, "ok", fmt.Sprintf("base: %s @ %s", sp.Base, short(sha)))
 			baseOK = true
 			baseSHA = sha
 		}

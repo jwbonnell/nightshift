@@ -140,6 +140,10 @@ error.
 | 7 | `base` | the spec's `base:` doesn't resolve in `repo:` | — |
 | 8 | `verify-on-base` | the verify command fails on the resolved base commit | — (skipped on `--no-verify`, or after a check 1/7 FAIL) |
 
+Check 7 fetches `origin` first, best-effort, the same way `run` does — so
+a stale local `origin/main` doesn't make lint resolve and verify a
+different commit than a run would start from.
+
 Check 8 is the one that matters most: it's the only check that actually
 runs your `verify:` command, inside a throwaway sandbox, against the
 exact commit a run would start from. A spec whose verify is already red
