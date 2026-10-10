@@ -191,6 +191,7 @@ func TestNewExecsClaudeOnTTY(t *testing.T) {
 	wantArgv := []string{
 		wantClaude,
 		"--model", "opus",
+		"--permission-mode", "dontAsk",
 		"--tools", "Read,Grep,Glob,Edit,Write",
 		"--disallowedTools", "mcp__*",
 		"--settings", settingsPath,

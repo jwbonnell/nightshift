@@ -363,6 +363,7 @@ func buildArgv(o Options, claudePath, settingsPath, promptPath string) []string 
 	return []string{
 		claudePath,
 		"--model", o.Model,
+		"--permission-mode", "dontAsk",
 		"--tools", "Read,Grep,Glob,Edit,Write",
 		"--disallowedTools", "mcp__*",
 		"--settings", settingsPath,

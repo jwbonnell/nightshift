@@ -117,6 +117,7 @@ func TestArgvExactNew(t *testing.T) {
 	want := []string{
 		claudePath,
 		"--model", "opus",
+		"--permission-mode", "dontAsk",
 		"--tools", "Read,Grep,Glob,Edit,Write",
 		"--disallowedTools", "mcp__*",
 		"--settings", settingsPath,
@@ -160,6 +161,23 @@ func TestArgvExactRefine(t *testing.T) {
 	got := argv[len(argv)-1]
 	if got != wantKickoff {
 		t.Fatalf("refine kickoff = %q, want %q", got, wantKickoff)
+	}
+}
+
+func TestArgvNeverBypassesPermissions(t *testing.T) {
+	for _, refine := range []bool{false, true} {
+		o := testOptions(t, refine)
+
+		argv, _, err := Prepare(o)
+		if err != nil {
+			t.Fatalf("Prepare(refine=%v): %v", refine, err)
+		}
+
+		for _, a := range argv {
+			if strings.Contains(a, "bypassPermissions") || strings.Contains(a, "dangerously") {
+				t.Fatalf("refine=%v: argv must never contain a permission-bypass flag: %v", refine, argv)
+			}
+		}
 	}
 }
 

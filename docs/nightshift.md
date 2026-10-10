@@ -288,6 +288,15 @@ could ignore:
   prompt rather than replacing it, so the usual safety rules and tool
   guidance stay in effect; the appended file carries the interview's own
   role, instructions, and context instead of a full prompt rewrite.
+- `--permission-mode dontAsk` makes every call that would otherwise
+  prompt you get denied automatically instead — a tool outside the
+  built-in set, a read outside the working directories (e.g. the Go
+  module cache), or anything not covered by the `permissions.allow`
+  Edit rule above is refused outright, with no prompt for you to approve
+  by accident. This is what makes the deny rules self-enforcing rather
+  than relying on you noticing and declining a permission prompt; it
+  also denies the `AskUserQuestion` tool, which this session has no use
+  for since it interviews you directly in conversation.
 
 **Context, and how to curate it.** Every launch regenerates
 `<Home>/interview/<slug>/prompt.md` from scratch — nothing about it is
