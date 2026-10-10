@@ -552,10 +552,11 @@ func TestNextNothingEligible(t *testing.T) {
 // and by --next, with the slug (and so the lock/state-dir name, which
 // share sp.Slug) resolved to DEMO, completing successfully.
 func TestUppercaseMDSpecFullRun(t *testing.T) {
-	repo := newSourceRepo(t)
-	content := "---\nrepo: " + repo + "\nverify: true\n---\n\n# demo\n"
-
 	t.Run("found by name", func(t *testing.T) {
+		t.Setenv("GIT_AUTHOR_DATE", "2026-01-01T00:00:01s +0000")
+		t.Setenv("GIT_COMMITTER_DATE", "2026-01-01T00:00:01s +0000")
+		repo := newSourceRepo(t)
+		content := "---\nrepo: " + repo + "\nverify: true\n---\n\n# demo\n"
 		homeDir := t.TempDir()
 		if err := os.MkdirAll(home.ReadyDir(homeDir), 0o755); err != nil {
 			t.Fatalf("mkdir: %v", err)
@@ -583,6 +584,10 @@ func TestUppercaseMDSpecFullRun(t *testing.T) {
 	})
 
 	t.Run("found by --next", func(t *testing.T) {
+		t.Setenv("GIT_AUTHOR_DATE", "2026-01-01T00:00:02s +0000")
+		t.Setenv("GIT_COMMITTER_DATE", "2026-01-01T00:00:02s +0000")
+		repo := newSourceRepo(t)
+		content := "---\nrepo: " + repo + "\nverify: true\n---\n\n# demo\n"
 		homeDir := t.TempDir()
 		if err := os.MkdirAll(home.ReadyDir(homeDir), 0o755); err != nil {
 			t.Fatalf("mkdir: %v", err)

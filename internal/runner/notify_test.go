@@ -27,13 +27,15 @@ func newFakeNotifySend(t *testing.T) {
 }
 
 func TestNotifyArgvAndUrgency(t *testing.T) {
-	repo := newSourceRepo(t)
 	newFakeNotifySend(t)
 	logPath := filepath.Join(t.TempDir(), "notify.log")
 	t.Setenv("FAKE_NOTIFY_LOG", logPath)
 	t.Setenv("NIGHTSHIFT_NOTIFY", "on")
 
 	t.Run("red is critical", func(t *testing.T) {
+		repo := newSourceRepo(t)
+		t.Setenv("GIT_AUTHOR_DATE", "2026-01-01T00:00:01s +0000")
+		t.Setenv("GIT_COMMITTER_DATE", "2026-01-01T00:00:01s +0000")
 		os.Remove(logPath)
 		sb := newStubSandbox()
 		sb.agent = func(ctx context.Context, iter int, dir string) error {
@@ -74,6 +76,9 @@ func TestNotifyArgvAndUrgency(t *testing.T) {
 	})
 
 	t.Run("complete is normal", func(t *testing.T) {
+		repo := newSourceRepo(t)
+		t.Setenv("GIT_AUTHOR_DATE", "2026-01-01T00:00:02s +0000")
+		t.Setenv("GIT_COMMITTER_DATE", "2026-01-01T00:00:02s +0000")
 		os.Remove(logPath)
 		sb := newStubSandbox()
 		sb.agent = completingAgent(t)
@@ -98,6 +103,9 @@ func TestNotifyArgvAndUrgency(t *testing.T) {
 	})
 
 	t.Run("title has sync pending when applicable", func(t *testing.T) {
+		repo := newSourceRepo(t)
+		t.Setenv("GIT_AUTHOR_DATE", "2026-01-01T00:00:03s +0000")
+		t.Setenv("GIT_COMMITTER_DATE", "2026-01-01T00:00:03s +0000")
 		os.Remove(logPath)
 		sb := newStubSandbox()
 		sb.agent = completingAgent(t)
