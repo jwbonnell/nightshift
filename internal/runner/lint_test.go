@@ -539,3 +539,129 @@ func TestLintSkipsVerifyAfterEarlierFailure(t *testing.T) {
 		}
 	})
 }
+
+// TestLintFetchesOriginBeforeBase mirrors runLocked's own best-effort
+// `git fetch origin` before resolving the base, so lint verifies the same
+// commit a real run would even when the local origin/main ref is stale.
+func TestLintFetchesOriginBeforeBase(t *testing.T) {
+	bare := t.TempDir()
+	mustGit(t, bare, "init", "-q", "--bare", "-b", "main")
+
+	seed := newSourceRepo(t)
+	mustGit(t, seed, "remote", "add", "origin", bare)
+	mustGit(t, seed, "push", "-q", "origin", "main")
+
+	src := cloneRepo(t, bare)
+
+	if err := os.WriteFile(filepath.Join(seed, "more.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write more.go: %v", err)
+	}
+	mustGit(t, seed, "add", "-A")
+	mustGit(t, seed, "commit", "-q", "-m", "second")
+	mustGit(t, seed, "push", "-q", "origin", "main")
+	newSHA := mustGit(t, seed, "rev-parse", "HEAD")
+
+	staleSHA, err := resolveBase(src, "main")
+	if err != nil {
+		t.Fatalf("resolveBase: %v", err)
+	}
+	if staleSHA == newSHA {
+		t.Fatalf("expected src's origin/main to be stale before lint fetches")
+	}
+
+	homeDir := t.TempDir()
+	writeLintSpec(t, home.DraftDir(homeDir), "demo", "max_iter: 5\n", src, fullSpecBody)
+
+	var buf bytes.Buffer
+	res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", NoVerify: true, Stdout: &buf})
+	if err != nil {
+		t.Fatalf("Lint: %v", err)
+	}
+	if res.Fails != 0 {
+		t.Fatalf("res = %+v, want no fails\n%s", res, buf.String())
+	}
+	want := "ok    base: main @ " + newSHA[:7] + "\n"
+	if !strings.Contains(buf.String(), want) {
+		t.Fatalf("output missing %q:\n%s", want, buf.String())
+	}
+}
+
+// TestLintNoOriginNoFetch asserts lint's output is unchanged for a spec
+// repo with no origin remote: no fetch attempt, no warn line.
+func TestLintNoOriginNoFetch(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeLintSpec(t, home.DraftDir(homeDir), "demo", "max_iter: 5\n", repo, fullSpecBody)
+
+	var buf bytes.Buffer
+	res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", NoVerify: true, Stdout: &buf})
+	if err != nil {
+		t.Fatalf("Lint: %v", err)
+	}
+	if res.Fails != 0 || res.Warns != 0 {
+		t.Fatalf("res = %+v, want zero\n%s", res, buf.String())
+	}
+
+	full, gerr := resolveBase(repo, "main")
+	if gerr != nil {
+		t.Fatalf("sha: %v", gerr)
+	}
+	sha := full[:7]
+	want := "ok    frontmatter\n" +
+		"ok    sections\n" +
+		"ok    placeholders\n" +
+		"ok    tasks\n" +
+		"ok    acceptance\n" +
+		"ok    max_iter\n" +
+		"ok    base: main @ " + sha + "\n" +
+		"skip  verify-on-base (--no-verify)\n" +
+		"lint: 0 failed, 0 warnings\n"
+	if buf.String() != want {
+		t.Fatalf("output =\n%s\nwant\n%s", buf.String(), want)
+	}
+	if strings.Contains(buf.String(), "fetch origin") {
+		t.Fatalf("output should not mention fetch origin:\n%s", buf.String())
+	}
+}
+
+// TestLintFetchFailureWarns asserts a failing fetch (origin set, but
+// unreachable) produces exactly one warn line, then base still resolves
+// from local refs.
+func TestLintFetchFailureWarns(t *testing.T) {
+	repo := newSourceRepo(t)
+	mustGit(t, repo, "remote", "add", "origin", filepath.Join(t.TempDir(), "missing"))
+
+	homeDir := t.TempDir()
+	writeLintSpec(t, home.DraftDir(homeDir), "demo", "max_iter: 5\n", repo, fullSpecBody)
+
+	var buf bytes.Buffer
+	res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", NoVerify: true, Stdout: &buf})
+	if err != nil {
+		t.Fatalf("Lint: %v", err)
+	}
+	if res.Fails != 0 {
+		t.Fatalf("res = %+v, want no fails\n%s", res, buf.String())
+	}
+	if res.Warns != 1 {
+		t.Fatalf("res = %+v, want exactly one warn\n%s", res, buf.String())
+	}
+
+	full, gerr := resolveBase(repo, "main")
+	if gerr != nil {
+		t.Fatalf("sha: %v", gerr)
+	}
+	want := "warn  base: fetch origin failed (using local refs): "
+	wantBase := "ok    base: main @ " + full[:7] + "\n"
+	idx := strings.Index(buf.String(), want)
+	if idx < 0 {
+		t.Fatalf("output missing expected warn line:\n%s", buf.String())
+	}
+	rest := buf.String()[idx:]
+	nl := strings.Index(rest, "\n")
+	if nl < 0 {
+		t.Fatalf("warn line has no terminator:\n%s", buf.String())
+	}
+	if rest[nl+1:nl+1+len(wantBase)] != wantBase {
+		t.Fatalf("warn line not immediately followed by base ok line:\n%s", buf.String())
+	}
+}

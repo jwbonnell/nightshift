@@ -65,6 +65,16 @@ func lintLine(w io.Writer, label, text string) {
 	fmt.Fprintf(w, "%-6s%s\n", label, text)
 }
 
+// firstLine returns the first line of out (gitx.Run's combined
+// stdout+stderr), falling back to err's own message when out is empty.
+func firstLine(out string, err error) string {
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return err.Error()
+	}
+	return strings.SplitN(out, "\n", 2)[0]
+}
+
 // locateLintSpec resolves arg to a spec path: arg itself if it names a
 // regular file, else <draft>/<arg>.md, else <ready>/<arg>.md — both
 // matched case-insensitively. Unlike locateSpec, it applies no readiness
@@ -264,6 +274,12 @@ func Lint(o LintOptions) (LintResult, error) {
 	if fmErr != nil {
 		lintLine(o.Stdout, "skip", "base (earlier failure)")
 	} else {
+		if _, err := gitx.Run(sp.Repo, "remote", "get-url", "origin"); err == nil {
+			if out, ferr := gitx.Run(sp.Repo, "fetch", "origin"); ferr != nil {
+				lintLine(o.Stdout, "warn", "base: fetch origin failed (using local refs): "+firstLine(out, ferr))
+				res.Warns++
+			}
+		}
 		sha, err := resolveBase(sp.Repo, sp.Base)
 		if err != nil {
 			lintLine(o.Stdout, "FAIL", "base: "+err.Error())
