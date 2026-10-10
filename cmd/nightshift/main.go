@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -16,13 +17,20 @@ import (
 // version is set via -ldflags "-X main.version=..."; see the Makefile.
 var version = "dev"
 
+// newBaseVerifier is a test seam: when set, lint uses its return value as
+// the BaseVerifier instead of letting runner.Lint construct the real
+// sbxBaseVerifier itself. Production leaves it nil.
+var newBaseVerifier func(bin string) runner.BaseVerifier
+
 const usage = `nightshift — run design specs through a sandboxed Claude Code loop
 
 usage:
   nightshift init                       create the nightshift home (~/.nightshift or $NIGHTSHIFT_HOME)
   nightshift new <slug> [--repo PATH] [--verify CMD]
                                         start a draft spec from the template
-  nightshift ready <slug>               move a draft spec to specs/ready/
+  nightshift ready <slug> [--no-verify] [--no-lint]
+                                        lint a draft, then move it to specs/ready/
+  nightshift lint <spec> [--no-verify]  check a draft or ready spec (verify runs on the base commit in sbx)
   nightshift done <slug>                move a ready spec to specs/done/
   nightshift run <spec> [flags]         run one ready spec (nightshift run -h for flags)
   nightshift run --next [flags]         run the oldest eligible ready spec
@@ -55,6 +63,8 @@ func dispatch(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 		return cmdNew(args[1:], stdout, stderr)
 	case "ready":
 		return cmdReady(args[1:], stdout, stderr)
+	case "lint":
+		return cmdLint(args[1:], stdout, stderr)
 	case "done":
 		return cmdDone(args[1:], stdout, stderr)
 	case "run":
@@ -147,16 +157,115 @@ func cmdNew(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func cmdReady(args []string, stdout, stderr io.Writer) int {
-	if len(args) != 1 {
-		fmt.Fprintln(stderr, "usage: nightshift ready <slug>")
+// parseLintFlags interleaves --no-verify (and, for "ready", --no-lint)
+// with the single positional slug/path, the same pattern "new" and "run"
+// use so flags can come before or after the positional.
+func parseLintFlags(fs *flag.FlagSet, args []string) ([]string, error) {
+	var positional []string
+	rest := args
+	for {
+		if err := fs.Parse(rest); err != nil {
+			return nil, err
+		}
+		rest = fs.Args()
+		if len(rest) == 0 {
+			break
+		}
+		positional = append(positional, rest[0])
+		rest = rest[1:]
+	}
+	return positional, nil
+}
+
+// runLint resolves home's sbx bin and runs runner.Lint, writing its
+// checks to stdout. newBaseVerifier, when set by a test, supplies the
+// BaseVerifier instead of letting Lint build the real sbx one.
+func runLint(h, specArg string, noVerify bool, stdout io.Writer) (runner.LintResult, error) {
+	bin := resolveSbxBin(h)
+	opts := runner.LintOptions{
+		Home:     h,
+		SpecArg:  specArg,
+		NoVerify: noVerify,
+		SbxBin:   bin,
+		Stdout:   stdout,
+		Ctx:      context.Background(),
+	}
+	if newBaseVerifier != nil {
+		opts.Verifier = newBaseVerifier(bin)
+	}
+	return runner.Lint(opts)
+}
+
+func cmdLint(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("nightshift lint", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	noVerify := fs.Bool("no-verify", false, "")
+	fs.Usage = func() {
+		fmt.Fprintln(stderr, "usage: nightshift lint <spec> [--no-verify]")
+	}
+
+	positional, err := parseLintFlags(fs, args)
+	if err != nil {
 		return 2
 	}
+	if len(positional) != 1 {
+		fs.Usage()
+		return 2
+	}
+
 	h, ok := resolveHome(stderr)
 	if !ok {
 		return 1
 	}
-	if err := home.Ready(h, args[0], stdout); err != nil {
+
+	res, err := runLint(h, positional[0], *noVerify, stdout)
+	if err != nil {
+		fmt.Fprintf(stderr, "nightshift: %v\n", err)
+		return 1
+	}
+	if res.Fails > 0 {
+		return 1
+	}
+	return 0
+}
+
+func cmdReady(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("nightshift ready", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	noVerify := fs.Bool("no-verify", false, "")
+	noLint := fs.Bool("no-lint", false, "")
+	fs.Usage = func() {
+		fmt.Fprintln(stderr, "usage: nightshift ready <slug> [--no-verify] [--no-lint]")
+	}
+
+	positional, err := parseLintFlags(fs, args)
+	if err != nil {
+		return 2
+	}
+	if len(positional) != 1 {
+		fs.Usage()
+		return 2
+	}
+	slug := positional[0]
+
+	h, ok := resolveHome(stderr)
+	if !ok {
+		return 1
+	}
+
+	if !*noLint {
+		res, err := runLint(h, slug, *noVerify, stdout)
+		if err != nil {
+			fmt.Fprintf(stderr, "nightshift: %v\n", err)
+			return 1
+		}
+		if res.Fails > 0 {
+			fmt.Fprintf(stderr, "nightshift: %s failed lint — not moved to specs/ready/\n", slug)
+			return 1
+		}
+	}
+
+	if err := home.Ready(h, slug, stdout); err != nil {
 		fmt.Fprintf(stderr, "nightshift: %v\n", err)
 		return 1
 	}

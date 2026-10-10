@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -9,7 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/jwbonnell/nightshift/internal/home"
+	"github.com/jwbonnell/nightshift/internal/runner"
 	"github.com/jwbonnell/nightshift/internal/testenv"
 )
 
@@ -195,7 +199,9 @@ func TestSmokeInitNewReadyDryRunStatus(t *testing.T) {
 	if exit, _, stderr := run("new", "demo", "--repo", srcRepo, "--verify", "true"); exit != 0 {
 		t.Fatalf("new: exit=%d stderr=%s", exit, stderr)
 	}
-	if exit, _, stderr := run("ready", "demo"); exit != 0 {
+	// --no-lint: this test's spec is the stock template, which lint
+	// (by design) rejects for its placeholder sections and tasks.
+	if exit, _, stderr := run("ready", "demo", "--no-lint"); exit != 0 {
 		t.Fatalf("ready: exit=%d stderr=%s", exit, stderr)
 	}
 
@@ -236,7 +242,9 @@ func TestUntilInvalidIsUsageError(t *testing.T) {
 	if exit, stderr := run("new", "demo", "--repo", srcRepo, "--verify", "true"); exit != 0 {
 		t.Fatalf("new: exit=%d stderr=%s", exit, stderr)
 	}
-	if exit, stderr := run("ready", "demo"); exit != 0 {
+	// --no-lint: this test's spec is the stock template, which lint
+	// (by design) rejects for its placeholder sections and tasks.
+	if exit, stderr := run("ready", "demo", "--no-lint"); exit != 0 {
 		t.Fatalf("ready: exit=%d stderr=%s", exit, stderr)
 	}
 
@@ -253,4 +261,205 @@ func TestUntilInvalidIsUsageError(t *testing.T) {
 			t.Fatalf("--until %q: a state dir was created", bad)
 		}
 	}
+}
+
+// fullSpecBody is a clean spec body with all six sections, 2 tasks and 1
+// acceptance item — enough to pass every static lint check on its own.
+const fullSpecBody = `
+# demo
+
+## Goal
+
+Goal text.
+
+## Context
+
+Context text.
+
+## Constraints
+
+- a constraint
+
+## Tasks
+
+- [ ] task one
+- [ ] task two
+
+## Acceptance criteria
+
+- [ ] criterion one
+
+## Out of scope
+
+- nothing
+`
+
+// writeFullDraftSpec writes a draft spec whose body is fullSpecBody (or,
+// with brokenSections true, a body missing "## Out of scope" so check 2
+// FAILs), with repo/verify/max_iter frontmatter that otherwise passes
+// checks 1, 6 and 7 against repo.
+func writeFullDraftSpec(t *testing.T, homeDir, slug, repo string, brokenSections bool) string {
+	t.Helper()
+	dir := home.DraftDir(homeDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	body := fullSpecBody
+	if brokenSections {
+		body = strings.Replace(body, "## Out of scope\n\n- nothing\n", "", 1)
+	}
+	content := "---\nrepo: " + repo + "\nverify: true\nmax_iter: 5\n---\n" + body
+	path := filepath.Join(dir, slug+".md")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	return path
+}
+
+// stubVerifier is a BaseVerifier test double so tests never need a real
+// sbx binary on PATH.
+type stubVerifier struct{}
+
+func (stubVerifier) Verify(ctx context.Context, dir string, egress []string, cmd string) (string, error) {
+	return "", nil
+}
+
+func TestLintExitCodes(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("NIGHTSHIFT_HOME", homeDir)
+	repo := newTestSourceRepo(t)
+	withStubVerifier(t)
+
+	t.Run("clean spec exits 0", func(t *testing.T) {
+		writeFullDraftSpec(t, homeDir, "clean", repo, false)
+		var stdout, stderr bytes.Buffer
+		got := dispatch([]string{"lint", "clean"}, &stdout, &stderr, strings.NewReader(""))
+		if got != 0 {
+			t.Fatalf("exit = %d, want 0; stdout=%s stderr=%s", got, stdout.String(), stderr.String())
+		}
+	})
+
+	t.Run("failing spec exits 1", func(t *testing.T) {
+		writeFullDraftSpec(t, homeDir, "broken", repo, true)
+		var stdout, stderr bytes.Buffer
+		got := dispatch([]string{"lint", "broken"}, &stdout, &stderr, strings.NewReader(""))
+		if got != 1 {
+			t.Fatalf("exit = %d, want 1; stdout=%s stderr=%s", got, stdout.String(), stderr.String())
+		}
+		if !strings.Contains(stdout.String(), "FAIL") {
+			t.Fatalf("stdout missing a FAIL line:\n%s", stdout.String())
+		}
+	})
+
+	t.Run("usage errors exit 2", func(t *testing.T) {
+		for _, args := range [][]string{{"lint"}, {"lint", "a", "b"}} {
+			var stdout, stderr bytes.Buffer
+			got := dispatch(args, &stdout, &stderr, strings.NewReader(""))
+			if got != 2 {
+				t.Fatalf("args=%v: exit = %d, want 2; stderr=%s", args, got, stderr.String())
+			}
+		}
+	})
+}
+
+func TestReadyRefusesFailingLint(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("NIGHTSHIFT_HOME", homeDir)
+	repo := newTestSourceRepo(t)
+	withStubVerifier(t)
+	path := writeFullDraftSpec(t, homeDir, "demo", repo, true)
+
+	var stdout, stderr bytes.Buffer
+	got := dispatch([]string{"ready", "demo"}, &stdout, &stderr, strings.NewReader(""))
+	if got != 1 {
+		t.Fatalf("exit = %d, want 1; stdout=%s stderr=%s", got, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "FAIL") {
+		t.Fatalf("lint output not printed to stdout:\n%s", stdout.String())
+	}
+	wantRefusal := "nightshift: demo failed lint — not moved to specs/ready/\n"
+	if stderr.String() != wantRefusal {
+		t.Fatalf("stderr = %q, want %q", stderr.String(), wantRefusal)
+	}
+	if !dirExistsForTest(filepath.Dir(path)) || !fileExistsForTest(path) {
+		t.Fatalf("draft %s was moved or removed", path)
+	}
+	if fileExistsForTest(filepath.Join(home.ReadyDir(homeDir), "demo.md")) {
+		t.Fatalf("spec was moved to specs/ready/ despite failing lint")
+	}
+}
+
+func TestReadyNoLintKeepsOldBehavior(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("NIGHTSHIFT_HOME", homeDir)
+	repo := newTestSourceRepo(t)
+	// The stock template fails lint (placeholders, empty tasks), but
+	// --no-lint should restore today's repo/verify-only check.
+	if err := home.Init(homeDir, "sbx", &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if err := home.New(homeDir, "demo", repo, "true", time.Now(), &bytes.Buffer{}); err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	got := dispatch([]string{"ready", "demo", "--no-lint"}, &stdout, &stderr, strings.NewReader(""))
+	if got != 0 {
+		t.Fatalf("exit = %d, want 0; stdout=%s stderr=%s", got, stdout.String(), stderr.String())
+	}
+	if strings.Contains(stdout.String(), "FAIL") || strings.Contains(stdout.String(), "ok    ") {
+		t.Fatalf("--no-lint printed lint output:\n%s", stdout.String())
+	}
+	if !fileExistsForTest(filepath.Join(home.ReadyDir(homeDir), "demo.md")) {
+		t.Fatalf("spec was not moved to specs/ready/")
+	}
+}
+
+func TestReadyNoVerifySkipsVerify(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("NIGHTSHIFT_HOME", homeDir)
+	repo := newTestSourceRepo(t)
+	writeFullDraftSpec(t, homeDir, "demo", repo, false)
+
+	var stdout, stderr bytes.Buffer
+	got := dispatch([]string{"ready", "demo", "--no-verify"}, &stdout, &stderr, strings.NewReader(""))
+	if got != 0 {
+		t.Fatalf("exit = %d, want 0; stdout=%s stderr=%s", got, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "skip  verify-on-base (--no-verify)") {
+		t.Fatalf("stdout missing the verify-on-base skip line:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "ready: demo") {
+		t.Fatalf("stdout missing the ready: line:\n%s", stdout.String())
+	}
+	if !fileExistsForTest(filepath.Join(home.ReadyDir(homeDir), "demo.md")) {
+		t.Fatalf("spec was not moved to specs/ready/")
+	}
+}
+
+func TestUsageListsLint(t *testing.T) {
+	if !strings.Contains(usage, "nightshift lint <spec> [--no-verify]") {
+		t.Fatalf("usage missing the lint line:\n%s", usage)
+	}
+	if !strings.Contains(usage, "nightshift ready <slug> [--no-verify] [--no-lint]") {
+		t.Fatalf("usage missing ready's new flags:\n%s", usage)
+	}
+	if !strings.Contains(usage, "lint a draft, then move it to specs/ready/") {
+		t.Fatalf("usage missing ready's updated description:\n%s", usage)
+	}
+}
+
+func fileExistsForTest(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && !fi.IsDir()
+}
+
+// withStubVerifier points newBaseVerifier at a BaseVerifier that always
+// succeeds, for the duration of the test, so lint's check 8 never needs a
+// real sbx binary on PATH.
+func withStubVerifier(t *testing.T) {
+	t.Helper()
+	old := newBaseVerifier
+	newBaseVerifier = func(bin string) runner.BaseVerifier { return stubVerifier{} }
+	t.Cleanup(func() { newBaseVerifier = old })
 }
