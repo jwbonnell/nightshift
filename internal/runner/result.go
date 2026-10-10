@@ -34,6 +34,7 @@ func (r *run) printSummary(status Status) {
 	st := r.st
 	fmt.Fprintf(r.opts.Stdout, "\nspec %s: %s after %d iteration(s), %d commit(s) on %s\n",
 		r.spec.Slug, status, st.Iterations, st.Commits, st.Branch)
+	fmt.Fprintf(r.opts.Stdout, "post-run checks: %d failed, %d warnings\n", r.prChecks.fails, r.prChecks.warns)
 	if status != StatusComplete {
 		fmt.Fprintf(r.opts.Stdout, "review: git -C %s log --oneline %s..%s%s\n",
 			r.spec.Repo, short(st.Base), r.reviewRef(), baseSuffix(st))
@@ -118,6 +119,14 @@ func (r *run) resultBody(status Status) string {
 		fmt.Fprintf(&b, "## PROGRESS.md (tail)\n\n```\n%s\n```\n\n", strings.TrimSpace(tailLines(progress, 40)))
 	}
 
+	if len(r.prChecks.lines) > 0 {
+		fmt.Fprintf(&b, "## Post-run checks\n\n```\n")
+		for _, c := range r.prChecks.lines {
+			fmt.Fprintf(&b, "%s\n", c.String())
+		}
+		b.WriteString("```\n\n")
+	}
+
 	fmt.Fprintf(&b, "## Review\n\n")
 	fmt.Fprintf(&b, "- `git -C %s log --oneline %s..%s`%s\n", sp.Repo, short(st.Base), r.reviewRef(), baseSuffix(st))
 	fmt.Fprintf(&b, "- `git -C %s diff %s..%s`%s\n", sp.Repo, short(st.Base), r.reviewRef(), baseSuffix(st))
@@ -186,6 +195,9 @@ func (r *run) notifyText(status Status) (title, msg string) {
 	case r.syncPending():
 		title += " (sync pending)"
 	}
+	if r.prChecks.fails > 0 {
+		title += " (checks failed)"
+	}
 	return title, summaryLine(status, r.st)
 }
 
@@ -226,7 +238,7 @@ func (r *run) notify(status Status) {
 		return
 	}
 	title, msg := r.notifyText(status)
-	urgent := status == StatusError || status == StatusRed || status == StatusStalled
+	urgent := status == StatusError || status == StatusRed || status == StatusStalled || r.prChecks.fails > 0
 	n.Notify(title, msg, urgent)
 }
 
@@ -239,6 +251,8 @@ func (r *run) finish(status Status) (Status, error) {
 	r.st.Status = string(status)
 	r.st.History = append(r.st.History, r.opts.clockFn()().Format("2006-01-02 15:04")+" "+string(status))
 	_ = r.saveState()
+
+	r.prChecks = r.postRunChecks()
 
 	r.printSummary(status)
 

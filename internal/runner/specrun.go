@@ -382,9 +382,20 @@ func runSpec(opts Options, sp *Spec, sb Sandbox) (Status, error) {
 		return StatusError, fmt.Errorf("create sandbox: %w", err)
 	}
 	r.sb = sb
-	defer sb.Remove()
+	sbRemoved := false
+	defer func() {
+		if !sbRemoved {
+			_ = sb.Remove()
+		}
+	}()
 
 	status := r.loop()
+	r.removeErr = sb.Remove()
+	sbRemoved = true
+	if r.removeErr != nil {
+		r.logf("remove sandboxes: %v", r.removeErr)
+	}
+
 	status, err = r.finish(status)
 	if err != nil {
 		r.logf("hand-back error: %v", err)

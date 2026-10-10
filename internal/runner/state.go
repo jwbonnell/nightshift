@@ -50,6 +50,9 @@ type run struct {
 	agentLog *os.File
 	version  string // Task 4: opts.Version, defaulted to "dev" if empty
 	err      error  // set by fail()/finalizeSync; returned alongside StatusError
+
+	removeErr error         // Task 5: the explicit, pre-finish sb.Remove() result
+	prChecks  postRunReport // Task 5: computed once in finish(), reused by printSummary/resultBody/notify
 }
 
 // git runs args against the clone in the control sandbox, stripping any

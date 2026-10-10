@@ -29,6 +29,8 @@ type stubSandbox struct {
 
 	agentN, verifyN, stopN, resetVerifyN int
 	removed                              bool
+	removeN                              int
+	removeErr                            error
 	agentAlive                           bool
 	verifyRaced                          bool
 
@@ -144,7 +146,8 @@ func (s *stubSandbox) RunVerify(ctx context.Context, verifyCmd string) (string, 
 
 func (s *stubSandbox) Remove() error {
 	s.removed = true
-	return nil
+	s.removeN++
+	return s.removeErr
 }
 
 // newTestRun resolves a fresh "demo" spec against repo and runs setup(),
@@ -197,6 +200,19 @@ func commitFile(t *testing.T, dir, name, content, msg string) {
 		t.Fatalf("write %s: %v", name, err)
 	}
 	mustGit(t, dir, "add", "-A")
+	mustGit(t, dir, "commit", "-q", "-m", msg)
+}
+
+// commitFileForced is commitFile for a file excluded via
+// .git/info/exclude (PROGRESS.md, QUESTION.md, .spec-complete) — `git add
+// -A` alone would silently skip it, so tests simulating a misbehaving
+// agent that commits scaffold files anyway need `-f`.
+func commitFileForced(t *testing.T, dir, name, content, msg string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+	mustGit(t, dir, "add", "-f", name)
 	mustGit(t, dir, "commit", "-q", "-m", msg)
 }
 
