@@ -2,6 +2,8 @@ package runner
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +11,17 @@ import (
 
 	"github.com/jwbonnell/nightshift/internal/home"
 )
+
+// stubVerifier is the BaseVerifier test double used by every step-3
+// check-8 test; sbxBaseVerifier (the real sbx implementation) lands in a
+// follow-up commit and is tested separately.
+type stubVerifier struct {
+	fn func(ctx context.Context, dir string, egress []string, cmd string) (string, error)
+}
+
+func (s stubVerifier) Verify(ctx context.Context, dir string, egress []string, cmd string) (string, error) {
+	return s.fn(ctx, dir, egress, cmd)
+}
 
 // fullSpecBody is a clean spec body with all six sections, 2 tasks and 1
 // acceptance item — writeDraftSpec/writeReadySpec only write "# spec" as
@@ -352,4 +365,177 @@ func TestLintFindsDraftThenReady(t *testing.T) {
 	if err == nil || err.Error() != want {
 		t.Fatalf("err = %v, want %q", err, want)
 	}
+}
+
+func TestLintVerifyOnBasePass(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeLintSpec(t, home.DraftDir(homeDir), "demo", "", repo, fullSpecBody)
+
+	called := false
+	verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, cmd string) (string, error) {
+		called = true
+		return "all good", nil
+	}}
+
+	var buf bytes.Buffer
+	res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", Verifier: verifier, Stdout: &buf})
+	if err != nil {
+		t.Fatalf("Lint: %v", err)
+	}
+	if !called {
+		t.Fatalf("verifier was not called")
+	}
+	if res.Fails != 0 {
+		t.Fatalf("res = %+v, want zero fails\n%s", res, buf.String())
+	}
+	if !strings.Contains(buf.String(), "ok    verify-on-base\n") {
+		t.Fatalf("output missing ok line:\n%s", buf.String())
+	}
+}
+
+func TestLintVerifyOnBaseFailShowsTail(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeLintSpec(t, home.DraftDir(homeDir), "demo", "", repo, fullSpecBody)
+
+	var lines []string
+	for i := 1; i <= 50; i++ {
+		lines = append(lines, fmt.Sprintf("line %d", i))
+	}
+	out := strings.Join(lines, "\n")
+	verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, cmd string) (string, error) {
+		return out, fmt.Errorf("exit status 1")
+	}}
+
+	var buf bytes.Buffer
+	res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", Verifier: verifier, Stdout: &buf})
+	if err != nil {
+		t.Fatalf("Lint: %v", err)
+	}
+	if res.Fails == 0 {
+		t.Fatalf("expected a FAIL, got %+v\n%s", res, buf.String())
+	}
+	got := buf.String()
+	if !strings.Contains(got, "FAIL  verify-on-base: exit: exit status 1\n") {
+		t.Fatalf("output missing FAIL line:\n%s", got)
+	}
+	if !strings.Contains(got, "      line 21\n") || !strings.Contains(got, "      line 50\n") {
+		t.Fatalf("output missing expected tail lines:\n%s", got)
+	}
+	if strings.Contains(got, "line 20\n") {
+		t.Fatalf("output unexpectedly contains line 20 (only the last 30 lines should show):\n%s", got)
+	}
+}
+
+func TestLintVerifyRunsAtBaseNotHead(t *testing.T) {
+	repo := newSourceRepo(t)
+
+	if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("v1"), 0o644); err != nil {
+		t.Fatalf("write v1: %v", err)
+	}
+	mustGit(t, repo, "add", "-A")
+	mustGit(t, repo, "commit", "-q", "-m", "v1")
+	baseSHA, err := resolveBase(repo, "main")
+	if err != nil {
+		t.Fatalf("resolveBase: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("v2"), 0o644); err != nil {
+		t.Fatalf("write v2: %v", err)
+	}
+	mustGit(t, repo, "add", "-A")
+	mustGit(t, repo, "commit", "-q", "-m", "v2")
+
+	homeDir := t.TempDir()
+	writeLintSpec(t, home.DraftDir(homeDir), "demo", "base: "+baseSHA+"\n", repo, fullSpecBody)
+
+	var got string
+	verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, cmd string) (string, error) {
+		data, rerr := os.ReadFile(filepath.Join(dir, "file.txt"))
+		if rerr != nil {
+			return "", rerr
+		}
+		got = string(data)
+		return "ok", nil
+	}}
+
+	var buf bytes.Buffer
+	if _, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", Verifier: verifier, Stdout: &buf}); err != nil {
+		t.Fatalf("Lint: %v", err)
+	}
+	if got != "v1" {
+		t.Fatalf("verifier saw file.txt = %q, want %q (verify-on-base must run at base, not HEAD)\n%s", got, "v1", buf.String())
+	}
+}
+
+func TestLintTempCloneRemoved(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeLintSpec(t, home.DraftDir(homeDir), "demo", "", repo, fullSpecBody)
+
+	var capturedDir string
+	verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, cmd string) (string, error) {
+		capturedDir = dir
+		return "ok", nil
+	}}
+
+	var buf bytes.Buffer
+	if _, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", Verifier: verifier, Stdout: &buf}); err != nil {
+		t.Fatalf("Lint: %v", err)
+	}
+	if capturedDir == "" {
+		t.Fatalf("verifier was not called")
+	}
+	if _, err := os.Stat(filepath.Dir(capturedDir)); !os.IsNotExist(err) {
+		t.Fatalf("temp clone dir %s still exists after Lint returned: %v", filepath.Dir(capturedDir), err)
+	}
+}
+
+func TestLintSkipsVerifyAfterEarlierFailure(t *testing.T) {
+	repo := newSourceRepo(t)
+
+	run := func(t *testing.T, extraFrontmatter string, corruptVerify bool) (string, bool) {
+		homeDir := t.TempDir()
+		path := writeLintSpec(t, home.DraftDir(homeDir), "demo", extraFrontmatter, repo, fullSpecBody)
+		if corruptVerify {
+			data, _ := os.ReadFile(path)
+			corrupt := strings.Replace(string(data), "verify: true\n", "", 1)
+			if err := os.WriteFile(path, []byte(corrupt), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+		}
+
+		called := false
+		verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, cmd string) (string, error) {
+			called = true
+			return "", nil
+		}}
+
+		var buf bytes.Buffer
+		if _, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", Verifier: verifier, Stdout: &buf}); err != nil {
+			t.Fatalf("Lint: %v", err)
+		}
+		return buf.String(), called
+	}
+
+	t.Run("bad base", func(t *testing.T) {
+		out, called := run(t, "base: nonexistent\n", false)
+		if called {
+			t.Fatalf("verifier should not have been called:\n%s", out)
+		}
+		if !strings.Contains(out, "skip  verify-on-base (earlier failure)\n") {
+			t.Fatalf("output missing expected skip line:\n%s", out)
+		}
+	})
+
+	t.Run("bad frontmatter", func(t *testing.T) {
+		out, called := run(t, "", true)
+		if called {
+			t.Fatalf("verifier should not have been called:\n%s", out)
+		}
+		if !strings.Contains(out, "skip  verify-on-base (earlier failure)\n") {
+			t.Fatalf("output missing expected skip line:\n%s", out)
+		}
+	})
 }

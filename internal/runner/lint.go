@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/jwbonnell/nightshift/internal/gitx"
 	"github.com/jwbonnell/nightshift/internal/home"
 )
 
@@ -256,6 +259,7 @@ func Lint(o LintOptions) (LintResult, error) {
 
 	// Check 7: base.
 	baseOK := false
+	var baseSHA string
 	if fmErr != nil {
 		lintLine(o.Stdout, "skip", "base (earlier failure)")
 	} else {
@@ -266,16 +270,18 @@ func Lint(o LintOptions) (LintResult, error) {
 		} else {
 			lintLine(o.Stdout, "ok", fmt.Sprintf("base: %s @ %s", sp.Base, sha[:7]))
 			baseOK = true
+			baseSHA = sha
 		}
 	}
 
-	// Check 8: verify-on-base. Step 2 only wires the skip conditions;
-	// the real sandboxed run lands in a follow-up commit.
+	// Check 8: verify-on-base.
 	switch {
 	case o.NoVerify:
 		lintLine(o.Stdout, "skip", "verify-on-base (--no-verify)")
 	case fmErr != nil || !baseOK:
 		lintLine(o.Stdout, "skip", "verify-on-base (earlier failure)")
+	default:
+		checkVerifyOnBase(o, sp, baseSHA, &res)
 	}
 
 	fmt.Fprintf(o.Stdout, "lint: %d failed, %d warnings\n", res.Fails, res.Warns)
@@ -284,4 +290,74 @@ func Lint(o LintOptions) (LintResult, error) {
 	}
 
 	return res, nil
+}
+
+// checkVerifyOnBase runs check 8: a throwaway --no-local clone of
+// sp.Repo checked out at baseSHA, with sp.Verify run against it through
+// o.Verifier. o.Verifier == nil is the "no sbx implementation wired up
+// yet" case — a real default lands in a follow-up commit.
+func checkVerifyOnBase(o LintOptions, sp *Spec, baseSHA string, res *LintResult) {
+	if o.Verifier == nil {
+		lintLine(o.Stdout, "FAIL", "verify-on-base: no verifier")
+		res.Fails++
+		return
+	}
+
+	tmp := filepath.Join(home.RunsDir(o.Home), ".lint", fmt.Sprintf("%s-%d", sp.Slug, time.Now().UnixNano()))
+	if err := os.MkdirAll(tmp, 0o755); err != nil {
+		lintLine(o.Stdout, "FAIL", "verify-on-base: mkdir: "+err.Error())
+		res.Fails++
+		return
+	}
+	defer os.RemoveAll(tmp)
+
+	clone := filepath.Join(tmp, "repo")
+	if out, err := gitx.Run(tmp, "clone", "--no-local", sp.Repo, "repo"); err != nil {
+		lintLine(o.Stdout, "FAIL", fmt.Sprintf("verify-on-base: clone: %v: %s", err, out))
+		res.Fails++
+		return
+	}
+	// A plain clone only carries refs reachable from the default branch,
+	// so a base pinned to an older sha may not be present yet.
+	if _, err := gitx.Run(clone, "cat-file", "-e", baseSHA+"^{commit}"); err != nil {
+		if out, ferr := gitx.Run(clone, "fetch", "origin", baseSHA); ferr != nil {
+			lintLine(o.Stdout, "FAIL", fmt.Sprintf("verify-on-base: fetch base: %v: %s", ferr, out))
+			res.Fails++
+			return
+		}
+	}
+	if out, err := gitx.Run(clone, "checkout", "-q", "--detach", baseSHA); err != nil {
+		lintLine(o.Stdout, "FAIL", fmt.Sprintf("verify-on-base: checkout: %v: %s", err, out))
+		res.Fails++
+		return
+	}
+	if out, err := gitx.Run(clone, "remote", "remove", "origin"); err != nil {
+		lintLine(o.Stdout, "FAIL", fmt.Sprintf("verify-on-base: remove remote: %v: %s", err, out))
+		res.Fails++
+		return
+	}
+
+	base := o.Ctx
+	if base == nil {
+		base = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(base, sp.IterTimeout)
+	defer cancel()
+
+	out, err := o.Verifier.Verify(ctx, clone, sp.Egress, sp.Verify)
+	if err != nil {
+		lintLine(o.Stdout, "FAIL", "verify-on-base: exit: "+err.Error())
+		res.Fails++
+		if trimmed := strings.TrimRight(out, "\n"); trimmed != "" {
+			lines := strings.Split(trimmed, "\n")
+			if len(lines) > 30 {
+				lines = lines[len(lines)-30:]
+			}
+			for _, line := range lines {
+				fmt.Fprintln(o.Stdout, "      "+line)
+			}
+		}
+		return
+	}
+	lintLine(o.Stdout, "ok", "verify-on-base")
 }
