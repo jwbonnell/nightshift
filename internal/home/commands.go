@@ -32,6 +32,11 @@ const commentedConfig = `# nightshift config file.
 # NIGHTSHIFT_SBX_BIN=sbx
 # NIGHTSHIFT_CLAUDE_BIN=claude
 # NIGHTSHIFT_NOTIFY=on
+
+# host claude for 'new'/'refine' interviews (NIGHTSHIFT_CLAUDE_BIN is the one inside the sandbox)
+# NIGHTSHIFT_HOST_CLAUDE_BIN=claude
+# model for the spec interview
+# NIGHTSHIFT_INTERVIEW_MODEL=opus
 `
 
 func fileExists(path string) bool {

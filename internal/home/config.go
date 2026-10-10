@@ -10,15 +10,17 @@ import (
 // locates the config file instead of appearing inside it), plus
 // NIGHTSHIFT_NOTIFY (D6).
 var configKeys = map[string]bool{
-	"NIGHTSHIFT_BASE":           true,
-	"NIGHTSHIFT_MODEL":          true,
-	"NIGHTSHIFT_PLANNER_MODEL":  true,
-	"NIGHTSHIFT_MAX_ITER":       true,
-	"NIGHTSHIFT_ITER_TIMEOUT":   true,
-	"NIGHTSHIFT_MAX_CONCURRENT": true,
-	"NIGHTSHIFT_SBX_BIN":        true,
-	"NIGHTSHIFT_CLAUDE_BIN":     true,
-	"NIGHTSHIFT_NOTIFY":         true,
+	"NIGHTSHIFT_BASE":            true,
+	"NIGHTSHIFT_MODEL":           true,
+	"NIGHTSHIFT_PLANNER_MODEL":   true,
+	"NIGHTSHIFT_MAX_ITER":        true,
+	"NIGHTSHIFT_ITER_TIMEOUT":    true,
+	"NIGHTSHIFT_MAX_CONCURRENT":  true,
+	"NIGHTSHIFT_SBX_BIN":         true,
+	"NIGHTSHIFT_CLAUDE_BIN":      true,
+	"NIGHTSHIFT_NOTIFY":          true,
+	"NIGHTSHIFT_HOST_CLAUDE_BIN": true,
+	"NIGHTSHIFT_INTERVIEW_MODEL": true,
 }
 
 // ParseConfig reads KEY=value pairs from path. A missing file is not an

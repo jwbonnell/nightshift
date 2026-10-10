@@ -42,6 +42,16 @@ You must NOT commit, edit code, or touch the spec. Only write PROGRESS.md. If th
 spec is under-specified in a way only a human can resolve, write the question to
 QUESTION.md and stop.`
 
+// PlanPreamble returns the exact text prepended to the planning iteration's
+// prompt, for callers (e.g. the spec interview) that need to show the agent
+// what the runner will send it.
+func PlanPreamble() string { return planPreamble }
+
+// IterPreamble returns the exact text prepended to a worker iteration's
+// prompt, for callers (e.g. the spec interview) that need to show the agent
+// what the runner will send it.
+func IterPreamble() string { return iterPreamble }
+
 // buildPrompt assembles one iteration's (or planning pass's) full prompt.
 // It re-reads the spec file at every call, so edits between iterations
 // take effect immediately.

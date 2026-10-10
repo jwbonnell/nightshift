@@ -56,6 +56,15 @@ func TestPreamblesByteIdenticalToReference(t *testing.T) {
 	}
 }
 
+func TestExportedPreamblesEqualConsts(t *testing.T) {
+	if PlanPreamble() != planPreamble {
+		t.Fatalf("PlanPreamble() does not equal planPreamble")
+	}
+	if IterPreamble() != iterPreamble {
+		t.Fatalf("IterPreamble() does not equal iterPreamble")
+	}
+}
+
 func TestBuildPromptAssembly(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "demo.md")

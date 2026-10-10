@@ -91,3 +91,29 @@ func TestConfigFileParse(t *testing.T) {
 		}
 	})
 }
+
+func TestConfigAcceptsInterviewKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config")
+	content := "NIGHTSHIFT_HOST_CLAUDE_BIN=/usr/local/bin/claude\nNIGHTSHIFT_INTERVIEW_MODEL=sonnet\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := ParseConfig(path)
+	if err != nil {
+		t.Fatalf("ParseConfig: %v", err)
+	}
+	if cfg["NIGHTSHIFT_HOST_CLAUDE_BIN"] != "/usr/local/bin/claude" {
+		t.Fatalf("NIGHTSHIFT_HOST_CLAUDE_BIN = %q", cfg["NIGHTSHIFT_HOST_CLAUDE_BIN"])
+	}
+	if cfg["NIGHTSHIFT_INTERVIEW_MODEL"] != "sonnet" {
+		t.Fatalf("NIGHTSHIFT_INTERVIEW_MODEL = %q", cfg["NIGHTSHIFT_INTERVIEW_MODEL"])
+	}
+
+	if !strings.Contains(commentedConfig, "# NIGHTSHIFT_HOST_CLAUDE_BIN=claude") {
+		t.Fatalf("commentedConfig missing NIGHTSHIFT_HOST_CLAUDE_BIN line:\n%s", commentedConfig)
+	}
+	if !strings.Contains(commentedConfig, "# NIGHTSHIFT_INTERVIEW_MODEL=opus") {
+		t.Fatalf("commentedConfig missing NIGHTSHIFT_INTERVIEW_MODEL line:\n%s", commentedConfig)
+	}
+}
