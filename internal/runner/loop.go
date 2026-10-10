@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -210,13 +211,22 @@ func (r *run) loop() Status {
 		ctx, cancel := r.iterCtx(deadline, clock)
 		r.logf("iter %d (session %d) model=%s planning=%v", st.Iterations, session, model, planning)
 		r.writeAgentHeader(st.Iterations, session, model, planning, clock)
-		agentErr := r.sb.RunAgent(ctx, model, buildPrompt(sp, planning), r.agentLog)
+		tail := &tailBuffer{max: 64 << 10}
+		var w io.Writer = tail
+		if r.agentLog != nil {
+			w = io.MultiWriter(r.agentLog, tail)
+		}
+		agentErr := r.sb.RunAgent(ctx, model, buildPrompt(sp, planning), w)
 		cancel()
+		res := parseAgentResult(tail.String())
 		switch {
 		case agentErr == context.DeadlineExceeded:
 			r.logf("iter %d timed out after %s", st.Iterations, sp.IterTimeout)
 		case agentErr != nil:
 			r.logf("iter %d agent exited: %v", st.Iterations, agentErr)
+		}
+		if res.IsError {
+			r.logf("iter %d agent error: %s", st.Iterations, res.Message)
 		}
 		if stopErr := r.sb.StopAgent(); stopErr != nil {
 			r.logf("iter %d stop agent: %v", st.Iterations, stopErr)

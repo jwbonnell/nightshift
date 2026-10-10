@@ -35,6 +35,11 @@ type stubSandbox struct {
 	agent  func(ctx context.Context, iter int, dir string) error
 	verify func(iter int, dir string) error
 
+	// output, if set, replaces the fixed "AGENT RAW OUTPUT" line written to
+	// logw — tests use it to script the agent's raw stdout, e.g. a
+	// --output-format json result line.
+	output func(iter int) string
+
 	// gitHook, if set, rewrites Git's real output (e.g. to simulate a
 	// corrupted sha); banner, if set, is prefixed to every Git result
 	// (e.g. to simulate an sbx startup banner line).
@@ -62,7 +67,11 @@ func (s *stubSandbox) RunAgent(ctx context.Context, model, prompt string, logw i
 	s.agentN++
 	s.models = append(s.models, model)
 	if logw != nil {
-		fmt.Fprintf(logw, "AGENT RAW OUTPUT iter=%d model=%s\n", s.iter, model)
+		if s.output != nil {
+			fmt.Fprint(logw, s.output(s.iter))
+		} else {
+			fmt.Fprintf(logw, "AGENT RAW OUTPUT iter=%d model=%s\n", s.iter, model)
+		}
 	}
 
 	var err error
