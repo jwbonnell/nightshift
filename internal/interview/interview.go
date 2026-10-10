@@ -67,7 +67,7 @@ func Prepare(o Options) (argv []string, dir string, err error) {
 		return nil, "", err
 	}
 
-	if err := os.MkdirAll(filepath.Join(o.Home, "context"), 0o755); err != nil {
+	if err := os.MkdirAll(home.ContextDir(o.Home), 0o755); err != nil {
 		return nil, "", err
 	}
 	interviewDir := filepath.Join(o.Home, "interview", o.Slug)
@@ -123,7 +123,7 @@ func buildSettings(o Options) ([]byte, error) {
 		editRule(filepath.Join(home.DoneDir(o.Home), "**")),
 		editRule(filepath.Join(home.RunsDir(o.Home), "**")),
 		editRule(filepath.Join(home.ResultsDir(o.Home), "**")),
-		editRule(filepath.Join(o.Home, "context", "**")),
+		editRule(filepath.Join(home.ContextDir(o.Home), "**")),
 		editRule(filepath.Join(o.Home, "interview", "**")),
 		editRule(home.ConfigPath(o.Home)),
 		editRule(home.TemplatePath(o.Home)),
@@ -169,10 +169,10 @@ func buildPrompt(o Options) (string, error) {
 	writeFenced(&b, tpl)
 
 	b.WriteString("\n## Sandbox facts\n\n")
-	b.WriteString(fileSectionOrNoneYet(filepath.Join(o.Home, "context", "sandbox.md"), contextCapBytes))
+	b.WriteString(fileSectionOrNoneYet(filepath.Join(home.ContextDir(o.Home), "sandbox.md"), contextCapBytes))
 
 	b.WriteString("\n## Lessons from past runs\n\n")
-	b.WriteString(fileSectionOrNoneYet(filepath.Join(o.Home, "context", "lessons.md"), contextCapBytes))
+	b.WriteString(fileSectionOrNoneYet(filepath.Join(home.ContextDir(o.Home), "lessons.md"), contextCapBytes))
 
 	b.WriteString("\n## Repo card\n\n")
 	b.WriteString(fileSectionOrNoneYet(filepath.Join(o.Repo, ".nightshift.md"), contextCapBytes))

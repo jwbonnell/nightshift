@@ -52,7 +52,7 @@ func dirExists(path string) bool {
 // ensureLayout creates every D2 directory under home, silently (no
 // output), creating any that are missing.
 func ensureLayout(home string) error {
-	for _, d := range []string{home, DraftDir(home), ReadyDir(home), DoneDir(home), ResultsDir(home), RunsDir(home), LogsDir(home)} {
+	for _, d := range []string{home, DraftDir(home), ReadyDir(home), DoneDir(home), ResultsDir(home), RunsDir(home), LogsDir(home), ContextDir(home)} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}
@@ -66,7 +66,7 @@ func ensureLayout(home string) error {
 func Init(home, sbxBin string, stdout, stderr io.Writer) error {
 	var created []string
 
-	for _, d := range []string{home, DraftDir(home), ReadyDir(home), DoneDir(home), ResultsDir(home), RunsDir(home), LogsDir(home)} {
+	for _, d := range []string{home, DraftDir(home), ReadyDir(home), DoneDir(home), ResultsDir(home), RunsDir(home), LogsDir(home), ContextDir(home)} {
 		existed := dirExists(d)
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
@@ -90,6 +90,22 @@ func Init(home, sbxBin string, stdout, stderr io.Writer) error {
 			return err
 		}
 		created = append(created, cfgPath)
+	}
+
+	sandboxPath := filepath.Join(ContextDir(home), "sandbox.md")
+	if !fileExists(sandboxPath) {
+		if err := os.WriteFile(sandboxPath, []byte(embeddedContextSandbox), 0o644); err != nil {
+			return err
+		}
+		created = append(created, sandboxPath)
+	}
+
+	lessonsPath := filepath.Join(ContextDir(home), "lessons.md")
+	if !fileExists(lessonsPath) {
+		if err := os.WriteFile(lessonsPath, []byte(embeddedContextLessons), 0o644); err != nil {
+			return err
+		}
+		created = append(created, lessonsPath)
 	}
 
 	if len(created) == 0 {

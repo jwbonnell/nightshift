@@ -88,6 +88,70 @@ func TestInitWarnsWithoutSbx(t *testing.T) {
 	}
 }
 
+func TestInitSeedsContext(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "nightshift-home")
+	t.Setenv("PATH", fakeBin(t, "sbx"))
+
+	var stdout, stderr bytes.Buffer
+	if err := Init(home, "sbx", &stdout, &stderr); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	sandboxPath := filepath.Join(ContextDir(home), "sandbox.md")
+	lessonsPath := filepath.Join(ContextDir(home), "lessons.md")
+
+	for _, want := range []string{"created " + sandboxPath, "created " + lessonsPath} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want it to contain %q", stdout.String(), want)
+		}
+	}
+
+	gotSandbox, err := os.ReadFile(sandboxPath)
+	if err != nil {
+		t.Fatalf("read sandbox.md: %v", err)
+	}
+	if string(gotSandbox) != embeddedContextSandbox {
+		t.Fatalf("sandbox.md = %q, want embedded seed %q", gotSandbox, embeddedContextSandbox)
+	}
+
+	gotLessons, err := os.ReadFile(lessonsPath)
+	if err != nil {
+		t.Fatalf("read lessons.md: %v", err)
+	}
+	if string(gotLessons) != embeddedContextLessons {
+		t.Fatalf("lessons.md = %q, want embedded seed %q", gotLessons, embeddedContextLessons)
+	}
+}
+
+func TestInitKeepsEditedContext(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "nightshift-home")
+	t.Setenv("PATH", fakeBin(t, "sbx"))
+
+	var stdout, stderr bytes.Buffer
+	if err := Init(home, "sbx", &stdout, &stderr); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	sandboxPath := filepath.Join(ContextDir(home), "sandbox.md")
+	edited := []byte("# hand edited sandbox facts\n")
+	if err := os.WriteFile(sandboxPath, edited, 0o644); err != nil {
+		t.Fatalf("hand-edit sandbox.md: %v", err)
+	}
+
+	var stdout2, stderr2 bytes.Buffer
+	if err := Init(home, "sbx", &stdout2, &stderr2); err != nil {
+		t.Fatalf("second Init: %v", err)
+	}
+
+	got, err := os.ReadFile(sandboxPath)
+	if err != nil {
+		t.Fatalf("read sandbox.md: %v", err)
+	}
+	if !bytes.Equal(got, edited) {
+		t.Fatalf("sandbox.md changed by second Init: got %q, want %q", got, edited)
+	}
+}
+
 func TestNewFromTemplate(t *testing.T) {
 	now := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 
