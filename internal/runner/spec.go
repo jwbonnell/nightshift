@@ -188,15 +188,21 @@ func locateSpec(opts Options) (string, error) {
 }
 
 // resolveSpec locates, reads, and fully validates one spec's frontmatter.
-// Validation order matches the reference: repo, base NAME (not yet
-// resolved to a sha — that's resolveBase, called later by the caller),
-// verify, model, planner, max_iter, iter_timeout, egress.
 func resolveSpec(opts Options) (*Spec, error) {
 	path, err := locateSpec(opts)
 	if err != nil {
 		return nil, err
 	}
+	return resolveSpecFile(opts, path)
+}
 
+// resolveSpecFile reads and fully validates one spec's frontmatter at
+// path, without locating it or applying the readiness gate (lint.go
+// calls this directly on a draft or ready path). Validation order
+// matches the reference: repo, base NAME (not yet resolved to a sha —
+// that's resolveBase, called later by the caller), verify, model,
+// planner, max_iter, iter_timeout, egress.
+func resolveSpecFile(opts Options, path string) (*Spec, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read spec %s: %w", path, err)
