@@ -55,6 +55,7 @@ var (
 	emptyCheckboxRe = regexp.MustCompile(`^\s*- \[ \]\s*$`)
 	bareBulletRe    = regexp.MustCompile(`^\s*-\s*$`)
 	checkboxItemRe  = regexp.MustCompile(`^\s*- \[[ xX]\]`)
+	fenceOpenRe     = regexp.MustCompile("^\\s*(`{3,}|~{3,})")
 )
 
 const titlePlaceholder = "<short imperative title>"
@@ -110,6 +111,42 @@ func specBody(raw []byte) string {
 		return s
 	}
 	return rest[end+4:]
+}
+
+// placeholderLines returns the 1-based file line numbers of check-3
+// violations: an empty checkbox or bare bullet anywhere in the body, or
+// the title placeholder on an H1 heading line. Frontmatter and the inside
+// of fenced code blocks (opened by a line of 3+ backticks or tildes,
+// closed by a later line starting with at least as many of the same
+// character, or never closed before EOF) are skipped entirely.
+func placeholderLines(raw []byte) []int {
+	body := specBody(raw)
+	offset := strings.Count(string(raw[:len(raw)-len(body)]), "\n")
+
+	var result []int
+	inFence := false
+	fenceMarker := ""
+	for i, line := range strings.Split(body, "\n") {
+		if inFence {
+			if strings.HasPrefix(strings.TrimLeft(line, " \t"), fenceMarker) {
+				inFence = false
+			}
+			continue
+		}
+		if m := fenceOpenRe.FindStringSubmatch(line); m != nil {
+			inFence = true
+			fenceMarker = m[1]
+			continue
+		}
+		fileLine := offset + i + 1
+		switch {
+		case strings.HasPrefix(line, "# ") && strings.Contains(line, titlePlaceholder):
+			result = append(result, fileLine)
+		case emptyCheckboxRe.MatchString(line) || bareBulletRe.MatchString(line):
+			result = append(result, fileLine)
+		}
+	}
+	return result
 }
 
 // parseSections splits body into its "## " sections, keyed by the exact
@@ -222,14 +259,12 @@ func Lint(o LintOptions) (LintResult, error) {
 	}
 
 	// Check 3: placeholders.
-	var placeholderLines []string
-	for i, line := range strings.Split(string(raw), "\n") {
-		if strings.Contains(line, titlePlaceholder) || emptyCheckboxRe.MatchString(line) || bareBulletRe.MatchString(line) {
-			placeholderLines = append(placeholderLines, strconv.Itoa(i+1))
+	if lines := placeholderLines(raw); len(lines) > 0 {
+		strs := make([]string, len(lines))
+		for i, n := range lines {
+			strs[i] = strconv.Itoa(n)
 		}
-	}
-	if len(placeholderLines) > 0 {
-		lintLine(o.Stdout, "FAIL", "placeholders: template placeholders on line(s) "+strings.Join(placeholderLines, ", "))
+		lintLine(o.Stdout, "FAIL", "placeholders: template placeholders on line(s) "+strings.Join(strs, ", "))
 		res.Fails++
 	} else {
 		lintLine(o.Stdout, "ok", "placeholders")

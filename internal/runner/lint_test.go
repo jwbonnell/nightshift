@@ -207,6 +207,160 @@ func TestLintPlaceholders(t *testing.T) {
 	}
 }
 
+// TestLintPlaceholdersIgnoreCodeBlocks asserts an empty checkbox and a
+// bare bullet inside a fenced code block (3-backtick or 4-backtick) are
+// not flagged.
+func TestLintPlaceholdersIgnoreCodeBlocks(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	body := strings.Replace(fullSpecBody, "Context text.\n",
+		"Context text.\n\n```\n- [ ] \n- \n```\n\n````\n- [ ] \n- \n````\n", 1)
+	writeLintSpec(t, home.DraftDir(homeDir), "demo", "", repo, body)
+
+	var buf bytes.Buffer
+	res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", NoVerify: true, Stdout: &buf})
+	if err != nil {
+		t.Fatalf("Lint: %v", err)
+	}
+	if res.Fails != 0 {
+		t.Fatalf("res = %+v, want no fails\n%s", res, buf.String())
+	}
+	if !strings.Contains(buf.String(), "ok    placeholders\n") {
+		t.Fatalf("output missing ok placeholders:\n%s", buf.String())
+	}
+}
+
+// TestLintPlaceholdersIgnoreFrontmatter asserts placeholder-shaped lines
+// in the frontmatter block (before the closing "---") are not flagged.
+func TestLintPlaceholdersIgnoreFrontmatter(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeLintSpec(t, home.DraftDir(homeDir), "demo", "egress:\n- \n- [ ] \n", repo, fullSpecBody)
+
+	var buf bytes.Buffer
+	res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", NoVerify: true, Stdout: &buf})
+	if err != nil {
+		t.Fatalf("Lint: %v", err)
+	}
+	if res.Fails != 0 {
+		t.Fatalf("res = %+v, want no fails\n%s", res, buf.String())
+	}
+	if !strings.Contains(buf.String(), "ok    placeholders\n") {
+		t.Fatalf("output missing ok placeholders:\n%s", buf.String())
+	}
+}
+
+// TestLintPlaceholdersStillCaughtOutsideFences asserts an empty checkbox
+// after a closed fence still FAILs, with the correct file-relative line
+// number (verified by building the spec body explicitly rather than via
+// string replacement, so the offending line's position is known).
+func TestLintPlaceholdersStillCaughtOutsideFences(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	body := "\n# demo\n\n## Goal\n\nGoal text.\n\n## Context\n\nContext text.\n\n" +
+		"```\n- [ ] \n- \n```\n\n- [ ] \n\n" +
+		"## Constraints\n\n- a constraint\n\n## Tasks\n\n- [ ] task one\n- [ ] task two\n\n" +
+		"## Acceptance criteria\n\n- [ ] criterion one\n\n## Out of scope\n\n- nothing\n"
+	writeLintSpec(t, home.DraftDir(homeDir), "demo", "", repo, body)
+
+	var buf bytes.Buffer
+	res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", NoVerify: true, Stdout: &buf})
+	if err != nil {
+		t.Fatalf("Lint: %v", err)
+	}
+	if res.Fails == 0 {
+		t.Fatalf("expected a FAIL, got %+v\n%s", res, buf.String())
+	}
+	want := "FAIL  placeholders: template placeholders on line(s) 21\n"
+	if !strings.Contains(buf.String(), want) {
+		t.Fatalf("output missing %q:\n%s", want, buf.String())
+	}
+}
+
+// TestLintPlaceholdersUnclosedFence asserts an unclosed fence runs to EOF,
+// so placeholder-shaped lines after it are never flagged.
+func TestLintPlaceholdersUnclosedFence(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	body := fullSpecBody + "\n```\n- [ ] \n- \n"
+	writeLintSpec(t, home.DraftDir(homeDir), "demo", "", repo, body)
+
+	var buf bytes.Buffer
+	res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", NoVerify: true, Stdout: &buf})
+	if err != nil {
+		t.Fatalf("Lint: %v", err)
+	}
+	if res.Fails != 0 {
+		t.Fatalf("res = %+v, want no fails\n%s", res, buf.String())
+	}
+	if !strings.Contains(buf.String(), "ok    placeholders\n") {
+		t.Fatalf("output missing ok placeholders:\n%s", buf.String())
+	}
+}
+
+// TestLintTitlePlaceholderOnlyInH1 asserts the title placeholder string
+// only matters on the "# " heading line: a prose mention or an inline
+// code span is ok, but on the title line it still FAILs.
+func TestLintTitlePlaceholderOnlyInH1(t *testing.T) {
+	repo := newSourceRepo(t)
+
+	t.Run("prose mention is ok", func(t *testing.T) {
+		homeDir := t.TempDir()
+		body := strings.Replace(fullSpecBody, "Goal text.\n",
+			"Goal text mentions "+titlePlaceholder+" in passing.\n", 1)
+		writeLintSpec(t, home.DraftDir(homeDir), "demo", "", repo, body)
+
+		var buf bytes.Buffer
+		res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", NoVerify: true, Stdout: &buf})
+		if err != nil {
+			t.Fatalf("Lint: %v", err)
+		}
+		if res.Fails != 0 {
+			t.Fatalf("res = %+v, want no fails\n%s", res, buf.String())
+		}
+		if !strings.Contains(buf.String(), "ok    placeholders\n") {
+			t.Fatalf("output missing ok placeholders:\n%s", buf.String())
+		}
+	})
+
+	t.Run("inline code span is ok", func(t *testing.T) {
+		homeDir := t.TempDir()
+		body := strings.Replace(fullSpecBody, "Goal text.\n",
+			"Use `"+titlePlaceholder+"` as the template title.\n", 1)
+		writeLintSpec(t, home.DraftDir(homeDir), "demo", "", repo, body)
+
+		var buf bytes.Buffer
+		res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", NoVerify: true, Stdout: &buf})
+		if err != nil {
+			t.Fatalf("Lint: %v", err)
+		}
+		if res.Fails != 0 {
+			t.Fatalf("res = %+v, want no fails\n%s", res, buf.String())
+		}
+		if !strings.Contains(buf.String(), "ok    placeholders\n") {
+			t.Fatalf("output missing ok placeholders:\n%s", buf.String())
+		}
+	})
+
+	t.Run("title line still fails", func(t *testing.T) {
+		homeDir := t.TempDir()
+		body := strings.Replace(fullSpecBody, "# demo", "# "+titlePlaceholder, 1)
+		writeLintSpec(t, home.DraftDir(homeDir), "demo", "", repo, body)
+
+		var buf bytes.Buffer
+		res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", NoVerify: true, Stdout: &buf})
+		if err != nil {
+			t.Fatalf("Lint: %v", err)
+		}
+		if res.Fails == 0 {
+			t.Fatalf("expected a FAIL, got %+v\n%s", res, buf.String())
+		}
+		if !strings.Contains(buf.String(), "FAIL  placeholders: template placeholders on line(s) ") {
+			t.Fatalf("output missing expected FAIL line:\n%s", buf.String())
+		}
+	})
+}
+
 func TestLintTasksAndAcceptance(t *testing.T) {
 	repo := newSourceRepo(t)
 
