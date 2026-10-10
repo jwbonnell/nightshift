@@ -1,0 +1,287 @@
+package runner
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/jwbonnell/nightshift/internal/home"
+)
+
+// LintOptions configures Lint. SpecArg is resolved as a path if it
+// exists, else looked up by slug in specs/draft/ then specs/ready/ — no
+// readiness gate, unlike run.
+type LintOptions struct {
+	Home      string
+	SpecArg   string
+	NoVerify  bool
+	Verifier  BaseVerifier // nil = sbx implementation
+	SbxBin    string       // "" = env > config > "sbx"
+	ClaudeBin string       // "" = env > config > "claude"
+	Stdout    io.Writer
+	Ctx       context.Context
+}
+
+// LintResult tallies FAIL and warn lines across every check.
+type LintResult struct{ Fails, Warns int }
+
+// BaseVerifier runs a spec's verify command, mounting dir, in a fresh
+// verify sandbox and returns its combined output.
+type BaseVerifier interface {
+	Verify(ctx context.Context, dir string, egress []string, cmd string) (string, error)
+}
+
+// allowedFrontmatterKeys are the keys lint does not warn about (check 1).
+var allowedFrontmatterKeys = map[string]bool{
+	"type": true, "project": true, "status": true, "created": true,
+	"repo": true, "verify": true, "model": true, "planner_model": true,
+	"max_iter": true, "iter_timeout": true, "base": true, "egress": true,
+	"review": true, "review_model": true,
+}
+
+// requiredSections is the check-2 FAIL list, in spec order.
+var requiredSections = []string{"Goal", "Context", "Tasks", "Acceptance criteria", "Out of scope"}
+
+var (
+	emptyCheckboxRe = regexp.MustCompile(`^\s*- \[ \]\s*$`)
+	bareBulletRe    = regexp.MustCompile(`^\s*-\s*$`)
+	checkboxItemRe  = regexp.MustCompile(`^\s*- \[[ xX]\]`)
+)
+
+const titlePlaceholder = "<short imperative title>"
+
+// lintLine writes one "<label><text>\n" line, label left-padded to 6
+// columns as the design's "ok    "/"warn  "/"FAIL  "/"skip  " show.
+func lintLine(w io.Writer, label, text string) {
+	fmt.Fprintf(w, "%-6s%s\n", label, text)
+}
+
+// locateLintSpec resolves arg to a spec path: arg itself if it names a
+// regular file, else <draft>/<arg>.md, else <ready>/<arg>.md — both
+// matched case-insensitively. Unlike locateSpec, it applies no readiness
+// gate: lint must be able to check a draft.
+func locateLintSpec(homeDir, arg string) (string, error) {
+	if arg == "" {
+		return "", fmt.Errorf("no spec given")
+	}
+	if st, err := os.Stat(arg); err == nil && !st.IsDir() {
+		return arg, nil
+	}
+	if p, ok := findCaseInsensitive(home.DraftDir(homeDir), arg+".md"); ok {
+		return p, nil
+	}
+	if p, ok := findCaseInsensitive(home.ReadyDir(homeDir), arg+".md"); ok {
+		return p, nil
+	}
+	return "", fmt.Errorf("no spec named %s in specs/draft/ or specs/ready/", arg)
+}
+
+// specBody returns everything in raw after the closing frontmatter "---"
+// line, matching ParseFrontmatter's own delimiter search exactly so the
+// two agree on where the body starts. A file with no frontmatter block is
+// returned whole.
+func specBody(raw []byte) string {
+	s := string(raw)
+	if !strings.HasPrefix(s, "---\n") {
+		return s
+	}
+	rest := s[4:]
+	end := strings.Index(rest, "\n---")
+	if end < 0 {
+		return s
+	}
+	return rest[end+4:]
+}
+
+// parseSections splits body into its "## " sections, keyed by the exact
+// (trimmed) heading text, mapping to the body lines under that heading up
+// to the next "## " line or EOF. Lines before the first heading are
+// discarded.
+func parseSections(body string) map[string][]string {
+	sections := map[string][]string{}
+	current := ""
+	started := false
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "## ") {
+			current = strings.TrimSpace(strings.TrimPrefix(line, "## "))
+			started = true
+			if _, ok := sections[current]; !ok {
+				sections[current] = nil
+			}
+			continue
+		}
+		if started {
+			sections[current] = append(sections[current], line)
+		}
+	}
+	return sections
+}
+
+// findSection looks up a section case-insensitively, as the design
+// requires for section-heading matching.
+func findSection(sections map[string][]string, name string) ([]string, bool) {
+	for k, v := range sections {
+		if strings.EqualFold(k, name) {
+			return v, true
+		}
+	}
+	return nil, false
+}
+
+// countCheckboxItems counts lines matching "^\s*- \[[ xX]\]" among lines.
+func countCheckboxItems(lines []string) int {
+	n := 0
+	for _, line := range lines {
+		if checkboxItemRe.MatchString(line) {
+			n++
+		}
+	}
+	return n
+}
+
+// Lint runs every check in the design's table against one spec, printing
+// one line per check (plus one warn line per unknown frontmatter key) to
+// o.Stdout, and returns the tally. The returned error is only for an
+// operational failure — the spec could not be located or read — not for
+// any check failing.
+func Lint(o LintOptions) (LintResult, error) {
+	var res LintResult
+
+	path, err := locateLintSpec(o.Home, o.SpecArg)
+	if err != nil {
+		return res, err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return res, fmt.Errorf("read spec %s: %w", path, err)
+	}
+
+	body := specBody(raw)
+	sections := parseSections(body)
+
+	// Check 1: frontmatter.
+	sp, fmErr := resolveSpecFile(Options{Home: o.Home}, path)
+	if fmErr != nil {
+		lintLine(o.Stdout, "FAIL", "frontmatter: "+fmErr.Error())
+		res.Fails++
+	} else {
+		fm := home.ParseFrontmatter(raw)
+		var unknown []string
+		for k := range fm {
+			if !allowedFrontmatterKeys[k] {
+				unknown = append(unknown, k)
+			}
+		}
+		sort.Strings(unknown)
+		for _, k := range unknown {
+			lintLine(o.Stdout, "warn", fmt.Sprintf("frontmatter: unknown key %q", k))
+			res.Warns++
+		}
+		if len(unknown) == 0 {
+			lintLine(o.Stdout, "ok", "frontmatter")
+		}
+	}
+
+	// Check 2: sections.
+	var missing []string
+	for _, name := range requiredSections {
+		if _, ok := findSection(sections, name); !ok {
+			missing = append(missing, "## "+name)
+		}
+	}
+	switch {
+	case len(missing) > 0:
+		lintLine(o.Stdout, "FAIL", "sections: missing "+strings.Join(missing, ", "))
+		res.Fails++
+	default:
+		if _, ok := findSection(sections, "Constraints"); !ok {
+			lintLine(o.Stdout, "warn", "sections: missing ## Constraints")
+			res.Warns++
+		} else {
+			lintLine(o.Stdout, "ok", "sections")
+		}
+	}
+
+	// Check 3: placeholders.
+	var placeholderLines []string
+	for i, line := range strings.Split(string(raw), "\n") {
+		if strings.Contains(line, titlePlaceholder) || emptyCheckboxRe.MatchString(line) || bareBulletRe.MatchString(line) {
+			placeholderLines = append(placeholderLines, strconv.Itoa(i+1))
+		}
+	}
+	if len(placeholderLines) > 0 {
+		lintLine(o.Stdout, "FAIL", "placeholders: template placeholders on line(s) "+strings.Join(placeholderLines, ", "))
+		res.Fails++
+	} else {
+		lintLine(o.Stdout, "ok", "placeholders")
+	}
+
+	// Check 4: tasks.
+	taskLines, _ := findSection(sections, "Tasks")
+	taskCount := countCheckboxItems(taskLines)
+	switch {
+	case taskCount == 0:
+		lintLine(o.Stdout, "FAIL", `tasks: no "- [ ]" items under ## Tasks`)
+		res.Fails++
+	case taskCount > 8:
+		lintLine(o.Stdout, "warn", fmt.Sprintf("tasks: %d tasks — consider splitting the spec", taskCount))
+		res.Warns++
+	default:
+		lintLine(o.Stdout, "ok", "tasks")
+	}
+
+	// Check 5: acceptance.
+	acceptanceLines, _ := findSection(sections, "Acceptance criteria")
+	if countCheckboxItems(acceptanceLines) == 0 {
+		lintLine(o.Stdout, "FAIL", `acceptance: no "- [ ]" items under ## Acceptance criteria`)
+		res.Fails++
+	} else {
+		lintLine(o.Stdout, "ok", "acceptance")
+	}
+
+	// Check 6: max_iter.
+	if fmErr != nil {
+		lintLine(o.Stdout, "skip", "max_iter (earlier failure)")
+	} else if sp.MaxIter < taskCount+2 {
+		lintLine(o.Stdout, "warn", fmt.Sprintf("max_iter: %d < %d tasks + 2 — allow one planning iteration plus at least one retry", sp.MaxIter, taskCount))
+		res.Warns++
+	} else {
+		lintLine(o.Stdout, "ok", "max_iter")
+	}
+
+	// Check 7: base.
+	baseOK := false
+	if fmErr != nil {
+		lintLine(o.Stdout, "skip", "base (earlier failure)")
+	} else {
+		sha, err := resolveBase(sp.Repo, sp.Base)
+		if err != nil {
+			lintLine(o.Stdout, "FAIL", "base: "+err.Error())
+			res.Fails++
+		} else {
+			lintLine(o.Stdout, "ok", fmt.Sprintf("base: %s @ %s", sp.Base, sha[:7]))
+			baseOK = true
+		}
+	}
+
+	// Check 8: verify-on-base. Step 2 only wires the skip conditions;
+	// the real sandboxed run lands in a follow-up commit.
+	switch {
+	case o.NoVerify:
+		lintLine(o.Stdout, "skip", "verify-on-base (--no-verify)")
+	case fmErr != nil || !baseOK:
+		lintLine(o.Stdout, "skip", "verify-on-base (earlier failure)")
+	}
+
+	fmt.Fprintf(o.Stdout, "lint: %d failed, %d warnings\n", res.Fails, res.Warns)
+	if res.Fails > 0 {
+		fmt.Fprintln(o.Stdout, "fix the FAIL lines above before 'nightshift ready'")
+	}
+
+	return res, nil
+}
