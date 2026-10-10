@@ -11,10 +11,23 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jwbonnell/nightshift/internal/gitx"
 	"github.com/jwbonnell/nightshift/internal/home"
+	"github.com/jwbonnell/nightshift/internal/runner"
+)
+
+// Byte caps for file-sourced prompt sections (spec: "each section is
+// truncated to its byte cap"); embedded/generated sections 1-5 are
+// uncapped.
+const (
+	contextCapBytes = 16 * 1024
+	resultCapBytes  = 6 * 1024
+	doneCapBytes    = 16 * 1024
 )
 
 //go:embed instructions.md
@@ -123,20 +136,221 @@ func buildSettings(o Options) ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
-// buildPrompt assembles the content of the system-prompt append file.
-// Section 1-2 only for now; later sections (the nightshift preambles, the
-// checklist, context sources) are added on top of this in-order build.
+// buildPrompt assembles the content of the system-prompt append file, in
+// the ten sections the spec lists in order.
 func buildPrompt(o Options) (string, error) {
 	mode := "new"
 	if o.Refine {
 		mode = "refine"
 	}
 
-	s := "## Your role\n\n" + instructionsMD +
-		"\n## This session\n\n" +
-		fmt.Sprintf("Slug: %s\nDraft: %s\nRepo: %s\nDate: %s\nMode: %s\n",
-			o.Slug, o.DraftPath, o.Repo, o.Now.Format("2006-01-02"), mode)
-	return s, nil
+	var b strings.Builder
+
+	b.WriteString("## Your role\n\n")
+	b.WriteString(instructionsMD)
+
+	b.WriteString("\n## This session\n\n")
+	fmt.Fprintf(&b, "Slug: %s\nDraft: %s\nRepo: %s\nDate: %s\nMode: %s\n",
+		o.Slug, o.DraftPath, o.Repo, o.Now.Format("2006-01-02"), mode)
+
+	b.WriteString("\n## What the nightshift agent will see\n\n")
+	writeFenced(&b, runner.PlanPreamble())
+	b.WriteString("\n")
+	writeFenced(&b, runner.IterPreamble())
+
+	b.WriteString("\n## Spec checklist\n\n")
+	b.WriteString(checklistMD)
+
+	b.WriteString("\n## Spec template\n\n")
+	tpl, err := home.ReadTemplate(o.Home)
+	if err != nil {
+		return "", err
+	}
+	writeFenced(&b, tpl)
+
+	b.WriteString("\n## Sandbox facts\n\n")
+	b.WriteString(fileSectionOrNoneYet(filepath.Join(o.Home, "context", "sandbox.md"), contextCapBytes))
+
+	b.WriteString("\n## Lessons from past runs\n\n")
+	b.WriteString(fileSectionOrNoneYet(filepath.Join(o.Home, "context", "lessons.md"), contextCapBytes))
+
+	b.WriteString("\n## Repo card\n\n")
+	b.WriteString(fileSectionOrNoneYet(filepath.Join(o.Repo, ".nightshift.md"), contextCapBytes))
+
+	b.WriteString("\n## Recent runs on this repo\n\n")
+	b.WriteString(recentRunsSection(o))
+
+	b.WriteString("\n## Example specs that completed\n\n")
+	b.WriteString(doneExamplesSection(o))
+
+	return b.String(), nil
+}
+
+// capSection truncates content to capBytes (backing off to a UTF-8 rune
+// boundary) and appends a pointer back to path, per the spec's "each
+// section is truncated to its byte cap" rule. Content at or under the cap
+// is returned unchanged.
+func capSection(content string, capBytes int, path string) string {
+	if len(content) <= capBytes {
+		return content
+	}
+	cut := capBytes
+	for cut > 0 && !utf8.RuneStart(content[cut]) {
+		cut--
+	}
+	return content[:cut] + "\n[truncated — read " + path + " for the rest]"
+}
+
+// fileSectionOrNoneYet reads path, capping it at capBytes; a missing file
+// becomes "(none yet)" per spec.
+func fileSectionOrNoneYet(path string, capBytes int) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "(none yet)"
+	}
+	return capSection(string(data), capBytes, path)
+}
+
+// fenceFor picks a backtick fence one rune longer than the longest run of
+// backticks already in content (minimum 3), so fenced content can never
+// itself contain the fence.
+func fenceFor(content string) string {
+	longest, run := 0, 0
+	for _, r := range content {
+		if r == '`' {
+			run++
+			if run > longest {
+				longest = run
+			}
+		} else {
+			run = 0
+		}
+	}
+	n := longest + 1
+	if n < 3 {
+		n = 3
+	}
+	return strings.Repeat("`", n)
+}
+
+// writeFenced appends content to b wrapped in a fence safe for content's
+// own backtick runs.
+func writeFenced(b *strings.Builder, content string) {
+	fence := fenceFor(content)
+	b.WriteString(fence)
+	b.WriteString("\n")
+	b.WriteString(content)
+	if !strings.HasSuffix(content, "\n") {
+		b.WriteString("\n")
+	}
+	b.WriteString(fence)
+	b.WriteString("\n")
+}
+
+// resultFileItem is one candidate file from a directory listing, ordered
+// by mtime desc then name desc as a deterministic tie-break.
+type resultFileItem struct {
+	path, name string
+	modTime    time.Time
+}
+
+func sortNewestFirst(items []resultFileItem) {
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].modTime.Equal(items[j].modTime) {
+			return items[i].name > items[j].name
+		}
+		return items[i].modTime.After(items[j].modTime)
+	})
+}
+
+// recentRunsSection lists the newest 3 results (by mtime) whose
+// frontmatter repo: matches o.Repo after filepath.Clean, newest first.
+func recentRunsSection(o Options) string {
+	dir := home.ResultsDir(o.Home)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "(none yet)"
+	}
+
+	wantRepo := filepath.Clean(o.Repo)
+	var items []resultFileItem
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		fm := home.ParseFrontmatter(data)
+		repo := home.Unquote(strings.TrimSpace(fm["repo"]))
+		if repo == "" || filepath.Clean(repo) != wantRepo {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		items = append(items, resultFileItem{path: p, name: e.Name(), modTime: info.ModTime()})
+	}
+	if len(items) == 0 {
+		return "(none yet)"
+	}
+	sortNewestFirst(items)
+	if len(items) > 3 {
+		items = items[:3]
+	}
+	return renderFileSections(items, resultCapBytes)
+}
+
+// doneExamplesSection lists the newest 2 done specs (by mtime), newest
+// first.
+func doneExamplesSection(o Options) string {
+	dir := home.DoneDir(o.Home)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "(none yet)"
+	}
+
+	var items []resultFileItem
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		items = append(items, resultFileItem{path: filepath.Join(dir, e.Name()), name: e.Name(), modTime: info.ModTime()})
+	}
+	if len(items) == 0 {
+		return "(none yet)"
+	}
+	sortNewestFirst(items)
+	if len(items) > 2 {
+		items = items[:2]
+	}
+	return renderFileSections(items, doneCapBytes)
+}
+
+// renderFileSections renders each item as "### <filename>" followed by
+// its capped content.
+func renderFileSections(items []resultFileItem, capBytes int) string {
+	var b strings.Builder
+	for i, it := range items {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		fmt.Fprintf(&b, "### %s\n\n", it.name)
+		data, err := os.ReadFile(it.path)
+		if err != nil {
+			continue
+		}
+		b.WriteString(capSection(string(data), capBytes, it.path))
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // buildArgv builds the exact claude invocation for o, in the order the

@@ -148,7 +148,7 @@ func New(home, slug, repo, verify string, now time.Time, stdout io.Writer) error
 		return err
 	}
 
-	content, err := readTemplate(home)
+	content, err := ReadTemplate(home)
 	if err != nil {
 		return err
 	}
