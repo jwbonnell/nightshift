@@ -30,8 +30,9 @@ type runState struct {
 	Iterations int      `json:"iterations"`          // cumulative across resumes
 	Commits    int      `json:"commits"`             // base..HEAD at last write
 	Status     string   `json:"status"`
-	Started    string   `json:"started"` // RFC3339, first run
-	History    []string `json:"history"` // human-readable status trail
+	StopReason string   `json:"stop_reason,omitempty"` // Task 1: the rate-limit message that ended the run, if any
+	Started    string   `json:"started"`               // RFC3339, first run
+	History    []string `json:"history"`               // human-readable status trail
 }
 
 // run holds one spec's in-progress execution state.

@@ -29,6 +29,7 @@ const (
 	StatusWindowClosed Status = "window-closed"
 	StatusBusy         Status = "busy"
 	StatusInterrupted  Status = "interrupted"      // D8
+	StatusRateLimited  Status = "rate-limited"     // Task 1: agent hit the Claude usage limit
 	statusDryRun       Status = "dry-run"          // internal
 	statusNothing      Status = "nothing-eligible" // internal: --next found nothing
 )
@@ -56,6 +57,8 @@ func ExitCode(s Status) int {
 		return 7
 	case StatusInterrupted:
 		return 8
+	case StatusRateLimited:
+		return 9
 	default:
 		return 1
 	}

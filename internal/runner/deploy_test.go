@@ -43,6 +43,20 @@ func TestDeployFilesByteIdenticalToSpec(t *testing.T) {
 		}
 		want := rest[bodyStart : bodyStart+bodyEnd]
 
+		if name == "nightshift-nightly.sh" {
+			// nightshift-run-checks (D11-style sanctioned deviation): the
+			// new rate-limited status gets named in this one comment
+			// without touching SPEC.md itself. Assert there's exactly one
+			// occurrence first, so this substitution still fails loudly if
+			// anything else in the block drifts from SPEC.md.
+			old := "# Only a runner error (1) marks the unit failed; blocked/red/stalled/capped are outcomes.\n"
+			updated := "# Only a runner error (1) marks the unit failed; blocked/red/stalled/capped/rate-limited are outcomes.\n"
+			if n := strings.Count(want, old); n != 1 {
+				t.Fatalf("expected exactly one occurrence of the old comment line, got %d", n)
+			}
+			want = strings.Replace(want, old, updated, 1)
+		}
+
 		got, err := os.ReadFile(filepath.Join("..", "..", "deploy", name))
 		if err != nil {
 			t.Fatalf("read deploy/%s: %v", name, err)

@@ -183,6 +183,7 @@ func (r *run) loop() Status {
 
 	needPlan := st.SpecHash != sp.ContentHash || !st.Planned
 	deadline := parseUntil(r.opts.Until, clock())
+	st.StopReason = ""
 
 	redStreak, noProgress, session := 0, 0, 0
 
@@ -241,6 +242,18 @@ func (r *run) loop() Status {
 			r.captureDirty(st.Iterations)
 			_ = r.saveState()
 			return StatusWindowClosed
+		}
+		if res.rateLimited() {
+			r.logf("iter %d rate-limited: %s", st.Iterations, res.Message)
+			r.captureDirty(st.Iterations)
+			st.StopReason = res.Message
+			commits, err := r.commitCount()
+			if err != nil {
+				return r.fail(err)
+			}
+			st.Commits = commits
+			_ = r.saveState()
+			return StatusRateLimited
 		}
 		r.captureDirty(st.Iterations)
 

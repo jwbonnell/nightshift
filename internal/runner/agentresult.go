@@ -2,8 +2,13 @@ package runner
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 )
+
+// rateLimitRe matches Claude's session-limit result message, e.g. "You've
+// hit your session limit · resets 7am (UTC)".
+var rateLimitRe = regexp.MustCompile(`(?i)hit your .*limit`)
 
 // agentResult is the information loop() needs from the agent's structured
 // result line (one JSON object per `claude -p --output-format json`
@@ -50,6 +55,13 @@ func parseAgentResult(out string) agentResult {
 		}
 	}
 	return agentResult{}
+}
+
+// rateLimited reports whether a represents an agent call that was cut off
+// by Claude's usage limit: an HTTP 429, or a result message that names the
+// limit directly.
+func (a agentResult) rateLimited() bool {
+	return a.APIStatus == 429 || rateLimitRe.MatchString(a.Message)
 }
 
 // firstLineRunes returns s's first line, cut to at most n runes.

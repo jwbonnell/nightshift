@@ -66,6 +66,8 @@ func summaryLine(status Status, st *runState) string {
 		return "The time window closed mid-run. Uncommitted work was saved as a patch; re-run to continue."
 	case StatusInterrupted:
 		return "The run was interrupted. Uncommitted work was saved as a patch; re-run to continue."
+	case StatusRateLimited:
+		return fmt.Sprintf("Hit the Claude usage limit (%s). Nothing was lost; re-run after it resets.", st.StopReason)
 	case StatusError:
 		return "The runner hit an error and stopped; nothing was recorded from the failing step."
 	default:
