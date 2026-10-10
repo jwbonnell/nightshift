@@ -33,6 +33,11 @@ var newBaseVerifier func(bin string) runner.BaseVerifier
 // so nothing ever execs a real binary.
 var execFn = syscall.Exec
 
+// newInterruptContext is a test seam over runner.NewInterruptContext, so
+// tests can assert lint and ready install an interrupt-aware context
+// without sending a real signal.
+var newInterruptContext = runner.NewInterruptContext
+
 // isTerminal reports whether both stdin and stdout are a TTY, the gate
 // `new`/`refine` use to decide whether an interactive interview is
 // possible at all. A test seam, forced false in TestMain.
@@ -372,7 +377,7 @@ func parseLintFlags(fs *flag.FlagSet, args []string) ([]string, error) {
 // runLint resolves home's sbx bin and runs runner.Lint, writing its
 // checks to stdout. newBaseVerifier, when set by a test, supplies the
 // BaseVerifier instead of letting Lint build the real sbx one.
-func runLint(h, specArg string, noVerify bool, stdout io.Writer) (runner.LintResult, error) {
+func runLint(ctx context.Context, h, specArg string, noVerify bool, stdout io.Writer) (runner.LintResult, error) {
 	bin := resolveSbxBin(h)
 	opts := runner.LintOptions{
 		Home:     h,
@@ -380,7 +385,7 @@ func runLint(h, specArg string, noVerify bool, stdout io.Writer) (runner.LintRes
 		NoVerify: noVerify,
 		SbxBin:   bin,
 		Stdout:   stdout,
-		Ctx:      context.Background(),
+		Ctx:      ctx,
 	}
 	if newBaseVerifier != nil {
 		opts.Verifier = newBaseVerifier(bin)
@@ -410,7 +415,10 @@ func cmdLint(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	res, err := runLint(h, positional[0], *noVerify, stdout)
+	ctx, stop := newInterruptContext()
+	defer stop()
+
+	res, err := runLint(ctx, h, positional[0], *noVerify, stdout)
 	if err != nil {
 		fmt.Fprintf(stderr, "nightshift: %v\n", err)
 		return 1
@@ -446,7 +454,10 @@ func cmdReady(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if !*noLint {
-		res, err := runLint(h, slug, *noVerify, stdout)
+		ctx, stop := newInterruptContext()
+		defer stop()
+
+		res, err := runLint(ctx, h, slug, *noVerify, stdout)
 		if err != nil {
 			fmt.Fprintf(stderr, "nightshift: %v\n", err)
 			return 1

@@ -462,6 +462,43 @@ func fileExistsForTest(path string) bool {
 	return err == nil && !fi.IsDir()
 }
 
+// TestLintCLIUsesInterruptContext asserts cmdLint and cmdReady each
+// install an interrupt-aware context via the newInterruptContext seam,
+// rather than a bare context.Background() with no Ctrl+C handling.
+func TestLintCLIUsesInterruptContext(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("NIGHTSHIFT_HOME", homeDir)
+	repo := newTestSourceRepo(t)
+	withStubVerifier(t)
+
+	calls := 0
+	old := newInterruptContext
+	newInterruptContext = func() (context.Context, func()) {
+		calls++
+		return context.WithCancel(context.Background())
+	}
+	t.Cleanup(func() { newInterruptContext = old })
+
+	writeFullDraftSpec(t, homeDir, "lint-demo", repo, false)
+	var stdout, stderr bytes.Buffer
+	if got := cmdLint([]string{"lint-demo"}, &stdout, &stderr); got != 0 {
+		t.Fatalf("cmdLint exit = %d, want 0; stdout=%s stderr=%s", got, stdout.String(), stderr.String())
+	}
+	if calls != 1 {
+		t.Fatalf("cmdLint: newInterruptContext called %d times, want 1", calls)
+	}
+
+	writeFullDraftSpec(t, homeDir, "ready-demo", repo, false)
+	stdout.Reset()
+	stderr.Reset()
+	if got := cmdReady([]string{"ready-demo"}, &stdout, &stderr); got != 0 {
+		t.Fatalf("cmdReady exit = %d, want 0; stdout=%s stderr=%s", got, stdout.String(), stderr.String())
+	}
+	if calls != 2 {
+		t.Fatalf("cmdReady: newInterruptContext called %d times total, want 2", calls)
+	}
+}
+
 // withStubVerifier points newBaseVerifier at a BaseVerifier that always
 // succeeds, for the duration of the test, so lint's check 8 never needs a
 // real sbx binary on PATH.

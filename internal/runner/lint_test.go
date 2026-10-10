@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jwbonnell/nightshift/internal/home"
 )
@@ -817,5 +818,87 @@ func TestLintFetchFailureWarns(t *testing.T) {
 	}
 	if rest[nl+1:nl+1+len(wantBase)] != wantBase {
 		t.Fatalf("warn line not immediately followed by base ok line:\n%s", buf.String())
+	}
+}
+
+// TestLintVerifyInterrupted asserts a context cancelled during check 8's
+// verify produces a terse FAIL (no output tail) and still removes the
+// temp clone dir.
+func TestLintVerifyInterrupted(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeLintSpec(t, home.DraftDir(homeDir), "demo", "", repo, fullSpecBody)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var capturedDir string
+	verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, cmd string) (string, error) {
+		capturedDir = dir
+		cancel()
+		return "some output", context.Canceled
+	}}
+
+	var buf bytes.Buffer
+	res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", Verifier: verifier, Stdout: &buf, Ctx: ctx})
+	if err != nil {
+		t.Fatalf("Lint: %v", err)
+	}
+	if capturedDir == "" {
+		t.Fatalf("verifier was not called")
+	}
+	got := buf.String()
+	if !strings.Contains(got, "FAIL  verify-on-base: interrupted\n") {
+		t.Fatalf("output missing interrupted FAIL line:\n%s", got)
+	}
+	if strings.Contains(got, "some output") {
+		t.Fatalf("output unexpectedly contains verify output tail:\n%s", got)
+	}
+	if res.Fails == 0 {
+		t.Fatalf("res = %+v, want at least one fail", res)
+	}
+	if _, err := os.Stat(filepath.Dir(capturedDir)); !os.IsNotExist(err) {
+		t.Fatalf("temp clone dir %s still exists after Lint returned: %v", filepath.Dir(capturedDir), err)
+	}
+}
+
+// TestLintSweepsStaleTempDirs asserts checkVerifyOnBase sweeps leftover
+// <Home>/runs/.lint/ entries older than 24h before doing anything else,
+// the cleanup a forced-quit Ctrl+C skips via its defer.
+func TestLintSweepsStaleTempDirs(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeLintSpec(t, home.DraftDir(homeDir), "demo", "", repo, fullSpecBody)
+
+	lintDir := filepath.Join(home.RunsDir(homeDir), ".lint")
+	oldDir := filepath.Join(lintDir, "old")
+	youngDir := filepath.Join(lintDir, "young")
+	if err := os.MkdirAll(oldDir, 0o755); err != nil {
+		t.Fatalf("mkdir old: %v", err)
+	}
+	if err := os.MkdirAll(youngDir, 0o755); err != nil {
+		t.Fatalf("mkdir young: %v", err)
+	}
+	now := time.Now()
+	if err := os.Chtimes(oldDir, now, now.Add(-25*time.Hour)); err != nil {
+		t.Fatalf("chtimes old: %v", err)
+	}
+	if err := os.Chtimes(youngDir, now, now.Add(-1*time.Hour)); err != nil {
+		t.Fatalf("chtimes young: %v", err)
+	}
+
+	verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, cmd string) (string, error) {
+		return "ok", nil
+	}}
+
+	var buf bytes.Buffer
+	if _, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", Verifier: verifier, Stdout: &buf}); err != nil {
+		t.Fatalf("Lint: %v", err)
+	}
+
+	if _, err := os.Stat(oldDir); !os.IsNotExist(err) {
+		t.Fatalf("old dir %s still exists: %v", oldDir, err)
+	}
+	if _, err := os.Stat(youngDir); err != nil {
+		t.Fatalf("young dir %s should still exist: %v", youngDir, err)
 	}
 }

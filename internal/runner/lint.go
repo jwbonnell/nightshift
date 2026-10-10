@@ -349,6 +349,8 @@ func Lint(o LintOptions) (LintResult, error) {
 // a BaseVerifier — o.Verifier if set, else a real sbxBaseVerifier named
 // "nightshift-lint-<slug>-verify".
 func checkVerifyOnBase(o LintOptions, sp *Spec, baseSHA string, res *LintResult) {
+	sweepStaleLintDirs(filepath.Join(home.RunsDir(o.Home), ".lint"))
+
 	verifier := o.Verifier
 	if verifier == nil {
 		bin := o.SbxBin
@@ -407,6 +409,11 @@ func checkVerifyOnBase(o LintOptions, sp *Spec, baseSHA string, res *LintResult)
 
 	out, err := verifier.Verify(ctx, clone, sp.Egress, sp.Verify)
 	if err != nil {
+		if o.Ctx != nil && o.Ctx.Err() != nil {
+			lintLine(o.Stdout, "FAIL", "verify-on-base: interrupted")
+			res.Fails++
+			return
+		}
 		lintLine(o.Stdout, "FAIL", "verify-on-base: exit: "+err.Error())
 		res.Fails++
 		if trimmed := strings.TrimRight(out, "\n"); trimmed != "" {
@@ -421,4 +428,23 @@ func checkVerifyOnBase(o LintOptions, sp *Spec, baseSHA string, res *LintResult)
 		return
 	}
 	lintLine(o.Stdout, "ok", "verify-on-base")
+}
+
+// sweepStaleLintDirs removes entries under dir whose modification time is
+// more than 24h old, ignoring every error — leftovers from a forced quit
+// that skipped checkVerifyOnBase's own defer os.RemoveAll.
+func sweepStaleLintDirs(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if time.Since(info.ModTime()) > 24*time.Hour {
+			os.RemoveAll(filepath.Join(dir, entry.Name()))
+		}
+	}
 }
