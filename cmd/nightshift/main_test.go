@@ -19,6 +19,14 @@ import (
 
 func TestMain(m *testing.M) {
 	testenv.HermeticGit()
+	// Safety net: no test may ever exec a real claude, even if the suite
+	// happens to run from a real interactive terminal. Tests that want
+	// TTY/exec behavior override these per-test and restore via
+	// t.Cleanup.
+	isTerminal = func() bool { return false }
+	execFn = func(argv0 string, argv, envv []string) error {
+		panic(fmt.Sprintf("execFn must be overridden per-test; got argv0=%s argv=%v", argv0, argv))
+	}
 	os.Exit(m.Run())
 }
 

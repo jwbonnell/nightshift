@@ -8,9 +8,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"syscall"
 	"time"
 
+	"github.com/jwbonnell/nightshift/internal/gitx"
 	"github.com/jwbonnell/nightshift/internal/home"
+	"github.com/jwbonnell/nightshift/internal/interview"
 	"github.com/jwbonnell/nightshift/internal/runner"
 )
 
@@ -22,12 +28,30 @@ var version = "dev"
 // sbxBaseVerifier itself. Production leaves it nil.
 var newBaseVerifier func(bin string) runner.BaseVerifier
 
+// execFn replaces the current process with argv0, the way a successful
+// interview launch hands off to claude. A test seam: tests overwrite this
+// so nothing ever execs a real binary.
+var execFn = syscall.Exec
+
+// isTerminal reports whether both stdin and stdout are a TTY, the gate
+// `new`/`refine` use to decide whether an interactive interview is
+// possible at all. A test seam, forced false in TestMain.
+var isTerminal = func() bool {
+	return isCharDevice(os.Stdin) && isCharDevice(os.Stdout)
+}
+
+func isCharDevice(f *os.File) bool {
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
 const usage = `nightshift — run design specs through a sandboxed Claude Code loop
 
 usage:
   nightshift init                       create the nightshift home (~/.nightshift or $NIGHTSHIFT_HOME)
-  nightshift new <slug> [--repo PATH] [--verify CMD]
-                                        start a draft spec from the template
+  nightshift new <slug> [--repo PATH] [--verify CMD] [--no-interview]
+                                        start a draft and interview you to write it
+  nightshift refine <slug>              reopen the interview on a draft
   nightshift ready <slug> [--no-verify] [--no-lint]
                                         lint a draft, then move it to specs/ready/
   nightshift lint <spec> [--no-verify]  check a draft or ready spec (verify runs on the base commit in sbx)
@@ -61,6 +85,8 @@ func dispatch(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 		return cmdInit(args[1:], stdout, stderr)
 	case "new":
 		return cmdNew(args[1:], stdout, stderr)
+	case "refine":
+		return cmdRefine(args[1:], stdout, stderr)
 	case "ready":
 		return cmdReady(args[1:], stdout, stderr)
 	case "lint":
@@ -88,17 +114,36 @@ func resolveHome(stderr io.Writer) (string, bool) {
 	return h, true
 }
 
-// resolveSbxBin applies D3's env > config > default precedence for the
-// one bin init's "is it on PATH" check needs.
-func resolveSbxBin(h string) string {
-	if v := os.Getenv("NIGHTSHIFT_SBX_BIN"); v != "" {
+// resolveSetting applies D3's env > config > default precedence for a
+// single config key.
+func resolveSetting(h, key, def string) string {
+	if v := os.Getenv(key); v != "" {
 		return v
 	}
 	cfg, _ := home.ParseConfig(home.ConfigPath(h))
-	if v := cfg["NIGHTSHIFT_SBX_BIN"]; v != "" {
+	if v := cfg[key]; v != "" {
 		return v
 	}
-	return "sbx"
+	return def
+}
+
+// resolveSbxBin applies D3's env > config > default precedence for the
+// one bin init's "is it on PATH" check needs.
+func resolveSbxBin(h string) string {
+	return resolveSetting(h, "NIGHTSHIFT_SBX_BIN", "sbx")
+}
+
+// expandHome expands a leading "~/" using the real home directory; any
+// other path is returned unchanged.
+func expandHome(p string) (string, error) {
+	if !strings.HasPrefix(p, "~/") {
+		return p, nil
+	}
+	hd, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(hd, p[2:]), nil
 }
 
 func cmdInit(args []string, stdout, stderr io.Writer) int {
@@ -122,8 +167,9 @@ func cmdNew(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	repoFlag := fs.String("repo", "", "")
 	verifyFlag := fs.String("verify", "", "")
+	noInterview := fs.Bool("no-interview", false, "")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: nightshift new <slug> [--repo PATH] [--verify CMD]")
+		fmt.Fprintln(stderr, "usage: nightshift new <slug> [--repo PATH] [--verify CMD] [--no-interview]")
 	}
 
 	// flag.Parse stops at the first non-flag argument, but D4's usage
@@ -145,16 +191,162 @@ func cmdNew(args []string, stdout, stderr io.Writer) int {
 		fs.Usage()
 		return 2
 	}
+	slug := positional[0]
 
 	h, ok := resolveHome(stderr)
 	if !ok {
 		return 1
 	}
-	if err := home.New(h, positional[0], *repoFlag, *verifyFlag, time.Now(), stdout); err != nil {
+	if err := home.New(h, slug, *repoFlag, *verifyFlag, time.Now(), stdout); err != nil {
+		fmt.Fprintf(stderr, "nightshift: %v\n", err)
+		return 1
+	}
+
+	if *noInterview || !isTerminal() {
+		fmt.Fprintf(stdout, "edit the draft, then: nightshift lint %s\n", slug)
+		return 0
+	}
+
+	claudeBin := resolveSetting(h, "NIGHTSHIFT_HOST_CLAUDE_BIN", "claude")
+	if _, err := exec.LookPath(claudeBin); err != nil {
+		fmt.Fprintf(stdout, "claude not found on PATH — edit the draft by hand, then: nightshift lint %s\n", slug)
+		return 0
+	}
+
+	if *repoFlag == "" {
+		fmt.Fprintln(stdout, "pass --repo PATH to be interviewed, or edit the draft by hand")
+		return 0
+	}
+
+	repoAbs, err := resolveRepoAbs(*repoFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "nightshift: %v\n", err)
+		return 1
+	}
+	if !gitx.IsRepo(repoAbs) {
+		fmt.Fprintf(stdout, "--repo %s is not a git repository — fix it, or edit the draft by hand\n", *repoFlag)
+		return 0
+	}
+
+	draftPath, err := filepath.Abs(filepath.Join(home.DraftDir(h), slug+".md"))
+	if err != nil {
+		fmt.Fprintf(stderr, "nightshift: %v\n", err)
+		return 1
+	}
+	return launchInterview(h, slug, draftPath, repoAbs, false, claudeBin, stderr)
+}
+
+// resolveRepoAbs expands a leading "~/" and resolves p to an absolute
+// path, the way both `new`'s --repo flag and `refine`'s draft frontmatter
+// `repo:` value need resolving before a gitx.IsRepo check.
+func resolveRepoAbs(p string) (string, error) {
+	expanded, err := expandHome(p)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(expanded)
+}
+
+// launchInterview prepares the interview files and execs the host claude
+// in repoAbs, replacing the current process. It only returns on error (a
+// successful exec never returns).
+func launchInterview(h, slug, draftPath, repoAbs string, refine bool, claudeBin string, stderr io.Writer) int {
+	homeAbs, err := filepath.Abs(h)
+	if err != nil {
+		fmt.Fprintf(stderr, "nightshift: %v\n", err)
+		return 1
+	}
+	model := resolveSetting(h, "NIGHTSHIFT_INTERVIEW_MODEL", "opus")
+	argv, dir, err := interview.Prepare(interview.Options{
+		Home:      homeAbs,
+		Slug:      slug,
+		DraftPath: draftPath,
+		Repo:      repoAbs,
+		Refine:    refine,
+		ClaudeBin: claudeBin,
+		Model:     model,
+		Now:       time.Now(),
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "nightshift: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(stderr, "nightshift: starting spec interview for %s (draft: %s) — exit Claude when done, then run: nightshift lint %s\n", slug, draftPath, slug)
+
+	if err := os.Chdir(dir); err != nil {
+		fmt.Fprintf(stderr, "nightshift: %v\n", err)
+		return 1
+	}
+	if err := execFn(argv[0], argv, os.Environ()); err != nil {
 		fmt.Fprintf(stderr, "nightshift: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+// cmdRefine implements `nightshift refine <slug>`: reopens the interview
+// on an existing draft, reading its repo: frontmatter rather than taking
+// a --repo flag.
+func cmdRefine(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("nightshift refine", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.Usage = func() {
+		fmt.Fprintln(stderr, "usage: nightshift refine <slug>")
+	}
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return 2
+	}
+	slug := rest[0]
+
+	h, ok := resolveHome(stderr)
+	if !ok {
+		return 1
+	}
+
+	draftPath := filepath.Join(home.DraftDir(h), slug+".md")
+	data, err := os.ReadFile(draftPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "nightshift: no draft named %s in specs/draft/ — 'refine' only works on drafts\n", slug)
+		return 1
+	}
+
+	fm := home.ParseFrontmatter(data)
+	repoRaw := home.Unquote(strings.TrimSpace(fm["repo"]))
+	var repoAbs string
+	if repoRaw != "" {
+		repoAbs, err = resolveRepoAbs(repoRaw)
+		if err != nil {
+			fmt.Fprintf(stderr, "nightshift: %v\n", err)
+			return 1
+		}
+	}
+	if repoRaw == "" || !gitx.IsRepo(repoAbs) {
+		fmt.Fprintln(stderr, "nightshift: set 'repo:' in the draft to a git checkout first")
+		return 1
+	}
+
+	claudeBin := resolveSetting(h, "NIGHTSHIFT_HOST_CLAUDE_BIN", "claude")
+	if !isTerminal() {
+		fmt.Fprintln(stderr, "nightshift: refine needs an interactive terminal and claude on PATH")
+		return 1
+	}
+	if _, err := exec.LookPath(claudeBin); err != nil {
+		fmt.Fprintln(stderr, "nightshift: refine needs an interactive terminal and claude on PATH")
+		return 1
+	}
+
+	draftAbs, err := filepath.Abs(draftPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "nightshift: %v\n", err)
+		return 1
+	}
+	return launchInterview(h, slug, draftAbs, repoAbs, true, claudeBin, stderr)
 }
 
 // parseLintFlags interleaves --no-verify (and, for "ready", --no-lint)
