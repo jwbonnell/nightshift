@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -99,6 +100,39 @@ func depState(opts Options, d string) string {
 		return "not started"
 	}
 	return st.Status
+}
+
+// firstUnmet returns the first dependency in deps (in depends_on order)
+// whose depState isn't "complete", along with that state. ok is false when
+// every dependency is satisfied (or there are none).
+func firstUnmet(opts Options, deps []string) (d, state string, ok bool) {
+	for _, dep := range deps {
+		if s := depState(opts, dep); s != "complete" {
+			return dep, s, true
+		}
+	}
+	return "", "", false
+}
+
+// checkDeps is the graph + satisfaction check Run()/runNext() run on a
+// resolved spec before anything is created: an unknown dependency or a
+// cycle is always an error; an unsatisfied dependency is an error unless
+// opts.IgnoreDeps.
+func checkDeps(opts Options, sp *Spec) error {
+	if len(sp.DependsOn) == 0 {
+		return nil
+	}
+	g := loadSpecGraph(opts.Home)
+	if fails, _ := depsCheck(opts, g, sp.Slug, sp.DependsOn); len(fails) > 0 {
+		return errors.New(fails[0])
+	}
+	if opts.IgnoreDeps {
+		return nil
+	}
+	if d, state, ok := firstUnmet(opts, sp.DependsOn); ok {
+		return fmt.Errorf("%s waits on %s (%s) — run it first, or pass --ignore-deps", sp.Slug, d, state)
+	}
+	return nil
 }
 
 // depsCheck runs the lint depends check for one spec: an unknown

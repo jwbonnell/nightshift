@@ -2,6 +2,9 @@ package runner
 
 import (
 	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -197,5 +200,52 @@ func TestLintAllowsDependsOwns(t *testing.T) {
 	}
 	if bytes.Contains(buf.Bytes(), []byte("unknown key")) {
 		t.Fatalf("output unexpectedly warns about depends_on/owns:\n%s", buf.String())
+	}
+}
+
+// TestDepSatisfiedByCompleteOrDone covers depState's satisfaction rule:
+// a complete run.json or a specs/done/ entry satisfies; blocked, red and
+// rate-limited do not.
+func TestDepSatisfiedByCompleteOrDone(t *testing.T) {
+	homeDir := t.TempDir()
+	stateRoot := home.RunsDir(homeDir)
+	opts := Options{Home: homeDir, StateRoot: stateRoot}
+
+	writeRunJSON := func(t *testing.T, slug, status string) {
+		t.Helper()
+		dir := filepath.Join(stateRoot, slug)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		data := fmt.Sprintf(`{"slug":%q,"status":%q}`, slug, status)
+		if err := os.WriteFile(filepath.Join(dir, "run.json"), []byte(data), 0o644); err != nil {
+			t.Fatalf("write run.json: %v", err)
+		}
+	}
+
+	if s := depState(opts, "ghost"); s != "not started" {
+		t.Fatalf("no run.json: depState = %q, want %q", s, "not started")
+	}
+
+	writeRunJSON(t, "a", "complete")
+	if s := depState(opts, "a"); s != "complete" {
+		t.Fatalf("complete run.json: depState = %q, want complete", s)
+	}
+
+	if err := os.MkdirAll(home.DoneDir(homeDir), 0o755); err != nil {
+		t.Fatalf("mkdir done: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home.DoneDir(homeDir), "b.md"), []byte("done"), 0o644); err != nil {
+		t.Fatalf("write done spec: %v", err)
+	}
+	if s := depState(opts, "b"); s != "complete" {
+		t.Fatalf("specs/done entry: depState = %q, want complete", s)
+	}
+
+	for _, status := range []string{"blocked", "red", "rate-limited"} {
+		writeRunJSON(t, status, status)
+		if s := depState(opts, status); s != status {
+			t.Fatalf("%s: depState = %q, want %q (not satisfied)", status, s, status)
+		}
 	}
 }

@@ -66,6 +66,13 @@ func TestRunHelpMatchesD4(t *testing.T) {
 	want = strings.ReplaceAll(want, "PENSIEVE_SPEC_BASE", "NIGHTSHIFT_BASE")
 	want = strings.ReplaceAll(want, "PENSIEVE_SPEC_MAX_CONCURRENT", "NIGHTSHIFT_MAX_CONCURRENT")
 	want = strings.ReplaceAll(want, "_specs/ready/", "specs/ready/")
+	// nightshift-deps adds --ignore-deps, a flag the reference has no
+	// concept of (dependency satisfaction didn't exist yet); splice it
+	// into the baseline at its alphabetical PrintDefaults position.
+	want = strings.ReplaceAll(want, "[--max-concurrent N] [--dry-run]\n       nightshift run --next",
+		"[--max-concurrent N] [--ignore-deps] [--dry-run]\n       nightshift run --next")
+	want = strings.ReplaceAll(want, "  -fresh\n    \tdiscard prior state for this spec and start over\n",
+		"  -fresh\n    \tdiscard prior state for this spec and start over\n  -ignore-deps\n    \tskip dependency satisfaction and the integrated base\n")
 
 	bin := buildNightshiftBinary(t)
 	cmd := exec.Command(bin, "run", "-h")
@@ -217,6 +224,51 @@ func TestCLIRunPassesVersion(t *testing.T) {
 	if captured.Version != "v1.2.3" {
 		t.Fatalf("Options.Version = %q, want v1.2.3", captured.Version)
 	}
+}
+
+// TestIgnoreDeps covers the CLI wiring for --ignore-deps: the flag reaches
+// runner.Options unchanged, and combining it with --next is a usage error
+// (exit 2), caught before runFn is ever called.
+func TestIgnoreDeps(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("NIGHTSHIFT_HOME", homeDir)
+
+	t.Run("flag reaches Options", func(t *testing.T) {
+		oldRunFn := runFn
+		t.Cleanup(func() { runFn = oldRunFn })
+		var captured runner.Options
+		runFn = func(opts runner.Options) (runner.Status, error) {
+			captured = opts
+			return runner.StatusComplete, nil
+		}
+
+		var stdout, stderr bytes.Buffer
+		got := dispatch([]string{"run", "demo", "--ignore-deps"}, &stdout, &stderr, strings.NewReader(""))
+		if got != 0 {
+			t.Fatalf("exit = %d, want 0; stderr=%s", got, stderr.String())
+		}
+		if !captured.IgnoreDeps {
+			t.Fatalf("Options.IgnoreDeps = false, want true")
+		}
+	})
+
+	t.Run("--ignore-deps with --next is a usage error", func(t *testing.T) {
+		oldRunFn := runFn
+		t.Cleanup(func() { runFn = oldRunFn })
+		runFn = func(opts runner.Options) (runner.Status, error) {
+			t.Fatal("runFn should not be called")
+			return runner.StatusError, nil
+		}
+
+		var stdout, stderr bytes.Buffer
+		got := dispatch([]string{"run", "--next", "--ignore-deps"}, &stdout, &stderr, strings.NewReader(""))
+		if got != 2 {
+			t.Fatalf("exit = %d, want 2; stderr=%s", got, stderr.String())
+		}
+		if !strings.Contains(stderr.String(), "--ignore-deps can't be used with --next") {
+			t.Fatalf("stderr = %q, missing message", stderr.String())
+		}
+	})
 }
 
 func TestSmokeInitNewReadyDryRunStatus(t *testing.T) {

@@ -15,6 +15,13 @@ type nextCandidate struct {
 	path, slug string
 }
 
+// waitSkip records a ready spec --next passed over because of an unmet
+// dependency: slug is the waiting spec, dep/state its first unmet
+// dependency (per firstUnmet).
+type waitSkip struct {
+	slug, dep, state string
+}
+
 // skipInNext reports whether filename should be skipped by --next: it has
 // prior state whose status is blocked or complete, and whose content hash
 // still matches (i.e. nothing has changed since that terminal status).
@@ -31,21 +38,25 @@ func skipInNext(opts Options, filename string, data []byte) bool {
 }
 
 // selectNextCandidates lists every eligible spec in <Home>/specs/ready/,
-// oldest created: first (empty created: sorts last), then by filename.
-// Matching is case-insensitive (D11.6); a missing ready dir is not an
-// error.
-func selectNextCandidates(opts Options) ([]nextCandidate, error) {
+// oldest created: first (empty created: sorts last), then by filename. A
+// spec with an unmet dependency is excluded from the candidates and
+// reported in waits instead (in the same oldest-first order), unless its
+// depends_on doesn't parse — that one stays a candidate, so it fails later
+// with the usual frontmatter error. Matching is case-insensitive (D11.6);
+// a missing ready dir is not an error.
+func selectNextCandidates(opts Options) (cands []nextCandidate, waits []waitSkip, err error) {
 	readyDir := home.ReadyDir(opts.Home)
 	entries, err := os.ReadDir(readyDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, err
+		return nil, nil, err
 	}
 
 	type scored struct {
 		cand    nextCandidate
+		wait    *waitSkip
 		created string
 		name    string
 	}
@@ -66,11 +77,18 @@ func selectNextCandidates(opts Options) ([]nextCandidate, error) {
 			continue
 		}
 		fm := home.ParseFrontmatter(data)
-		all = append(all, scored{
-			cand:    nextCandidate{path: filepath.Join(readyDir, name), slug: slugFromFilename(name)},
+		slug := slugFromFilename(name)
+		s := scored{
+			cand:    nextCandidate{path: filepath.Join(readyDir, name), slug: slug},
 			created: home.Unquote(strings.TrimSpace(fm["created"])),
 			name:    name,
-		})
+		}
+		if deps, derr := parseDependsOn(fm["depends_on"]); derr == nil && len(deps) > 0 {
+			if d, state, ok := firstUnmet(opts, deps); ok {
+				s.wait = &waitSkip{slug: slug, dep: d, state: state}
+			}
+		}
+		all = append(all, s)
 	}
 
 	sort.Slice(all, func(i, j int) bool {
@@ -87,22 +105,26 @@ func selectNextCandidates(opts Options) ([]nextCandidate, error) {
 		return all[i].name < all[j].name
 	})
 
-	cands := make([]nextCandidate, len(all))
-	for i, a := range all {
-		cands[i] = a.cand
+	for _, a := range all {
+		if a.wait != nil {
+			waits = append(waits, *a.wait)
+			continue
+		}
+		cands = append(cands, a.cand)
 	}
-	return cands, nil
+	return cands, waits, nil
 }
 
 // selectNext returns the single oldest-eligible candidate's path (or ""
-// if none), ignoring locks — used by the dry-run --next path.
-func selectNext(opts Options) (string, error) {
-	cands, err := selectNextCandidates(opts)
+// if none), ignoring locks — used by the dry-run --next path. waits is
+// the same list selectNextCandidates returns, for printing "skip" lines.
+func selectNext(opts Options) (path string, waits []waitSkip, err error) {
+	cands, waits, err := selectNextCandidates(opts)
 	if err != nil {
-		return "", err
+		return "", waits, err
 	}
 	if len(cands) == 0 {
-		return "", nil
+		return "", waits, nil
 	}
-	return cands[0].path, nil
+	return cands[0].path, waits, nil
 }

@@ -421,7 +421,7 @@ func TestNextPicksOldestEligible(t *testing.T) {
 	writeReadySpec(t, homeDir, "b", "created: 2026-01-02T00:00:00Z\n", repo)
 	writeReadySpec(t, homeDir, "a", "created: 2026-01-01T00:00:00Z\n", repo)
 
-	path, err := selectNext(Options{Home: homeDir})
+	path, _, err := selectNext(Options{Home: homeDir})
 	if err != nil {
 		t.Fatalf("selectNext: %v", err)
 	}
@@ -453,7 +453,7 @@ func TestNextSkipsTerminalUnchanged(t *testing.T) {
 				t.Fatalf("write run.json: %v", err)
 			}
 
-			cands, err := selectNextCandidates(Options{Home: homeDir, StateRoot: stateRoot})
+			cands, _, err := selectNextCandidates(Options{Home: homeDir, StateRoot: stateRoot})
 			if err != nil {
 				t.Fatalf("selectNextCandidates: %v", err)
 			}
@@ -462,7 +462,7 @@ func TestNextSkipsTerminalUnchanged(t *testing.T) {
 			}
 
 			writeReadySpec(t, homeDir, "demo", "model: edited\n", repo)
-			cands, err = selectNextCandidates(Options{Home: homeDir, StateRoot: stateRoot})
+			cands, _, err = selectNextCandidates(Options{Home: homeDir, StateRoot: stateRoot})
 			if err != nil {
 				t.Fatalf("selectNextCandidates: %v", err)
 			}
@@ -571,6 +571,117 @@ func TestNextNothingEligible(t *testing.T) {
 	if !strings.Contains(stdout.String(), "no eligible spec in specs/ready/") {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
+}
+
+// TestRunRefusesUnmetDeps covers a direct `run <spec>` refusal: a known
+// but unsatisfied dependency fails with the documented message, exit 1
+// (StatusError), and nothing is created — no state dir, no spec lock.
+func TestRunRefusesUnmetDeps(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "other", "", repo)
+	writeReadySpec(t, homeDir, "demo", "depends_on: other\n", repo)
+	stateRoot := home.RunsDir(homeDir)
+
+	opts := Options{
+		SpecArg: "demo", Home: homeDir, StateRoot: stateRoot,
+		Stdout: io.Discard, Stderr: io.Discard, Stdin: strings.NewReader(""),
+	}
+	status, err := Run(opts)
+	if status != StatusError || err == nil {
+		t.Fatalf("status=%v err=%v, want StatusError with an error", status, err)
+	}
+	want := "demo waits on other (not started) — run it first, or pass --ignore-deps"
+	if err.Error() != want {
+		t.Fatalf("err = %q, want %q", err.Error(), want)
+	}
+	if ExitCode(status) != 1 {
+		t.Fatalf("ExitCode(%v) = %d, want 1", status, ExitCode(status))
+	}
+
+	if dirExists(filepath.Join(stateRoot, "demo")) {
+		t.Fatalf("state dir for demo should not have been created")
+	}
+	if _, held := lock.Probe(specLockPath(stateRoot, "demo")); held {
+		t.Fatalf("spec lock for demo should not be held")
+	}
+}
+
+// TestIgnoreDeps proves --ignore-deps lets a spec with an unsatisfied (but
+// known) dependency run to completion anyway.
+func TestIgnoreDeps(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "other", "", repo)
+	writeReadySpec(t, homeDir, "demo", "depends_on: other\n", repo)
+
+	sb := newStubSandbox()
+	sb.agent = completingAgent(t)
+	sb.verify = alwaysGreenVerify
+
+	opts := Options{
+		SpecArg: "demo", IgnoreDeps: true, Home: homeDir, Sandbox: sb,
+		Stdout: io.Discard, Stderr: io.Discard, Stdin: strings.NewReader(""), Notifier: noopNotifierForTest{},
+	}
+	status, err := Run(opts)
+	if err != nil || status != StatusComplete {
+		t.Fatalf("status=%v err=%v, want Complete/nil", status, err)
+	}
+}
+
+// TestNextSkipsWaiting covers --next passing over a spec with an unmet
+// dependency: the real run skips straight to an eligible spec, and the
+// dry-run path prints a "skip" line for the waiting one before the plan.
+func TestNextSkipsWaiting(t *testing.T) {
+	t.Run("real run skips the waiting spec", func(t *testing.T) {
+		repo := newSourceRepo(t)
+		homeDir := t.TempDir()
+		writeReadySpec(t, homeDir, "a", "created: 2026-01-01T00:00:00Z\n", repo)
+		writeReadySpec(t, homeDir, "b", "created: 2026-01-02T00:00:00Z\ndepends_on: a\n", repo)
+		stateRoot := home.RunsDir(homeDir)
+
+		sb := newStubSandbox()
+		sb.agent = completingAgent(t)
+		sb.verify = alwaysGreenVerify
+
+		opts := Options{
+			Next: true, Home: homeDir, StateRoot: stateRoot, Sandbox: sb,
+			Stdout: io.Discard, Stderr: io.Discard, Stdin: strings.NewReader(""), Notifier: noopNotifierForTest{},
+		}
+		status, err := Run(opts)
+		if err != nil || status != StatusComplete {
+			t.Fatalf("status=%v err=%v, want Complete/nil", status, err)
+		}
+		if !dirExists(filepath.Join(stateRoot, "a")) {
+			t.Fatalf("expected a to have been picked and run")
+		}
+		if dirExists(filepath.Join(stateRoot, "b")) {
+			t.Fatalf("b should never have been touched (it is waiting on a)")
+		}
+	})
+
+	t.Run("dry-run prints a skip line", func(t *testing.T) {
+		repo := newSourceRepo(t)
+		homeDir := t.TempDir()
+		writeReadySpec(t, homeDir, "a", "created: 2026-01-01T00:00:00Z\n", repo)
+		writeReadySpec(t, homeDir, "b", "created: 2026-01-02T00:00:00Z\ndepends_on: a\n", repo)
+
+		var stdout bytes.Buffer
+		opts := Options{
+			Next: true, DryRun: true, Home: homeDir,
+			Stdout: &stdout, Stderr: io.Discard, Stdin: strings.NewReader(""),
+		}
+		status, err := Run(opts)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if status != statusDryRun {
+			t.Fatalf("status = %v, want dry-run", status)
+		}
+		if !strings.Contains(stdout.String(), "skip  b: waits on a (not started)\n") {
+			t.Fatalf("missing skip line:\n%s", stdout.String())
+		}
+	})
 }
 
 // TestUppercaseMDSpecFullRun completes TestUppercaseMDSpec's (spec_test.go)

@@ -596,9 +596,10 @@ func cmdRun(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 	dryRun := fs.Bool("dry-run", false, "resolve, validate, and print the plan; run nothing")
 	base := fs.String("base", "", "branch/ref/sha the run starts from (default: spec base:/NIGHTSHIFT_BASE/origin HEAD)")
 	maxConcurrent := fs.String("max-concurrent", "", "max simultaneous runs (default: NIGHTSHIFT_MAX_CONCURRENT/2)")
+	ignoreDeps := fs.Bool("ignore-deps", false, "skip dependency satisfaction and the integrated base")
 
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: nightshift run <spec-name|path> [--fresh [--yes]] [--max-iter N] [--until HH:MM] [--base REF] [--max-concurrent N] [--dry-run]")
+		fmt.Fprintln(stderr, "usage: nightshift run <spec-name|path> [--fresh [--yes]] [--max-iter N] [--until HH:MM] [--base REF] [--max-concurrent N] [--ignore-deps] [--dry-run]")
 		fmt.Fprintln(stderr, "       nightshift run --next [--until HH:MM] [--max-concurrent N] [--dry-run]")
 		fs.PrintDefaults()
 	}
@@ -627,6 +628,11 @@ func cmdRun(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 		return 1
 	}
 
+	if *ignoreDeps && *next {
+		fmt.Fprintln(stderr, "nightshift: --ignore-deps can't be used with --next")
+		return 2
+	}
+
 	// D11.4: an unparsable --until is a usage error, exit 1, nothing
 	// created (the reference silently ignored it).
 	if *until != "" {
@@ -653,6 +659,7 @@ func cmdRun(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 		DryRun:        *dryRun,
 		Base:          *base,
 		MaxConcurrent: *maxConcurrent,
+		IgnoreDeps:    *ignoreDeps,
 		Home:          h,
 		Stdout:        stdout,
 		Stderr:        stderr,

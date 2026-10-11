@@ -70,6 +70,7 @@ func ExitCode(s Status) int {
 type Options struct {
 	SpecArg       string // spec name or path (ignored when Next is set)
 	Next          bool
+	IgnoreDeps    bool // skip dependency satisfaction and the integrated base
 	Fresh         bool
 	Yes           bool
 	MaxIter       int    // 0 = unset
@@ -211,9 +212,12 @@ func Run(opts Options) (Status, error) {
 		return runNext(opts, limit, capSrc)
 	}
 	if opts.Next {
-		next, err := selectNext(opts)
+		next, waits, err := selectNext(opts)
 		if err != nil {
 			return StatusError, err
+		}
+		for _, w := range waits {
+			fmt.Fprintf(opts.Stdout, "skip  %s: waits on %s (%s)\n", w.slug, w.dep, w.state)
 		}
 		if next == "" {
 			fmt.Fprint(opts.Stdout, "no eligible spec in specs/ready/ — nothing to do\n")
@@ -224,6 +228,10 @@ func Run(opts Options) (Status, error) {
 
 	sp, err := resolveSpec(opts)
 	if err != nil {
+		return StatusError, err
+	}
+
+	if err := checkDeps(opts, sp); err != nil {
 		return StatusError, err
 	}
 
@@ -271,7 +279,7 @@ func runNext(opts Options, limit int, capSrc string) (Status, error) {
 		return StatusBusy, nil
 	}
 
-	cands, err := selectNextCandidates(opts)
+	cands, _, err := selectNextCandidates(opts)
 	if err != nil {
 		nl.Release()
 		return StatusError, err
@@ -315,6 +323,10 @@ func runNext(opts Options, limit int, capSrc string) (Status, error) {
 	opts.SpecArg = winner.path
 	sp, err := resolveSpec(opts)
 	if err != nil {
+		specLock.Release()
+		return StatusError, err
+	}
+	if err := checkDeps(opts, sp); err != nil {
 		specLock.Release()
 		return StatusError, err
 	}
