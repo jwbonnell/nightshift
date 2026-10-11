@@ -91,6 +91,7 @@ type Options struct {
 	Ctx           context.Context  // D8: cancellation source; nil = context.Background()
 	Version       string           // the running binary's version; "" is recorded as "dev"
 	clock         func() time.Time // unexported: wall clock for --until and log stamps; nil = time.Now
+	limits        limitConfig      // unexported: resolved by Run() via resolveLimitConfig; zero fields mean "use limitCfg()'s defaults"
 }
 
 // clockFn returns o.clock if set, else time.Now. D11.9: PROGRESS.md and
@@ -191,6 +192,11 @@ func Run(opts Options) (Status, error) {
 	opts.fill()
 
 	limit, capSrc, err := resolveCap(opts)
+	if err != nil {
+		return StatusError, err
+	}
+
+	opts.limits, err = resolveLimitConfig(opts)
 	if err != nil {
 		return StatusError, err
 	}

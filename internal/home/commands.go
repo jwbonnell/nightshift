@@ -42,6 +42,13 @@ const commentedConfig = `# nightshift config file.
 # NIGHTSHIFT_REVIEW=false
 # model for that review
 # NIGHTSHIFT_REVIEW_MODEL=opus
+
+# how long to wait out a usage limit with no usable reset time
+# NIGHTSHIFT_LIMIT_FALLBACK=60m
+# give up waiting out a limit if the wait would exceed this (no --until set)
+# NIGHTSHIFT_LIMIT_MAX_WAIT=6h
+# stop after this many limit hits in a row with no green iteration between them
+# NIGHTSHIFT_LIMIT_MAX_HITS=3
 `
 
 func fileExists(path string) bool {

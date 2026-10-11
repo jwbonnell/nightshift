@@ -143,3 +143,35 @@ func TestConfigAcceptsReviewKeys(t *testing.T) {
 		t.Fatalf("commentedConfig missing NIGHTSHIFT_REVIEW_MODEL line:\n%s", commentedConfig)
 	}
 }
+
+func TestConfigAcceptsLimitKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config")
+	content := "NIGHTSHIFT_LIMIT_FALLBACK=30m\nNIGHTSHIFT_LIMIT_MAX_WAIT=2h\nNIGHTSHIFT_LIMIT_MAX_HITS=5\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := ParseConfig(path)
+	if err != nil {
+		t.Fatalf("ParseConfig: %v", err)
+	}
+	if cfg["NIGHTSHIFT_LIMIT_FALLBACK"] != "30m" {
+		t.Fatalf("NIGHTSHIFT_LIMIT_FALLBACK = %q", cfg["NIGHTSHIFT_LIMIT_FALLBACK"])
+	}
+	if cfg["NIGHTSHIFT_LIMIT_MAX_WAIT"] != "2h" {
+		t.Fatalf("NIGHTSHIFT_LIMIT_MAX_WAIT = %q", cfg["NIGHTSHIFT_LIMIT_MAX_WAIT"])
+	}
+	if cfg["NIGHTSHIFT_LIMIT_MAX_HITS"] != "5" {
+		t.Fatalf("NIGHTSHIFT_LIMIT_MAX_HITS = %q", cfg["NIGHTSHIFT_LIMIT_MAX_HITS"])
+	}
+
+	for _, line := range []string{
+		"# NIGHTSHIFT_LIMIT_FALLBACK=60m",
+		"# NIGHTSHIFT_LIMIT_MAX_WAIT=6h",
+		"# NIGHTSHIFT_LIMIT_MAX_HITS=3",
+	} {
+		if !strings.Contains(commentedConfig, line) {
+			t.Fatalf("commentedConfig missing %q line:\n%s", line, commentedConfig)
+		}
+	}
+}

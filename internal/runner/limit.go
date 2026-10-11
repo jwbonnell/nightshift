@@ -1,18 +1,98 @@
 package runner
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	_ "time/tzdata"
+
+	"github.com/jwbonnell/nightshift/internal/home"
 )
 
 // limitHit is the result of parsing a rate-limited agent's result message.
 type limitHit struct {
 	Weekly  bool
 	ResetAt time.Time // zero when the message gives no usable reset time
+}
+
+// limitConfig holds the three NIGHTSHIFT_LIMIT_* settings.
+type limitConfig struct {
+	Fallback time.Duration
+	MaxWait  time.Duration
+	MaxHits  int
+}
+
+const (
+	defaultLimitFallback = 60 * time.Minute
+	defaultLimitMaxWait  = 6 * time.Hour
+	defaultLimitMaxHits  = 3
+)
+
+// resolveLimitConfig resolves the three NIGHTSHIFT_LIMIT_* keys per
+// env > config > default.
+func resolveLimitConfig(opts Options) (limitConfig, error) {
+	cfg, err := home.ParseConfig(home.ConfigPath(opts.Home))
+	if err != nil {
+		return limitConfig{}, err
+	}
+
+	fallback, err := resolveLimitDuration("NIGHTSHIFT_LIMIT_FALLBACK", cfg, defaultLimitFallback)
+	if err != nil {
+		return limitConfig{}, err
+	}
+	maxWait, err := resolveLimitDuration("NIGHTSHIFT_LIMIT_MAX_WAIT", cfg, defaultLimitMaxWait)
+	if err != nil {
+		return limitConfig{}, err
+	}
+	maxHits, err := resolveLimitInt("NIGHTSHIFT_LIMIT_MAX_HITS", cfg, defaultLimitMaxHits)
+	if err != nil {
+		return limitConfig{}, err
+	}
+	return limitConfig{Fallback: fallback, MaxWait: maxWait, MaxHits: maxHits}, nil
+}
+
+func resolveLimitDuration(key string, cfg map[string]string, def time.Duration) (time.Duration, error) {
+	raw := envConfigDefault(key, cfg, "")
+	if raw == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("%s=%q: want a positive duration", key, raw)
+	}
+	return d, nil
+}
+
+func resolveLimitInt(key string, cfg map[string]string, def int) (int, error) {
+	raw := envConfigDefault(key, cfg, "")
+	if raw == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return 0, fmt.Errorf("%s=%q: want a positive integer", key, raw)
+	}
+	return n, nil
+}
+
+// limitCfg returns o.limits with any zero field filled from the defaults —
+// needed because tests that build a run via setup() directly (bypassing
+// Run(), which calls resolveLimitConfig) never populate o.limits.
+func (o Options) limitCfg() limitConfig {
+	c := o.limits
+	if c.Fallback == 0 {
+		c.Fallback = defaultLimitFallback
+	}
+	if c.MaxWait == 0 {
+		c.MaxWait = defaultLimitMaxWait
+	}
+	if c.MaxHits == 0 {
+		c.MaxHits = defaultLimitMaxHits
+	}
+	return c
 }
 
 // epochLimitRe matches the epoch-stamped form, e.g.
