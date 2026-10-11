@@ -1,17 +1,32 @@
 package runner
 
 import (
+	"bytes"
+	"context"
+	_ "embed"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
 
 	"github.com/jwbonnell/nightshift/internal/gitx"
+	"github.com/jwbonnell/nightshift/internal/home"
 )
 
 // reviewDiffMax caps the diff.patch written into a review workspace;
 // longer diffs are truncated with a pointer to read repo/ directly.
 const reviewDiffMax = 200 << 10
+
+// reviewPrompt is the headless review prompt, embedded verbatim and sent
+// on stdin to the reviewing claude. See review-prompt.md.
+//
+//go:embed review-prompt.md
+var reviewPrompt string
 
 // reviewWSDir is where a review's workspace lives: rebuilt from scratch
 // for every review and removed afterwards, whatever the outcome.
@@ -119,4 +134,161 @@ func reviewSummary(status, iterations, commits, baseShort, headShort, branch str
 		"- status: %s\n- iterations: %s\n- commits: %s\n- base: %s\n- head: %s\n- branch: %s\n",
 		status, iterations, commits, baseShort, headShort, branch,
 	)
+}
+
+// Reviewer runs one headless review with ws mounted and returns the
+// model's final text. The real implementation (sbxReviewer) runs it in
+// its own sbx sandbox, read-only, with no permission-bypass flag; tests
+// substitute a stub.
+type Reviewer interface {
+	Review(ctx context.Context, ws, model, prompt string) (string, error)
+}
+
+// sbxReviewer is the real Reviewer, driving the sbx CLI in a dedicated
+// "nightshift-<slug>-review" sandbox, distinct from that spec's own
+// agent/ctl/verify sandboxes.
+type sbxReviewer struct {
+	bin, claudeBin, slug string
+}
+
+func (rv sbxReviewer) name() string {
+	return "nightshift-" + rv.slug + "-review"
+}
+
+// Review creates a fresh sandbox mounting ws, runs claude in it with only
+// Read, Grep and Glob tools and no permission-bypass flag, and always
+// removes the sandbox afterward — even when create or exec fails.
+func (rv sbxReviewer) Review(ctx context.Context, ws, model, prompt string) (string, error) {
+	name := rv.name()
+	_, _ = execStream(context.Background(), nil, io.Discard, rv.bin, "rm", "-f", name)
+	defer func() {
+		cctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		defer cancel()
+		_, _ = execStream(cctx, nil, io.Discard, rv.bin, "rm", "-f", name)
+	}()
+
+	if out, err := execStream(context.Background(), nil, io.Discard, rv.bin, "create", "--name", name, "claude", ws); err != nil {
+		return "", fmt.Errorf("create: %w: %s", err, out)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := execSplit(ctx, strings.NewReader(prompt), &stdout, &stderr, rv.bin,
+		"exec", "-w", ws, name, rv.claudeBin,
+		"-p", "--model", model, "--tools", "Read,Grep,Glob", "--disallowedTools", "mcp__*", "--output-format", "json")
+	out := stripSbxBanner(stdout.String())
+	if err != nil {
+		return "", fmt.Errorf("exec: %w: %s", err, firstBytes(out, 500))
+	}
+
+	var resp struct {
+		Result  *string `json:"result"`
+		IsError bool    `json:"is_error"`
+	}
+	if jerr := json.Unmarshal([]byte(out), &resp); jerr != nil {
+		return "", fmt.Errorf("parse review output: %v: %s", jerr, firstBytes(out, 500))
+	}
+	if resp.Result == nil {
+		return "", fmt.Errorf("review output missing result: %s", firstBytes(out, 500))
+	}
+	if resp.IsError {
+		return "", fmt.Errorf("review reported an error: %s", firstBytes(out, 500))
+	}
+	return *resp.Result, nil
+}
+
+// firstBytes returns the first n bytes of s, unchanged if shorter.
+func firstBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
+// verdictPattern matches the verdict line the review prompt mandates.
+var verdictPattern = regexp.MustCompile(`(?im)^VERDICT:\s*(approve|concerns|reject)\b`)
+
+// parseVerdict extracts the verdict from a reviewer's reply, lowercased,
+// or "unknown" if no VERDICT line matches.
+func parseVerdict(text string) string {
+	m := verdictPattern.FindStringSubmatch(text)
+	if m == nil {
+		return "unknown"
+	}
+	return strings.ToLower(m[1])
+}
+
+// writeReviewNote writes the review note to <homeDir>/results/ and,
+// when homeDir is itself a git repo, commits it there (best-effort, like
+// writeResultNote). headShort/baseShort may be empty when the workspace
+// never got far enough to resolve a head.
+func writeReviewNote(homeDir, slug, verdict, headShort, baseShort, model, body string, now time.Time) (string, error) {
+	dir := home.ResultsDir(homeDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	name := slug + "-" + now.Format("2006-01-02") + "-review.md"
+	path := uniqueResultPath(dir, name)
+
+	content := fmt.Sprintf(
+		"---\ntype: nightshift-review\nspec: %s\nverdict: %s\nreviewed: %s\nbase: %s\nmodel: %s\ncreated: %s\n---\n\n# Review: %s — %s\n\n%s\n",
+		slug, verdict, headShort, baseShort, model, now.Format(time.RFC3339), slug, verdict, body,
+	)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return "", err
+	}
+
+	if gitx.IsRepo(homeDir) {
+		rel, err := filepath.Rel(homeDir, path)
+		if err != nil {
+			rel = path
+		}
+		_ = gitx.Commit(homeDir, fmt.Sprintf("nightshift: review %s (%s)", slug, verdict), rel)
+	}
+
+	return path, nil
+}
+
+// reviewParams carries everything runReview needs to build a workspace,
+// run the reviewer and write its note. Shared by finish's automatic
+// review (Task 4) and the `nightshift review` CLI (Task 5).
+type reviewParams struct {
+	home, stateRoot, slug string
+	repo, base, ref       string
+	specPath, progress    string
+	summary               string
+	model                 string
+	now                   time.Time
+}
+
+// runReview builds the review workspace, runs rv over it, writes the
+// review note (even on failure, with verdict "error"), and always
+// removes the workspace afterward, whatever the outcome.
+func runReview(ctx context.Context, rv Reviewer, p reviewParams) (verdict, notePath string, err error) {
+	ws := reviewWSDir(p.stateRoot, p.slug)
+	defer os.RemoveAll(ws)
+
+	head, err := buildReviewWorkspace(ws, p.repo, p.base, p.ref, p.specPath, p.progress, p.summary)
+	if err != nil {
+		notePath, nerr := writeReviewNote(p.home, p.slug, "error", short(head), short(p.base), p.model, "Review failed: "+err.Error(), p.now)
+		if nerr != nil {
+			return "error", "", err
+		}
+		return "error", notePath, err
+	}
+
+	text, err := rv.Review(ctx, ws, p.model, reviewPrompt)
+	if err != nil {
+		notePath, nerr := writeReviewNote(p.home, p.slug, "error", short(head), short(p.base), p.model, "Review failed: "+err.Error(), p.now)
+		if nerr != nil {
+			return "error", "", err
+		}
+		return "error", notePath, err
+	}
+
+	verdict = parseVerdict(text)
+	notePath, err = writeReviewNote(p.home, p.slug, verdict, short(head), short(p.base), p.model, text, p.now)
+	if err != nil {
+		return verdict, "", err
+	}
+	return verdict, notePath, nil
 }
