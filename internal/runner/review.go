@@ -264,6 +264,14 @@ func parseVerdict(text string) string {
 // writeResultNote). headShort/baseShort may be empty when the workspace
 // never got far enough to resolve a head.
 func writeReviewNote(homeDir, slug, verdict, headShort, baseShort, model, body string, now time.Time) (string, error) {
+	return writeReviewNoteLenses(homeDir, slug, verdict, headShort, baseShort, model, nil, 0, body, now)
+}
+
+// writeReviewNoteLenses is writeReviewNote plus the lens-list and fix-round
+// frontmatter: a `lenses: a, b` line after `model:` whenever lenses isn't
+// exactly ["general"], and a `round: <r>` line after that when round > 0.
+// lenses == nil behaves exactly like writeReviewNote's single-lens form.
+func writeReviewNoteLenses(homeDir, slug, verdict, headShort, baseShort, model string, lenses []string, round int, body string, now time.Time) (string, error) {
 	dir := home.ResultsDir(homeDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
@@ -271,10 +279,18 @@ func writeReviewNote(homeDir, slug, verdict, headShort, baseShort, model, body s
 	name := slug + "-" + now.Format("2006-01-02") + "-review.md"
 	path := uniqueResultPath(dir, name)
 
-	content := fmt.Sprintf(
-		"---\ntype: nightshift-review\nspec: %s\nverdict: %s\nreviewed: %s\nbase: %s\nmodel: %s\ncreated: %s\n---\n\n# Review: %s — %s\n\n%s\n",
-		slug, verdict, headShort, baseShort, model, now.Format(time.RFC3339), slug, verdict, body,
-	)
+	var fm strings.Builder
+	fmt.Fprintf(&fm, "---\ntype: nightshift-review\nspec: %s\nverdict: %s\nreviewed: %s\nbase: %s\nmodel: %s\n",
+		slug, verdict, headShort, baseShort, model)
+	if len(lenses) > 0 && !(len(lenses) == 1 && lenses[0] == "general") {
+		fmt.Fprintf(&fm, "lenses: %s\n", strings.Join(lenses, ", "))
+	}
+	if round > 0 {
+		fmt.Fprintf(&fm, "round: %d\n", round)
+	}
+	fmt.Fprintf(&fm, "created: %s\n---\n\n", now.Format(time.RFC3339))
+
+	content := fm.String() + fmt.Sprintf("# Review: %s — %s\n\n%s\n", slug, verdict, body)
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return "", err
 	}
@@ -290,6 +306,147 @@ func writeReviewNote(homeDir, slug, verdict, headShort, baseShort, model, body s
 	return path, nil
 }
 
+// lensResult is one lens's outcome within a (possibly multi-lens) review.
+// err is the underlying failure for a lens that errored (nil otherwise),
+// kept separate from text (which always carries the human-readable
+// "Review failed: ..." form for the note) so callers can errors.Join the
+// originals rather than re-parsing text.
+type lensResult struct {
+	lens, verdict, text string
+	err                 error
+}
+
+// combineVerdicts folds each lens's verdict into one, per the spec:
+// reject wins outright; otherwise error only if every lens errored;
+// otherwise concerns if any lens is concerns, unknown or error;
+// otherwise approve.
+func combineVerdicts(verdicts []string) string {
+	hasReject, allError, hasOther := false, true, false
+	for _, v := range verdicts {
+		if v == "reject" {
+			hasReject = true
+		}
+		if v != "error" {
+			allError = false
+		}
+		if v == "concerns" || v == "unknown" || v == "error" {
+			hasOther = true
+		}
+	}
+	switch {
+	case hasReject:
+		return "reject"
+	case allError:
+		return "error"
+	case hasOther:
+		return "concerns"
+	default:
+		return "approve"
+	}
+}
+
+// reviewNoteBody formats a review note's body from its lens results: a
+// single lens's text verbatim (today's format, unchanged), or one
+// "## <lens> — <verdict>" section per lens, each followed by a blank
+// line. The caller (writeReviewNoteLenses) always appends one trailing
+// "\n" after the body, which supplies the last section's blank line, so
+// every section but the last adds its own separator here.
+func reviewNoteBody(results []lensResult) string {
+	if len(results) == 1 {
+		return results[0].text
+	}
+	var b strings.Builder
+	for i, r := range results {
+		fmt.Fprintf(&b, "## %s — %s\n\n", r.lens, r.verdict)
+		text := r.text
+		if !strings.HasSuffix(text, "\n") {
+			text += "\n"
+		}
+		b.WriteString(text)
+		if i != len(results)-1 {
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+// summaryPattern matches the reviewer's SUMMARY line, used as the
+// fallback blocking item when a rejecting lens names nothing specific.
+var summaryPattern = regexp.MustCompile(`(?im)^SUMMARY:\s*(.*)$`)
+
+func extractSummary(text string) string {
+	m := summaryPattern.FindStringSubmatch(text)
+	if m == nil {
+		return "(no summary)"
+	}
+	if s := strings.TrimSpace(m[1]); s != "" {
+		return s
+	}
+	return "(no summary)"
+}
+
+// blockItem is one blocking finding carried back to the agent via
+// REVIEW.md: an acceptance criterion marked unmet, or a high-severity
+// finding, from a lens that rejected the change.
+type blockItem struct {
+	ID, Lens, Text string
+}
+
+var (
+	unmetCriterionPattern = regexp.MustCompile(`^- \[unmet\] (.+)$`)
+	highFindingPattern    = regexp.MustCompile(`^- \[high\] (.+)$`)
+)
+
+// blockingItems extracts every blocking finding from the lenses that
+// rejected the change: unmet acceptance criteria and high findings only,
+// in document order. A rejecting lens with no matching lines yields one
+// fallback item naming its SUMMARY. IDs are <LENS-INITIAL><round>.<n>,
+// with n counted per initial so two lenses sharing one (security, style)
+// never collide.
+func blockingItems(results []lensResult, round int) []blockItem {
+	counts := map[string]int{}
+	var items []blockItem
+	for _, r := range results {
+		if r.verdict != "reject" {
+			continue
+		}
+
+		var found []string
+		heading := ""
+		for _, line := range strings.Split(r.text, "\n") {
+			line = strings.TrimRight(line, "\r")
+			if strings.HasPrefix(line, "## ") {
+				heading = strings.TrimSpace(strings.TrimPrefix(line, "## "))
+				continue
+			}
+			switch heading {
+			case "Acceptance criteria":
+				if m := unmetCriterionPattern.FindStringSubmatch(line); m != nil {
+					found = append(found, m[1])
+				}
+			case "Findings":
+				if m := highFindingPattern.FindStringSubmatch(line); m != nil {
+					found = append(found, m[1])
+				}
+			}
+		}
+		if len(found) == 0 {
+			found = []string{fmt.Sprintf("%s rejected the change: %s", r.lens, extractSummary(r.text))}
+		}
+
+		initial := strings.ToUpper(r.lens[:1])
+		for _, text := range found {
+			counts[initial]++
+			items = append(items, blockItem{
+				ID:   fmt.Sprintf("%s%d.%d", initial, round, counts[initial]),
+				Lens: r.lens,
+				Text: text,
+			})
+		}
+	}
+	return items
+}
+
 // reviewParams carries everything runReview needs to build a workspace,
 // run the reviewer and write its note. Shared by finish's automatic
 // review (Task 4) and the `nightshift review` CLI (Task 5).
@@ -299,36 +456,68 @@ type reviewParams struct {
 	specPath, progress    string
 	summary               string
 	model                 string
+	lenses                []string // nil means ["general"]
+	round                 int      // 0 = fix rounds off
 	now                   time.Time
 }
 
-// runReview builds the review workspace, runs rv over it, writes the
-// review note (even on failure, with verdict "error"), and always
-// removes the workspace afterward, whatever the outcome. noteErr is set
-// only when writeReviewNote itself fails, distinct from err (which also
-// covers a workspace or reviewer failure) so a caller can tell a review
-// failure apart from a note-write failure and report "note not written"
-// instead of an empty note path.
+// runReview builds the review workspace once, runs rv over it once per
+// lens (in order), writes the combined review note (even on failure,
+// with verdict "error"), and always removes the workspace afterward,
+// whatever the outcome. noteErr is set only when writeReviewNoteLenses
+// itself fails, distinct from err (which also covers a workspace or
+// reviewer failure) so a caller can tell a review failure apart from a
+// note-write failure and report "note not written" instead of an empty
+// note path. err is non-nil iff the workspace build failed, or every
+// lens errored (the combined verdict is "error").
 func runReview(ctx context.Context, rv Reviewer, p reviewParams) (verdict, notePath string, noteErr, err error) {
 	ws := reviewWSDir(p.stateRoot, p.slug)
 	defer os.RemoveAll(ws)
 
+	names := p.lenses
+	if len(names) == 0 {
+		names = []string{"general"}
+	}
+
 	head, err := buildReviewWorkspace(ctx, ws, p.repo, p.base, p.ref, p.specPath, p.progress, p.summary)
 	if err != nil {
 		buildErr := err
-		notePath, noteErr = writeReviewNote(p.home, p.slug, "error", short(head), short(p.base), p.model, "Review failed: "+buildErr.Error(), p.now)
+		notePath, noteErr = writeReviewNoteLenses(p.home, p.slug, "error", short(head), short(p.base), p.model, names, p.round, "Review failed: "+buildErr.Error(), p.now)
 		return "error", notePath, noteErr, buildErr
 	}
 
-	text, err := rv.Review(ctx, ws, p.model, reviewPrompt)
-	if err != nil {
-		reviewErr := err
-		notePath, noteErr = writeReviewNote(p.home, p.slug, "error", short(head), short(p.base), p.model, "Review failed: "+reviewErr.Error(), p.now)
-		return "error", notePath, noteErr, reviewErr
+	results := make([]lensResult, 0, len(names))
+	for _, name := range names {
+		prompt, perr := lensPrompt(p.home, name)
+		if perr != nil {
+			results = append(results, lensResult{lens: name, verdict: "error", text: "Review failed: " + perr.Error(), err: perr})
+			continue
+		}
+		text, rerr := rv.Review(ctx, ws, p.model, prompt)
+		if rerr != nil {
+			results = append(results, lensResult{lens: name, verdict: "error", text: "Review failed: " + rerr.Error(), err: rerr})
+			continue
+		}
+		results = append(results, lensResult{lens: name, verdict: parseVerdict(text), text: text})
 	}
 
-	verdict = parseVerdict(text)
-	notePath, noteErr = writeReviewNote(p.home, p.slug, verdict, short(head), short(p.base), p.model, text, p.now)
+	verdicts := make([]string, len(results))
+	for i, r := range results {
+		verdicts[i] = r.verdict
+	}
+	verdict = combineVerdicts(verdicts)
+	body := reviewNoteBody(results)
+	notePath, noteErr = writeReviewNoteLenses(p.home, p.slug, verdict, short(head), short(p.base), p.model, names, p.round, body, p.now)
+
+	if verdict == "error" {
+		var errs []error
+		for _, r := range results {
+			if r.err != nil {
+				errs = append(errs, r.err)
+			}
+		}
+		return verdict, notePath, noteErr, errors.Join(errs...)
+	}
 	return verdict, notePath, noteErr, noteErr
 }
 
