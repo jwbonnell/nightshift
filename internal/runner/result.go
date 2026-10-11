@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -353,8 +354,16 @@ func (r *run) runAutoReview() {
 		progress:  r.scaffoldRead(r.progressPath()),
 		summary: reviewSummary(string(StatusComplete), strconv.Itoa(st.Iterations),
 			strconv.Itoa(st.Commits), short(st.Base), short(st.LastGreen), st.Branch),
-		model: r.spec.ReviewModel,
-		now:   r.opts.Now,
+		model:    r.spec.ReviewModel,
+		now:      r.opts.Now,
+		ctxBase:  r.opts.Ctx,
+		deadline: r.deadline,
+		clock:    clock,
+		sleep:    r.opts.Sleep,
+		limits:   r.opts.limitCfg(),
+		ctxFn: func() (context.Context, context.CancelFunc) {
+			return r.iterCtx(r.deadline, clock)
+		},
 	}
 
 	verdict, notePath, noteErr, err := runReview(ctx, rv, params)

@@ -2,17 +2,21 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
 
 // seqReviewer returns one scripted response per call to Review, in
 // order — unlike stubReviewer, which always returns the same response.
-// Used to script a different reply per lens.
+// Used to script a different reply per lens, or a different error (e.g. a
+// *reviewLimitError) on a retried call to the same lens.
 type seqReviewer struct {
 	texts   []string
+	errs    []error
 	i       int
 	prompts []string
 }
@@ -21,10 +25,15 @@ func (s *seqReviewer) Review(ctx context.Context, ws, model, prompt string) (str
 	s.prompts = append(s.prompts, prompt)
 	idx := s.i
 	s.i++
+	var text string
 	if idx < len(s.texts) {
-		return s.texts[idx], nil
+		text = s.texts[idx]
 	}
-	return "", nil
+	var err error
+	if idx < len(s.errs) {
+		err = s.errs[idx]
+	}
+	return text, err
 }
 
 func TestCombinedVerdict(t *testing.T) {
@@ -166,5 +175,100 @@ func TestMultiLensNoteFormat(t *testing.T) {
 		"## security — reject\n\n" + secText + "\n"
 	if string(data) != want {
 		t.Fatalf("note = %q\nwant %q", data, want)
+	}
+}
+
+// TestLensErrorDoesNotStopOthers: one lens's Review call fails outright
+// (not a rate limit), and the others still run.
+func TestLensErrorDoesNotStopOthers(t *testing.T) {
+	repo := newSourceRepo(t)
+	base := mustGit(t, repo, "rev-parse", "HEAD")
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+
+	rv := &seqReviewer{
+		texts: []string{"", "VERDICT: approve\nSUMMARY: fine."},
+		errs:  []error{fmt.Errorf("boom"), nil},
+	}
+
+	p := reviewParams{
+		home:      t.TempDir(),
+		stateRoot: t.TempDir(),
+		slug:      "demo",
+		repo:      repo,
+		base:      base,
+		ref:       "main",
+		model:     "opus",
+		lenses:    []string{"requirements", "security"},
+		now:       now,
+	}
+	verdict, notePath, _, err := runReview(context.Background(), rv, p)
+	if err != nil {
+		t.Fatalf("runReview: %v", err)
+	}
+	if len(rv.prompts) != 2 {
+		t.Fatalf("calls = %d, want 2 (the second lens still ran)", len(rv.prompts))
+	}
+	if verdict != "concerns" {
+		t.Fatalf("verdict = %q, want concerns", verdict)
+	}
+
+	data, err := os.ReadFile(notePath)
+	if err != nil {
+		t.Fatalf("read note: %v", err)
+	}
+	if !strings.Contains(string(data), "## requirements — error\n\nReview failed: boom\n") {
+		t.Fatalf("note missing failed-lens section: %q", data)
+	}
+	if !strings.Contains(string(data), "## security — approve\n\nVERDICT: approve\nSUMMARY: fine.\n") {
+		t.Fatalf("note missing the other lens's section: %q", data)
+	}
+}
+
+// TestLensRateLimitWaitsAndReruns: a lens's first Review call hits a
+// usage limit that resets well within the window; runReview waits it out
+// (via the injected clock/sleep) and re-runs the same lens, which then
+// succeeds.
+func TestLensRateLimitWaitsAndReruns(t *testing.T) {
+	repo := newSourceRepo(t)
+	base := mustGit(t, repo, "rev-parse", "HEAD")
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	resetAt := now.Add(30 * time.Minute)
+
+	rv := &seqReviewer{
+		texts: []string{"", "VERDICT: approve\nSUMMARY: fine."},
+		errs:  []error{&reviewLimitError{Message: fmt.Sprintf("Claude AI usage limit reached|%d", resetAt.Unix())}, nil},
+	}
+
+	var slept []time.Duration
+	p := reviewParams{
+		home:      t.TempDir(),
+		stateRoot: t.TempDir(),
+		slug:      "demo",
+		repo:      repo,
+		base:      base,
+		ref:       "main",
+		model:     "opus",
+		now:       now,
+		clock:     func() time.Time { return now },
+		sleep: func(ctx context.Context, d time.Duration) error {
+			slept = append(slept, d)
+			return nil
+		},
+	}
+	verdict, _, _, err := runReview(context.Background(), rv, p)
+	if err != nil {
+		t.Fatalf("runReview: %v", err)
+	}
+	if verdict != "approve" {
+		t.Fatalf("verdict = %q, want approve", verdict)
+	}
+	if len(rv.prompts) != 2 {
+		t.Fatalf("calls = %d, want 2 (retried after the wait)", len(rv.prompts))
+	}
+	if len(slept) != 1 {
+		t.Fatalf("slept %d times, want 1", len(slept))
+	}
+	if want := limitWake(resetAt, now, defaultLimitFallback).Sub(now); slept[0] != want {
+		t.Fatalf("slept %v, want %v", slept[0], want)
 	}
 }

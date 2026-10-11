@@ -233,10 +233,23 @@ func (rv sbxReviewer) Review(ctx context.Context, ws, model, prompt string) (str
 		return "", fmt.Errorf("review output missing result: %s", firstBytes(out, 500))
 	}
 	if res.IsError {
+		if ag.RateLimited(res) {
+			return "", &reviewLimitError{Message: res.Message}
+		}
 		return "", fmt.Errorf("review reported an error: %s", firstBytes(out, 500))
 	}
 	return res.Text, nil
 }
+
+// reviewLimitError marks a lens's Reviewer.Review call as cut short by a
+// usage limit rather than a genuine failure, carrying the raw result
+// message so runReview can parse a reset time (parseLimit) and decide
+// whether nightshift-limit-wait's rules let the lens wait it out.
+type reviewLimitError struct {
+	Message string
+}
+
+func (e *reviewLimitError) Error() string { return e.Message }
 
 // firstBytes returns the first n bytes of s, unchanged if shorter.
 func firstBytes(s string, n int) string {
@@ -459,6 +472,24 @@ type reviewParams struct {
 	lenses                []string // nil means ["general"]
 	round                 int      // 0 = fix rounds off
 	now                   time.Time
+
+	// Rate-limit wait/retry for a lens whose Reviewer.Review returns a
+	// *reviewLimitError (nightshift-limit-wait's rules). ctxBase bounds
+	// the wait itself (nil = context.Background(), so D8 interrupts still
+	// cut a real wait short when the caller passes its own opts.Ctx);
+	// deadline and limits decide whether the wait fits the window; clock
+	// and sleep are injectable for tests (nil = time.Now / a real timer).
+	// ctxFn, if set, mints a fresh bounded ctx for the retried call — the
+	// ctx passed to runReview may have expired during the wait; nil
+	// reuses that same ctx for the retry. None of this fires unless a
+	// lens actually hits a limit, so every existing caller (which leaves
+	// these fields zero) behaves exactly as before.
+	ctxBase  context.Context
+	deadline time.Time
+	clock    func() time.Time
+	sleep    func(ctx context.Context, d time.Duration) error
+	limits   limitConfig
+	ctxFn    func() (context.Context, context.CancelFunc)
 }
 
 // runReview builds the review workspace once, runs rv over it once per
@@ -486,6 +517,16 @@ func runReview(ctx context.Context, rv Reviewer, p reviewParams) (verdict, noteP
 		return "error", notePath, noteErr, buildErr
 	}
 
+	clock := p.clock
+	if clock == nil {
+		clock = time.Now
+	}
+	ctxBase := p.ctxBase
+	if ctxBase == nil {
+		ctxBase = context.Background()
+	}
+	limits := fillLimitConfig(p.limits)
+
 	results := make([]lensResult, 0, len(names))
 	for _, name := range names {
 		prompt, perr := lensPrompt(p.home, name)
@@ -493,7 +534,40 @@ func runReview(ctx context.Context, rv Reviewer, p reviewParams) (verdict, noteP
 			results = append(results, lensResult{lens: name, verdict: "error", text: "Review failed: " + perr.Error(), err: perr})
 			continue
 		}
-		text, rerr := rv.Review(ctx, ws, p.model, prompt)
+
+		lensCtx := ctx
+		var lensCancel context.CancelFunc
+		var text string
+		var rerr error
+		for {
+			text, rerr = rv.Review(lensCtx, ws, p.model, prompt)
+			var limErr *reviewLimitError
+			if !errors.As(rerr, &limErr) {
+				break
+			}
+			now := clock()
+			hit := parseLimit(limErr.Message, now)
+			wake := limitWake(hit.ResetAt, now, limits.Fallback)
+			if limitWaitExceedsWindow(wake, now, p.deadline, limits.MaxWait) {
+				break
+			}
+			if serr := sleepCtx(ctxBase, p.sleep, wake.Sub(now)); serr != nil {
+				rerr = serr
+				break
+			}
+			if lensCancel != nil {
+				lensCancel()
+			}
+			if p.ctxFn != nil {
+				lensCtx, lensCancel = p.ctxFn()
+			} else {
+				lensCtx, lensCancel = ctx, nil
+			}
+		}
+		if lensCancel != nil {
+			lensCancel()
+		}
+
 		if rerr != nil {
 			results = append(results, lensResult{lens: name, verdict: "error", text: "Review failed: " + rerr.Error(), err: rerr})
 			continue
@@ -656,6 +730,11 @@ func Review(opts ReviewOptions) (Status, error) {
 
 	progress, _ := ReadScaffold(filepath.Join(opts.StateRoot, opts.Slug, "repo", "PROGRESS.md"))
 
+	limits, err := resolveLimitConfig(Options{Home: opts.Home})
+	if err != nil {
+		return StatusError, err
+	}
+
 	rv := opts.Reviewer
 	if rv == nil {
 		rv = sbxReviewer{bin: opts.SbxBin, claudeBin: opts.ClaudeBin, slug: opts.Slug, opencodeBin: opts.OpencodeBin, opencodeConfig: opencodeCfg}
@@ -668,11 +747,16 @@ func Review(opts ReviewOptions) (Status, error) {
 		home:      opts.Home,
 		stateRoot: opts.StateRoot,
 		slug:      opts.Slug,
-		repo:      st.Repo,
-		base:      st.Base,
-		ref:       reviewRefFor(&st, opts.Slug),
-		specPath:  specPath,
-		progress:  progress,
+		ctxBase:   opts.Ctx,
+		limits:    limits,
+		ctxFn: func() (context.Context, context.CancelFunc) {
+			return context.WithTimeout(opts.Ctx, iterTimeout)
+		},
+		repo:     st.Repo,
+		base:     st.Base,
+		ref:      reviewRefFor(&st, opts.Slug),
+		specPath: specPath,
+		progress: progress,
 		summary: reviewSummary(st.Status, strconv.Itoa(st.Iterations), strconv.Itoa(st.Commits),
 			short(st.Base), short(st.LastGreen), st.Branch),
 		model: model,

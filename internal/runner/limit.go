@@ -90,8 +90,15 @@ func sleepFor(opts Options, d time.Duration) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if opts.Sleep != nil {
-		return opts.Sleep(ctx, d)
+	return sleepCtx(ctx, opts.Sleep, d)
+}
+
+// sleepCtx is sleepFor's logic without an Options, for callers (runReview's
+// lens rate-limit retry) that don't have one: sleep, if set, is honored
+// as-is; otherwise a real timer returns ctx.Err() early on cancellation.
+func sleepCtx(ctx context.Context, sleep func(ctx context.Context, d time.Duration) error, d time.Duration) error {
+	if sleep != nil {
+		return sleep(ctx, d)
 	}
 	if d <= 0 {
 		return nil
@@ -267,7 +274,13 @@ func checkActiveLimit(opts Options) (status Status, handled bool, err error) {
 // needed because tests that build a run via setup() directly (bypassing
 // Run(), which calls resolveLimitConfig) never populate o.limits.
 func (o Options) limitCfg() limitConfig {
-	c := o.limits
+	return fillLimitConfig(o.limits)
+}
+
+// fillLimitConfig fills any zero field of c from the package defaults. It's
+// limitCfg's logic without an Options, for reviewParams's limits field
+// (runReview has no Options to call limitCfg on).
+func fillLimitConfig(c limitConfig) limitConfig {
 	if c.Fallback == 0 {
 		c.Fallback = defaultLimitFallback
 	}
