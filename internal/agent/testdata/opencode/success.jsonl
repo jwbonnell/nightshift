@@ -1,0 +1,6 @@
+{"type":"text","part":{"text":"Looking at the code..."}}
+{"type":"tool_use","tool":"bash"}
+{"type":"text","part":{"text":"All done.\nFinal summary line."}}
+{"type":"step_finish","part":{"cost":0.0123}}
+{"type":"something_unknown","foo":"bar"}
+not json at all

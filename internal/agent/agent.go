@@ -60,7 +60,11 @@ func New(sel Selector, s Settings) (Agent, error) {
 		}
 		return claudeAgent{bin: bin}, nil
 	case "opencode":
-		return nil, fmt.Errorf("opencode agent: not yet implemented")
+		bin := s.OpencodeBin
+		if bin == "" {
+			bin = "opencode"
+		}
+		return opencodeAgent{bin: bin, config: s.OpencodeConfig}, nil
 	default:
 		return nil, fmt.Errorf("unknown agent %q", sel.Agent)
 	}
