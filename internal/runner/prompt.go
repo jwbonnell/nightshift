@@ -96,6 +96,7 @@ func printPlan(w io.Writer, opts Options, sp *Spec, maxConcurrent int, capSrc st
 	fmt.Fprintf(w, "planner:     %s (%s)\n", sp.Planner, sp.src["planner_model"])
 	fmt.Fprintf(w, "max_iter:    %d (%s)\n", sp.MaxIter, sp.src["max_iter"])
 	fmt.Fprintf(w, "iter_timeout:%s (%s)\n", sp.IterTimeout, sp.src["iter_timeout"]) // NB: no space after the colon
+	fmt.Fprintf(w, "review:      %v (%s), model %s (%s)\n", sp.Review, sp.src["review"], sp.ReviewModel, sp.src["review_model"])
 	if len(sp.Egress) > 0 {
 		fmt.Fprintf(w, "egress+:     %s\n", strings.Join(sp.Egress, ", "))
 	}

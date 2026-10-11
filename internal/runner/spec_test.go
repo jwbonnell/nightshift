@@ -293,6 +293,106 @@ func TestMaxIterAndBasePrecedence(t *testing.T) {
 	})
 }
 
+func TestReviewFrontmatterPrecedence(t *testing.T) {
+	repo := newSourceRepo(t)
+
+	t.Run("review: frontmatter beats env beats config beats default", func(t *testing.T) {
+		homeDir := t.TempDir()
+		writeReadySpec(t, homeDir, "demo", "", repo)
+
+		sp, err := resolveSpec(Options{SpecArg: "demo", Home: homeDir})
+		if err != nil {
+			t.Fatalf("resolveSpec: %v", err)
+		}
+		if sp.Review != false || sp.src["review"] != "default" {
+			t.Fatalf("default: review=%v src=%q", sp.Review, sp.src["review"])
+		}
+
+		if err := os.WriteFile(home.ConfigPath(homeDir), []byte("NIGHTSHIFT_REVIEW=true\n"), 0o644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		sp, err = resolveSpec(Options{SpecArg: "demo", Home: homeDir})
+		if err != nil {
+			t.Fatalf("resolveSpec: %v", err)
+		}
+		if sp.Review != true || sp.src["review"] != "config" {
+			t.Fatalf("config: review=%v src=%q", sp.Review, sp.src["review"])
+		}
+
+		t.Setenv("NIGHTSHIFT_REVIEW", "TRUE")
+		sp, err = resolveSpec(Options{SpecArg: "demo", Home: homeDir})
+		if err != nil {
+			t.Fatalf("resolveSpec: %v", err)
+		}
+		if sp.Review != true || sp.src["review"] != "env" {
+			t.Fatalf("env: review=%v src=%q", sp.Review, sp.src["review"])
+		}
+
+		writeReadySpec(t, homeDir, "demo", "review: false\n", repo)
+		sp, err = resolveSpec(Options{SpecArg: "demo", Home: homeDir})
+		if err != nil {
+			t.Fatalf("resolveSpec: %v", err)
+		}
+		if sp.Review != false || sp.src["review"] != "frontmatter" {
+			t.Fatalf("frontmatter: review=%v src=%q", sp.Review, sp.src["review"])
+		}
+	})
+
+	t.Run("review_model: frontmatter beats env beats config beats default", func(t *testing.T) {
+		homeDir := t.TempDir()
+		writeReadySpec(t, homeDir, "demo", "", repo)
+
+		sp, err := resolveSpec(Options{SpecArg: "demo", Home: homeDir})
+		if err != nil {
+			t.Fatalf("resolveSpec: %v", err)
+		}
+		if sp.ReviewModel != "opus" || sp.src["review_model"] != "default" {
+			t.Fatalf("default: reviewModel=%q src=%q", sp.ReviewModel, sp.src["review_model"])
+		}
+
+		if err := os.WriteFile(home.ConfigPath(homeDir), []byte("NIGHTSHIFT_REVIEW_MODEL=cfg-model\n"), 0o644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		sp, err = resolveSpec(Options{SpecArg: "demo", Home: homeDir})
+		if err != nil {
+			t.Fatalf("resolveSpec: %v", err)
+		}
+		if sp.ReviewModel != "cfg-model" || sp.src["review_model"] != "config" {
+			t.Fatalf("config: reviewModel=%q src=%q", sp.ReviewModel, sp.src["review_model"])
+		}
+
+		t.Setenv("NIGHTSHIFT_REVIEW_MODEL", "env-model")
+		sp, err = resolveSpec(Options{SpecArg: "demo", Home: homeDir})
+		if err != nil {
+			t.Fatalf("resolveSpec: %v", err)
+		}
+		if sp.ReviewModel != "env-model" || sp.src["review_model"] != "env" {
+			t.Fatalf("env: reviewModel=%q src=%q", sp.ReviewModel, sp.src["review_model"])
+		}
+
+		writeReadySpec(t, homeDir, "demo", "review_model: fm-model\n", repo)
+		sp, err = resolveSpec(Options{SpecArg: "demo", Home: homeDir})
+		if err != nil {
+			t.Fatalf("resolveSpec: %v", err)
+		}
+		if sp.ReviewModel != "fm-model" || sp.src["review_model"] != "frontmatter" {
+			t.Fatalf("frontmatter: reviewModel=%q src=%q", sp.ReviewModel, sp.src["review_model"])
+		}
+	})
+}
+
+func TestReviewInvalidBool(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "demo", "review: maybe\n", repo)
+
+	_, err := resolveSpec(Options{SpecArg: "demo", Home: homeDir})
+	want := `review "maybe": want true or false`
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
+}
+
 func TestFrontmatterQuotesStripped(t *testing.T) {
 	repo := newSourceRepo(t)
 	homeDir := t.TempDir()

@@ -37,6 +37,11 @@ const commentedConfig = `# nightshift config file.
 # NIGHTSHIFT_HOST_CLAUDE_BIN=claude
 # model for the spec interview
 # NIGHTSHIFT_INTERVIEW_MODEL=opus
+
+# run a sandboxed read-only Claude review when a run ends complete
+# NIGHTSHIFT_REVIEW=false
+# model for that review
+# NIGHTSHIFT_REVIEW_MODEL=opus
 `
 
 func fileExists(path string) bool {

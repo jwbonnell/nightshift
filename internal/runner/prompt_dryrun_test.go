@@ -64,3 +64,46 @@ func TestPrintPlanIncludesHomeLineFirst(t *testing.T) {
 		}
 	}
 }
+
+func TestDryRunShowsReview(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "demo", "review: true\nreview_model: haiku\n", repo)
+
+	opts := Options{
+		SpecArg:   "demo",
+		Home:      homeDir,
+		StateRoot: home.RunsDir(homeDir),
+		SbxBin:    "sbx",
+		ClaudeBin: "claude",
+	}
+	sp, err := resolveSpec(opts)
+	if err != nil {
+		t.Fatalf("resolveSpec: %v", err)
+	}
+	sha, err := resolveBase(sp.Repo, sp.Base)
+	if err != nil {
+		t.Fatalf("resolveBase: %v", err)
+	}
+	sp.BaseSHA = sha
+
+	var buf strings.Builder
+	printPlan(&buf, opts, sp, 2, "default")
+	out := buf.String()
+
+	lines := strings.Split(out, "\n")
+	idx := -1
+	for i, l := range lines {
+		if strings.HasPrefix(l, "iter_timeout:") {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		t.Fatalf("no iter_timeout: line in output:\n%s", out)
+	}
+	want := "review:      true (frontmatter), model haiku (frontmatter)"
+	if lines[idx+1] != want {
+		t.Fatalf("line after iter_timeout: = %q, want %q", lines[idx+1], want)
+	}
+}
