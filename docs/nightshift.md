@@ -271,6 +271,13 @@ log`, `agent log`, the newest result note (or `none`), `latest review:
 <verdict> — <path>` (or `none`), and the exact `git log`/`diff` command to
 review the work. An unknown slug exits `1`.
 
+`latest result:` and `latest review:` match file names exactly, by slug
+and date — `<slug>-<YYYY-MM-DD>[-N].md` for results, `<slug>-<YYYY-MM-DD>
+-review[-N].md` for reviews — so a review note never shows up as the
+latest result, a same-day `-2` repeat is still picked up, and notes for a
+different spec whose slug merely starts with this one (e.g. `demo` vs.
+`demo-extra`) are never matched. The newest match by mtime wins.
+
 ### `review <slug> [--model M]`
 
 Runs one headless, read-only Claude review of a run's work, independent of
@@ -284,6 +291,14 @@ is written — including a failed review, where the note's verdict is
 `error` and the exit code is `1`. `--model` takes precedence over the
 spec's `review_model:` frontmatter, which takes precedence over
 `NIGHTSHIFT_REVIEW_MODEL`, config, then `opus`.
+
+It takes the spec's per-spec lock *before* reading any run state, so a
+run that's actively rewriting `run.json` can't race the busy check. The
+review itself is bounded by the spec's `iter_timeout:` frontmatter, then
+`NIGHTSHIFT_ITER_TIMEOUT`, then config, then the 30m default — same
+precedence and parsing as a run's own `iter_timeout`. An invalid value
+exits `1` with the same error text `resolveSpecFile` gives, and writes no
+note.
 
 ### `version`
 
@@ -543,8 +558,10 @@ diff.
 - `inputs/summary.md` — how the run ended: status, iterations, commits,
   base and head short SHAs, branch
 - `inputs/diffstat.txt` / `inputs/diff.patch` — the diff from the run's
-  base commit to the reviewed commit, computed in the source repo; a diff
-  over 200 KiB is truncated with a pointer back to `repo/`
+  base commit to the reviewed commit, computed in the source repo with
+  `--no-ext-diff --no-textconv` so a repo-local diff driver can't change
+  what the reviewer sees; a diff over 200 KiB is truncated with a pointer
+  back to `repo/`
 - `inputs/progress.md` — the run's `PROGRESS.md`, read the same
   symlink-safe way as everything else under [Sandbox model](#sandbox-model)
   (`(no PROGRESS.md)` if there is none)
@@ -576,6 +593,10 @@ automatic review is bounded by the spec's `iter_timeout`, capped by any
 `--until` deadline still in effect, and is skipped (verdict recorded as
 `skipped`, with a reason) rather than attempted if the run was interrupted
 or the `--until` deadline has already passed by the time it would start.
+If the review itself completes but its note can't be written (e.g. the
+results dir isn't writable), the result note's `## Review` line reads
+`<verdict> — (note not written: <error>)` instead of a path — the run's
+status is unaffected either way.
 
 **On demand**, `nightshift review <slug>` runs the same review outside of
 a live run — see the [`review`](#review-slug---model-m) subcommand above
