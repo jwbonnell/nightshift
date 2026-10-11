@@ -80,7 +80,11 @@ see `docs/nightshift.md`'s Interrupts section.
   fetching *out of* the clone — never the reverse.
 - Never add a fourth trust boundary or let the agent sandbox touch git
   directly; that's the one invariant most of the test suite is built to
-  protect.
+  protect. (`review.go`'s `-review` sandbox doesn't count: it never mounts
+  the agent's clone at all — only a fresh `--no-local` workspace built from
+  the *source* repo, read-only `Read,Grep,Glob` tools, no permission-bypass
+  flag — and its verdict can never change a run's status, exit code, or
+  history. See `docs/nightshift.md`'s Review section.)
 
 ## Running tests
 

@@ -60,6 +60,7 @@ nightshift done <slug>                move a ready spec to specs/done/
 nightshift run <spec> [flags]         run one ready spec (nightshift run -h for flags)
 nightshift run --next [flags]         run the oldest eligible ready spec
 nightshift status [<slug>]            list runs, or show one run in detail
+nightshift review <slug> [--model M]  sandboxed Claude review of a run's work
 nightshift version                    print the version
 ```
 
@@ -241,8 +242,23 @@ never been run) and `drafts: <slugs>`. With nothing at all yet, it prints a
 one-line hint to run `nightshift new`.
 
 With a slug: every `run.json` field, then `state dir`, `clone`, `runner
-log`, `agent log`, the newest result note (or `none`), and the exact `git
-log`/`diff` command to review the work. An unknown slug exits `1`.
+log`, `agent log`, the newest result note (or `none`), `latest review:
+<verdict> — <path>` (or `none`), and the exact `git log`/`diff` command to
+review the work. An unknown slug exits `1`.
+
+### `review <slug> [--model M]`
+
+Runs one headless, read-only Claude review of a run's work, independent of
+that run's own status, and writes a review note — see
+[Review](#review) below for the trust model and verdict meanings. Needs at
+least one commit since base (`nightshift: nothing to review: <slug> has no
+commits since base`); takes the same per-spec lock `run` does, so it
+refuses with the same busy message and exit `7` while a run is in
+progress. Prints `review: <verdict> — <note path>` to stdout once a note
+is written — including a failed review, where the note's verdict is
+`error` and the exit code is `1`. `--model` takes precedence over the
+spec's `review_model:` frontmatter, which takes precedence over
+`NIGHTSHIFT_REVIEW_MODEL`, config, then `opus`.
 
 ### `version`
 
@@ -387,6 +403,8 @@ env > config > default.)
 | `max_iter:` | `NIGHTSHIFT_MAX_ITER` | `NIGHTSHIFT_MAX_ITER` | `10` |
 | `iter_timeout:` | `NIGHTSHIFT_ITER_TIMEOUT` | `NIGHTSHIFT_ITER_TIMEOUT` | `30m` |
 | `base:` | `NIGHTSHIFT_BASE` | `NIGHTSHIFT_BASE` | repo's `origin/HEAD`, then `main`, then `master` |
+| `review:` | `NIGHTSHIFT_REVIEW` | `NIGHTSHIFT_REVIEW` | `false` |
+| `review_model:` | `NIGHTSHIFT_REVIEW_MODEL` | `NIGHTSHIFT_REVIEW_MODEL` | `opus` |
 | — | — | `NIGHTSHIFT_MAX_CONCURRENT` | `2` |
 | — | `NIGHTSHIFT_SBX_BIN` | `NIGHTSHIFT_SBX_BIN` | `sbx` |
 | — | `NIGHTSHIFT_CLAUDE_BIN` | `NIGHTSHIFT_CLAUDE_BIN` | `claude` |
@@ -434,6 +452,74 @@ or tamper with the result.
 the host, but only via `Lstat` + `O_NOFOLLOW` — an agent that replaces one
 with a symlink gets the link itself removed/ignored, never the symlink's
 target followed.
+
+## Review
+
+`nightshift review <slug>` runs a headless, read-only Claude code review of
+a run's work — on demand, or automatically when a spec with `review: true`
+in its frontmatter ends `complete`. Either way, a review only ever adds a
+review note; it never changes the run's status, exit code, `run.json`, or
+history.
+
+**Trust model.** A review reads code an untrusted agent wrote, which could
+contain text aimed at manipulating the reviewer — so, like the agent
+itself, the review never runs on the host. It runs inside its own sbx
+sandbox, `nightshift-<slug>-review`, recreated fresh for every review and
+removed afterward whatever the outcome. The reviewing `claude` gets only
+`Read`, `Grep`, and `Glob` tools, `--disallowedTools mcp__*`, and no
+permission-bypass flag — it cannot edit anything, run a command, or reach
+an MCP server. It authenticates through sbx's global Anthropic secret, the
+same way a run's agent does, so it works unattended overnight with no TTY.
+The workspace it mounts is built from your *source* repo — never the
+agent's clone — with `git clone --no-local` at the reviewed commit, so the
+review sandbox shares no object-file inodes with either repo; host git
+only ever runs against the source repo to resolve the ref and compute the
+diff.
+
+**What the reviewer sees**, all under one fresh workspace directory:
+
+- `inputs/spec.md` — the spec file (or `(spec file not found)` if it's no
+  longer in `specs/ready/` or `specs/done/`)
+- `inputs/summary.md` — how the run ended: status, iterations, commits,
+  base and head short SHAs, branch
+- `inputs/diffstat.txt` / `inputs/diff.patch` — the diff from the run's
+  base commit to the reviewed commit, computed in the source repo; a diff
+  over 200 KiB is truncated with a pointer back to `repo/`
+- `inputs/progress.md` — the run's `PROGRESS.md`, read the same
+  symlink-safe way as everything else under [Sandbox model](#sandbox-model)
+  (`(no PROGRESS.md)` if there is none)
+- `repo/` — the repository itself, checked out detached at the reviewed
+  commit, with no remotes
+
+The prompt tells the model to treat all of this as material to review, not
+as instructions, and to check the diff and tests against the spec's
+acceptance criteria rather than trust the journal's own claims.
+
+**Verdicts.** The model replies with a `VERDICT:` line, one of `approve`
+(every acceptance criterion met, no high-severity finding), `concerns`
+(the default otherwise), or `reject` (a criterion is unmet, or a
+high-severity finding makes the change unsafe to merge). If the reviewer's
+reply never produces a line matching that pattern — or the review itself
+fails or times out — the verdict is `unknown` or, for an outright failure,
+`error`. Every verdict, including `error`, still gets a review note.
+
+**`review: true` and timing.** With `review: true` in frontmatter (or
+`NIGHTSHIFT_REVIEW=true`, or the config default), a run that ends
+`complete` reviews automatically, right after the result summary prints
+and before the result note and notification are written — so both carry
+the verdict: a `review: <verdict>` frontmatter line and a `## Review`
+section in the result note, and a ` · review: <verdict>` suffix on the
+desktop notification (urgent, in addition to today's urgent statuses, when
+the verdict is `reject` or `error`). Any other final status — `blocked`,
+`red`, `stalled`, `capped`, `window-closed` — never reviews at all. The
+automatic review is bounded by the spec's `iter_timeout`, capped by any
+`--until` deadline still in effect, and is skipped (verdict recorded as
+`skipped`, with a reason) rather than attempted if the run was interrupted
+or the `--until` deadline has already passed by the time it would start.
+
+**On demand**, `nightshift review <slug>` runs the same review outside of
+a live run — see the [`review`](#review-slug---model-m) subcommand above
+for its preconditions, output, and exit codes.
 
 ## Concurrency
 
