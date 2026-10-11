@@ -39,6 +39,9 @@ type runState struct {
 	Agents *agentsRec `json:"agents,omitempty"` // the selectors' String() form, as of the last start/resume
 
 	NightshiftVersion string `json:"nightshift_version"` // Task 4: the binary version that ran this invocation
+
+	ReviewRound     int `json:"review_round,omitempty"`     // fix rounds: the last review round run (0 = none yet)
+	ReviewHandbacks int `json:"review_handbacks,omitempty"` // fix rounds: how many times REVIEW.md has been handed back
 }
 
 // agentsRec is runState.Agents: a struct rather than a map so plan always
@@ -89,6 +92,7 @@ func (r *run) attemptsDir() string  { return filepath.Join(r.dir, "attempts") }
 func (r *run) progressPath() string { return filepath.Join(r.clone, "PROGRESS.md") }
 func (r *run) questionPath() string { return filepath.Join(r.clone, "QUESTION.md") }
 func (r *run) completePath() string { return filepath.Join(r.clone, ".spec-complete") }
+func (r *run) reviewPath() string   { return filepath.Join(r.clone, "REVIEW.md") }
 func (r *run) statePath() string    { return filepath.Join(r.dir, "run.json") }
 
 // short returns sha's first 8 characters, or sha unchanged if it is no
@@ -264,7 +268,7 @@ func (r *run) cloneRepo() error {
 	if err := os.MkdirAll(filepath.Join(r.clone, ".git", "info"), 0o755); err != nil {
 		return err
 	}
-	if err := appendLines(filepath.Join(r.clone, ".git", "info", "exclude"), "PROGRESS.md", "QUESTION.md", ".spec-complete"); err != nil {
+	if err := appendLines(filepath.Join(r.clone, ".git", "info", "exclude"), "PROGRESS.md", "QUESTION.md", ".spec-complete", "REVIEW.md"); err != nil {
 		return err
 	}
 
@@ -319,6 +323,51 @@ func (r *run) reviewRef() string {
 		return r.pendingSyncRef()
 	}
 	return r.st.Branch
+}
+
+// reviewRoundRef is where a fix round's reviewed commit is published in the
+// source repo for the duration of one round, so a reviewer workspace can be
+// built from the source repo without the host ever running git against the
+// agent's clone directly.
+func reviewRoundRef(slug string) string {
+	return "refs/nightshift/review/" + slug
+}
+
+// publishReviewRef copies the clone's last_green commit to the source
+// repo's reviewRoundRef, by fetching the sha out of the clone — never by
+// running host git against the clone itself.
+func (r *run) publishReviewRef() error {
+	sp := r.spec
+	if err := validSHA("last_green", r.st.LastGreen); err != nil {
+		return err
+	}
+	ref := reviewRoundRef(sp.Slug)
+	return withRepoLock(r.opts.StateRoot, sp.Repo, sp.Slug, func() error {
+		out, err := gitx.RunRetry(sp.Repo, "fetch", r.clone, r.st.LastGreen+":"+ref)
+		if err != nil {
+			return fmt.Errorf("publish review ref %s: %v: %s", ref, err, out)
+		}
+		return nil
+	})
+}
+
+// deleteReviewRef removes the source repo's reviewRoundRef, best-effort: a
+// fix round must never leave this ref behind once its round ends.
+func (r *run) deleteReviewRef() {
+	sp := r.spec
+	ref := reviewRoundRef(sp.Slug)
+	err := withRepoLock(r.opts.StateRoot, sp.Repo, sp.Slug, func() error {
+		if !refExists(sp.Repo, ref) {
+			return nil
+		}
+		if out, err := gitx.RunRetry(sp.Repo, "update-ref", "-d", ref); err != nil {
+			return fmt.Errorf("delete review ref %s: %v: %s", ref, err, out)
+		}
+		return nil
+	})
+	if err != nil {
+		r.logf("review: %v", err)
+	}
 }
 
 // syncBranchBack copies the clone's spec/<slug> branch back to the source
@@ -382,6 +431,7 @@ func doFresh(opts Options, sp *Spec, dir string) error {
 
 	branch := "refs/heads/spec/" + sp.Slug
 	pending := "refs/nightshift/" + sp.Slug
+	review := reviewRoundRef(sp.Slug)
 	err := withRepoLock(opts.StateRoot, sp.Repo, sp.Slug, func() error {
 		if refExists(sp.Repo, branch) {
 			if out, err := gitx.RunRetry(sp.Repo, "update-ref", "-d", branch); err != nil {
@@ -391,6 +441,11 @@ func doFresh(opts Options, sp *Spec, dir string) error {
 		if refExists(sp.Repo, pending) {
 			if out, err := gitx.RunRetry(sp.Repo, "update-ref", "-d", pending); err != nil {
 				return fmt.Errorf("delete pending ref %s: %v: %s", pending, err, out)
+			}
+		}
+		if refExists(sp.Repo, review) {
+			if out, err := gitx.RunRetry(sp.Repo, "update-ref", "-d", review); err != nil {
+				return fmt.Errorf("delete review ref %s: %v: %s", review, err, out)
 			}
 		}
 		return nil

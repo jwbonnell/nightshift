@@ -81,8 +81,8 @@ func (r *run) checkSync() checkLine {
 }
 
 // checkScaffold verifies no commit in base..last_green, in the clone,
-// touches PROGRESS.md, QUESTION.md or .spec-complete — those are the
-// agent's scratch files, excluded from the branch via .git/info/exclude,
+// touches PROGRESS.md, QUESTION.md, .spec-complete or REVIEW.md — those are
+// the agent's scratch files, excluded from the branch via .git/info/exclude,
 // and should never appear in the history the spec's work lands as.
 func (r *run) checkScaffold() checkLine {
 	st := r.st
@@ -103,7 +103,7 @@ func (r *run) checkScaffold() checkLine {
 			continue
 		case fullSHA.MatchString(line):
 			hits = append(hits, hit{sha: line})
-		case line == "PROGRESS.md", line == "QUESTION.md", line == ".spec-complete":
+		case line == "PROGRESS.md", line == "QUESTION.md", line == ".spec-complete", line == "REVIEW.md":
 			if len(hits) > 0 {
 				hits[len(hits)-1].files = append(hits[len(hits)-1].files, line)
 			}

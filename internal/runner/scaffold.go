@@ -11,8 +11,8 @@ import (
 // maxScaffoldBytes caps any single scaffold read.
 const maxScaffoldBytes = 1 << 20
 
-// Scaffold files (PROGRESS.md, QUESTION.md, .spec-complete) live in the
-// clone, which an untrusted agent fully controls. Every helper below uses
+// Scaffold files (PROGRESS.md, QUESTION.md, .spec-complete, REVIEW.md) live
+// in the clone, which an untrusted agent fully controls. Every helper below uses
 // Lstat plus O_NOFOLLOW so a hostile symlink there can never make the
 // runner read or write an arbitrary host path; it only ever touches the
 // link itself, and logs a SECURITY line when it does.

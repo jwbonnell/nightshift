@@ -142,7 +142,7 @@ func nonScaffoldDirty(status string) bool {
 			continue
 		}
 		switch strings.TrimSpace(line[3:]) {
-		case "PROGRESS.md", "QUESTION.md", ".spec-complete":
+		case "PROGRESS.md", "QUESTION.md", ".spec-complete", "REVIEW.md":
 			continue
 		}
 		return true

@@ -124,6 +124,41 @@ func TestPostRunScaffoldCommitFails(t *testing.T) {
 	}
 }
 
+// TestReviewFileIsScaffold checks REVIEW.md is treated exactly like the
+// other scaffold files: nonScaffoldDirty ignores it, and a commit that
+// touches it anyway fails the scaffold check by name.
+func TestReviewFileIsScaffold(t *testing.T) {
+	if nonScaffoldDirty("?? REVIEW.md") {
+		t.Fatalf("nonScaffoldDirty(%q) = true, want false", "?? REVIEW.md")
+	}
+
+	repo := newSourceRepo(t)
+	sb := newStubSandbox()
+	sb.agent = func(ctx context.Context, iter int, dir string) error {
+		if iter == 2 {
+			commitFileForced(t, dir, "REVIEW.md", "sneaky\n", "sneaky scaffold commit")
+			touchComplete(t, dir)
+		}
+		return nil
+	}
+	sb.verify = alwaysGreenVerify
+
+	r := newTestRun(t, repo, "", Options{Stdout: io.Discard, Notifier: noopNotifierForTest{}}, sb)
+	status := r.loop()
+	if status != StatusComplete {
+		t.Fatalf("loop status = %v, want Complete", status)
+	}
+
+	rep := r.postRunChecks()
+	line := rep.lines[checkScaffoldIdx]
+	if line.label != "FAIL" {
+		t.Fatalf("scaffold check = %q, want FAIL", line.String())
+	}
+	if !strings.Contains(line.text, "REVIEW.md") {
+		t.Fatalf("scaffold FAIL text = %q, want it to name REVIEW.md", line.text)
+	}
+}
+
 func TestPostRunCloneRemoteFails(t *testing.T) {
 	repo := newSourceRepo(t)
 	sb := newStubSandbox()
