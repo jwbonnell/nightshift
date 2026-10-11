@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -16,7 +17,7 @@ func TestReviewWorkspaceNotHardlinked(t *testing.T) {
 	base := mustGit(t, repo, "rev-parse", "HEAD")
 
 	ws := filepath.Join(t.TempDir(), "review-ws")
-	if _, err := buildReviewWorkspace(ws, repo, base, "main", "", "", ""); err != nil {
+	if _, err := buildReviewWorkspace(context.Background(), ws, repo, base, "main", "", "", ""); err != nil {
 		t.Fatalf("buildReviewWorkspace: %v", err)
 	}
 

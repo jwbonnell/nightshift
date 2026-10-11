@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jwbonnell/nightshift/internal/home"
 )
 
 // recordingNotifierForTest captures the last Notify call so tests can
@@ -275,5 +278,57 @@ func TestAutoReviewSkippedAfterDeadline(t *testing.T) {
 	}
 	if r.reviewVerdict != "skipped" || r.reviewReason != "window closed" {
 		t.Fatalf("reviewVerdict=%q reviewReason=%q, want skipped/window closed", r.reviewVerdict, r.reviewReason)
+	}
+}
+
+// TestAutoReviewNoteWriteFailure makes the results dir unwritable right as
+// the review runs, so writeReviewNote fails. finish's own writeResultNote
+// then fails too (same dir), so finish returns a non-nil error — but the
+// run's own status is still complete, and the result note's ## Review
+// line (built from resultBody, not the unwritten file) reports the note
+// write failure instead of an empty path.
+func TestAutoReviewNoteWriteFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: permission bits don't block writes")
+	}
+
+	repo := newSourceRepo(t)
+	sb := newStubSandbox()
+	sb.agent = completingAgent(t)
+	sb.verify = alwaysGreenVerify
+
+	var homeDir string
+	rv := stubReviewer{text: "VERDICT: approve\n", duringReview: func(string) {
+		dir := home.ResultsDir(homeDir)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir results dir: %v", err)
+		}
+		if err := os.Chmod(dir, 0o555); err != nil {
+			t.Fatalf("chmod results dir: %v", err)
+		}
+	}}
+	opts := Options{Stdout: &bytes.Buffer{}, Notifier: noopNotifierForTest{}, Reviewer: rv}
+	r := newTestRun(t, repo, "review: true\n", opts, sb)
+	homeDir = r.opts.Home
+	t.Cleanup(func() { os.Chmod(home.ResultsDir(homeDir), 0o755) })
+
+	status := r.loop()
+	finalStatus, err := r.finish(status)
+	if err == nil {
+		t.Fatalf("finish: want error from the unwritable results dir")
+	}
+	if finalStatus != StatusComplete {
+		t.Fatalf("finalStatus = %v, want Complete", finalStatus)
+	}
+	if r.st.Status != "complete" {
+		t.Fatalf("run.json status = %q, want complete", r.st.Status)
+	}
+	if r.reviewNoteErr == nil {
+		t.Fatalf("reviewNoteErr = nil, want non-nil")
+	}
+
+	body := r.resultBody(finalStatus)
+	if !strings.Contains(body, "approve — (note not written: ") {
+		t.Fatalf("result body missing note-not-written line:\n%s", body)
 	}
 }

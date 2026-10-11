@@ -134,9 +134,12 @@ func (r *run) resultBody(status Status) string {
 
 	if r.reviewVerdict != "" {
 		fmt.Fprintf(&b, "## Review\n\n")
-		if r.reviewVerdict == "skipped" {
+		switch {
+		case r.reviewVerdict == "skipped":
 			fmt.Fprintf(&b, "skipped (%s)\n\n", r.reviewReason)
-		} else {
+		case r.reviewNote == "" && r.reviewNoteErr != nil:
+			fmt.Fprintf(&b, "%s — (note not written: %v)\n\n", r.reviewVerdict, r.reviewNoteErr)
+		default:
 			fmt.Fprintf(&b, "%s — %s\n\n", r.reviewVerdict, r.reviewNote)
 		}
 	}
@@ -332,9 +335,10 @@ func (r *run) runAutoReview() {
 		now:   r.opts.Now,
 	}
 
-	verdict, notePath, err := runReview(ctx, rv, params)
+	verdict, notePath, noteErr, err := runReview(ctx, rv, params)
 	r.reviewVerdict = verdict
 	r.reviewNote = notePath
+	r.reviewNoteErr = noteErr
 	if err != nil {
 		r.logf("review: error: %v", err)
 		return

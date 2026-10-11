@@ -286,7 +286,7 @@ func TestReviewWorkspaceRemovedAfter(t *testing.T) {
 		model:     "opus",
 		now:       time.Now(),
 	}
-	if _, _, err := runReview(context.Background(), rv, p); err != nil {
+	if _, _, _, err := runReview(context.Background(), rv, p); err != nil {
 		t.Fatalf("runReview: %v", err)
 	}
 	if !sawWS {
@@ -298,7 +298,7 @@ func TestReviewWorkspaceRemovedAfter(t *testing.T) {
 
 	// Also removed on a reviewer error.
 	rv2 := stubReviewer{err: context.DeadlineExceeded}
-	if _, _, err := runReview(context.Background(), rv2, p); err == nil {
+	if _, _, _, err := runReview(context.Background(), rv2, p); err == nil {
 		t.Fatalf("runReview: want error")
 	}
 	if _, err := os.Stat(ws); !os.IsNotExist(err) {
@@ -322,7 +322,7 @@ func TestRunReviewWritesErrorNote(t *testing.T) {
 		model:     "opus",
 		now:       time.Now(),
 	}
-	verdict, notePath, err := runReview(context.Background(), rv, p)
+	verdict, notePath, _, err := runReview(context.Background(), rv, p)
 	if err == nil {
 		t.Fatalf("runReview: want error")
 	}

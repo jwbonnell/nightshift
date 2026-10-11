@@ -43,7 +43,7 @@ func reviewWSDir(stateRoot, slug string) string {
 // never touches the agent's clone — repo is always the source repo,
 // cloned with --no-local so the review sandbox never shares object-file
 // inodes with it. Returns the resolved head commit.
-func buildReviewWorkspace(ws, repo, base, ref, specPath, progress, summary string) (string, error) {
+func buildReviewWorkspace(ctx context.Context, ws, repo, base, ref, specPath, progress, summary string) (string, error) {
 	if err := os.RemoveAll(ws); err != nil {
 		return "", err
 	}
@@ -104,7 +104,7 @@ func buildReviewWorkspace(ws, repo, base, ref, specPath, progress, summary strin
 	// gitx.Run trims its output, which would strip diffstat's leading
 	// space and the patch's trailing newline — shell out directly so
 	// stdout reaches disk untouched.
-	diffstat, err := exec.Command("git", "-C", repo, "diff", "--stat", base+".."+head).Output()
+	diffstat, err := exec.CommandContext(ctx, "git", "-C", repo, "diff", "--no-ext-diff", "--no-textconv", "--stat", base+".."+head).Output()
 	if err != nil {
 		return "", fmt.Errorf("diffstat %s..%s: %w", base, head, err)
 	}
@@ -112,7 +112,7 @@ func buildReviewWorkspace(ws, repo, base, ref, specPath, progress, summary strin
 		return "", err
 	}
 
-	patch, err := exec.Command("git", "-C", repo, "diff", base+".."+head).Output()
+	patch, err := exec.CommandContext(ctx, "git", "-C", repo, "diff", "--no-ext-diff", "--no-textconv", base+".."+head).Output()
 	if err != nil {
 		return "", fmt.Errorf("diff %s..%s: %w", base, head, err)
 	}
@@ -267,35 +267,32 @@ type reviewParams struct {
 
 // runReview builds the review workspace, runs rv over it, writes the
 // review note (even on failure, with verdict "error"), and always
-// removes the workspace afterward, whatever the outcome.
-func runReview(ctx context.Context, rv Reviewer, p reviewParams) (verdict, notePath string, err error) {
+// removes the workspace afterward, whatever the outcome. noteErr is set
+// only when writeReviewNote itself fails, distinct from err (which also
+// covers a workspace or reviewer failure) so a caller can tell a review
+// failure apart from a note-write failure and report "note not written"
+// instead of an empty note path.
+func runReview(ctx context.Context, rv Reviewer, p reviewParams) (verdict, notePath string, noteErr, err error) {
 	ws := reviewWSDir(p.stateRoot, p.slug)
 	defer os.RemoveAll(ws)
 
-	head, err := buildReviewWorkspace(ws, p.repo, p.base, p.ref, p.specPath, p.progress, p.summary)
+	head, err := buildReviewWorkspace(ctx, ws, p.repo, p.base, p.ref, p.specPath, p.progress, p.summary)
 	if err != nil {
-		notePath, nerr := writeReviewNote(p.home, p.slug, "error", short(head), short(p.base), p.model, "Review failed: "+err.Error(), p.now)
-		if nerr != nil {
-			return "error", "", err
-		}
-		return "error", notePath, err
+		buildErr := err
+		notePath, noteErr = writeReviewNote(p.home, p.slug, "error", short(head), short(p.base), p.model, "Review failed: "+buildErr.Error(), p.now)
+		return "error", notePath, noteErr, buildErr
 	}
 
 	text, err := rv.Review(ctx, ws, p.model, reviewPrompt)
 	if err != nil {
-		notePath, nerr := writeReviewNote(p.home, p.slug, "error", short(head), short(p.base), p.model, "Review failed: "+err.Error(), p.now)
-		if nerr != nil {
-			return "error", "", err
-		}
-		return "error", notePath, err
+		reviewErr := err
+		notePath, noteErr = writeReviewNote(p.home, p.slug, "error", short(head), short(p.base), p.model, "Review failed: "+reviewErr.Error(), p.now)
+		return "error", notePath, noteErr, reviewErr
 	}
 
 	verdict = parseVerdict(text)
-	notePath, err = writeReviewNote(p.home, p.slug, verdict, short(head), short(p.base), p.model, text, p.now)
-	if err != nil {
-		return verdict, "", err
-	}
-	return verdict, notePath, nil
+	notePath, noteErr = writeReviewNote(p.home, p.slug, verdict, short(head), short(p.base), p.model, text, p.now)
+	return verdict, notePath, noteErr, noteErr
 }
 
 // ReviewOptions configures `nightshift review <slug>`: a one-shot,
@@ -432,7 +429,7 @@ func Review(opts ReviewOptions) (Status, error) {
 		now:   opts.Now,
 	}
 
-	verdict, notePath, err := runReview(ctx, rv, params)
+	verdict, notePath, _, err := runReview(ctx, rv, params)
 	if notePath != "" {
 		fmt.Fprintf(opts.Stdout, "review: %s — %s\n", verdict, notePath)
 	}
