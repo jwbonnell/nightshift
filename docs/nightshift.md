@@ -446,10 +446,18 @@ env > config > default.)
 | — | — | `NIGHTSHIFT_MAX_CONCURRENT` | `2` |
 | — | `NIGHTSHIFT_SBX_BIN` | `NIGHTSHIFT_SBX_BIN` | `sbx` |
 | — | `NIGHTSHIFT_CLAUDE_BIN` | `NIGHTSHIFT_CLAUDE_BIN` | `claude` |
+| — | `NIGHTSHIFT_OPENCODE_BIN` | `NIGHTSHIFT_OPENCODE_BIN` | `opencode` |
+| — | `NIGHTSHIFT_OPENCODE_CONFIG` | `NIGHTSHIFT_OPENCODE_CONFIG` | unset (see [Agents and models](#agents-and-models)) |
 | — | `NIGHTSHIFT_NOTIFY` | `NIGHTSHIFT_NOTIFY` | `on` (`off` disables desktop notifications) |
 | — | `NIGHTSHIFT_HOST_CLAUDE_BIN` | `NIGHTSHIFT_HOST_CLAUDE_BIN` | `claude` (the *host* claude the interview execs; see [Interview](#interview)) |
 | — | `NIGHTSHIFT_INTERVIEW_MODEL` | `NIGHTSHIFT_INTERVIEW_MODEL` | `opus` (the interview's `--model`) |
 | `repo:`, `verify:`, `egress:` | — | — | frontmatter only, required (`repo:`/`verify:`) |
+
+`model:`, `planner_model:`, and `review_model:` (and `--model` on
+`nightshift review`) each accept either a bare model name (always claude,
+as before) or an `agent/model` selector — see [Agents and
+models](#agents-and-models) for the full syntax and the opencode route to
+other providers.
 
 The config file is `KEY=value` lines; blank lines and lines starting with
 `#` (after leading whitespace) are skipped; one pair of matching `"` or `'`
@@ -462,13 +470,128 @@ comma-separated list of extra hosts the sandbox may reach, on top of the
 baseline allowlist (the Anthropic API plus the usual language-package
 registries).
 
+## Agents and models
+
+Every place nightshift runs a model — the planner, the coding agent, and
+the `nightshift review` reviewer — accepts a **selector**, not just a bare
+model name:
+
+| Selector | Agent | Model passed through |
+|---|---|---|
+| `opus` | `claude` | `opus` (a bare value with no `/` is always claude) |
+| `claude/sonnet` | `claude` | `sonnet` |
+| `opencode/openai/gpt-5` | `opencode` | `openai/gpt-5` |
+| `opencode/homelab/qwen3-coder:30b` | `opencode` | `homelab/qwen3-coder:30b` |
+
+`claude/<model>` passes `<model>` to `--model` unchanged.
+`opencode/<provider>/<model>` requires both parts non-empty; `<model>` may
+itself contain `/` or `:`. Every value that worked before this feature
+(a bare model name) still works unchanged, and the default for every role
+is still a bare claude model — with no new settings, every claude argv,
+sandbox name, log line, and note is byte-identical to before selectors
+existed.
+
+A bad selector fails fast, before anything is created, naming the
+frontmatter key, flag, or env var it came from.
+
+**Why two agents.** Anthropic's terms allow Claude subscription
+credentials only in Claude Code and Claude.ai, so Claude work always runs
+through `claude` inside the sandbox, exactly as before. `opencode` is the
+route to every other provider — OpenAI, Google, open-weight, or
+self-hosted models — or to Anthropic by API key; nightshift never hands
+opencode a Claude subscription credential.
+
+**Per-role keys**, same precedence tiers as every other setting above:
+
+| Role | Frontmatter | Env var | Flag | Default |
+|---|---|---|---|---|
+| plan | `planner_model:` | `NIGHTSHIFT_PLANNER_MODEL` | — | `opus` |
+| code | `model:` | `NIGHTSHIFT_MODEL` | — | `sonnet` |
+| `nightshift review` / auto review | `review_model:` | `NIGHTSHIFT_REVIEW_MODEL` | `--model` | `opus` |
+
+Two more keys, env > config > default like `NIGHTSHIFT_SBX_BIN` and
+friends:
+
+| Env var | Config key | Default |
+|---|---|---|
+| `NIGHTSHIFT_OPENCODE_BIN` | `NIGHTSHIFT_OPENCODE_BIN` | `opencode` |
+| `NIGHTSHIFT_OPENCODE_CONFIG` | `NIGHTSHIFT_OPENCODE_CONFIG` | unset |
+
+`NIGHTSHIFT_OPENCODE_CONFIG` points at an opencode JSON config file
+(a leading `~/` is expanded); it's only read when some role for this run
+actually resolves to `opencode`. Provider API keys themselves are never
+read from this file in the normal case — set them with
+`sbx secret set -g <provider>`, the same way sbx injects any other
+provider credential, and sbx makes them available inside the `opencode`
+sandbox without nightshift ever seeing them.
+
+**Self-hosted example.** To point a role at a homelab model server through
+an OpenAI-compatible endpoint, write an opencode config such as:
+
+```json
+{
+  "provider": {
+    "homelab": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": { "baseURL": "http://homelab.lan:8000/v1" }
+    }
+  }
+}
+```
+
+and set `NIGHTSHIFT_OPENCODE_CONFIG=~/opencode-homelab.json` plus a spec
+`model: opencode/homelab/qwen3-coder:30b` (or whichever role you want on
+it). Since the sandbox can only reach what its egress allowlist permits,
+also add the homelab host to the spec's `egress:`:
+
+```
+egress: homelab.lan
+```
+
+**Inline secrets are refused.** If the config file has a key named
+(case-insensitively) `apiKey`, `api_key`, `token`, or `password` whose
+value is a literal, non-empty string not starting with `{env:`, the file
+is rejected with `opencode config <path>: <dotted.key.path> holds an
+inline secret — use 'sbx secret set' or {env:VAR}` — the value itself is
+never printed, only the key's path inside the JSON. Use `sbx secret set`
+(provider keys) or an `{env:VAR}` reference opencode resolves itself
+instead of writing a key straight into the file. The file must be plain
+JSON (no comments); a parse failure is reported the same way, naming the
+path.
+
+**Mixed agents and the `-plan` sandbox.** `nightshift-<slug>` (the agent
+sandbox) is always created with the *coding* role's agent. If the planner
+resolves to a different agent than the coder, a second agent sandbox,
+`nightshift-<slug>-plan`, is created up front for planning iterations —
+same clone, same arguments, just a different agent. It's a full agent
+sandbox in every sense: it's in the leading `sbx rm -f` cleanup list, it's
+stopped before every verify (alongside the main agent sandbox), and it's
+removed at the end of the run. When both roles use the same agent (the
+default), there's only ever the one agent sandbox, exactly as always.
+
+**What gets recorded.** `run.json` has an `agents: {"plan": "...", "code":
+"..."}` object (each a selector's canonical `agent/model` form), updated
+on every invocation; each history entry gets an `agent=` suffix for the
+coder. `runner.log`'s `start:`/`resume:` lines get an
+`agents=plan:<p>,code:<c>` suffix, and resuming with a changed selector
+logs `agents changed: plan <a>→<b>, code <c>→<d>` — switching models
+between nights is expected, not an error. The result note's frontmatter
+gets an `agents: plan=<p>, code=<c>` line, and the review note's `model:`
+line shows the bare model for a claude selector or the full
+`agent/provider/model` form for opencode. `--dry-run` prints `plan agent:`
+and `code agent:` lines (and `opencode cfg: <path>` when a role uses
+opencode) and shows the real per-sandbox agent in its sandbox-create
+preview — but never a config file's contents or a provider key, anywhere.
+
 ## Sandbox model
 
 Every run uses three `sbx` sandboxes, all mounting the same clone at the
 same path, each with a different trust role:
 
-- **agent** (`nightshift-<slug>`) — runs `claude`. Reused across
-  iterations; nothing the runner trusts lives here.
+- **agent** (`nightshift-<slug>`) — runs `claude`, or `opencode` if the
+  coding role's selector names it; see [Agents and
+  models](#agents-and-models). Reused across iterations; nothing the
+  runner trusts lives here.
 - **control** (`nightshift-<slug>-ctl`) — every git operation on the clone
   runs here, never on the host and never in the agent or verify sandbox.
   The clone's own `.git/config`/hooks are agent-writable and could be

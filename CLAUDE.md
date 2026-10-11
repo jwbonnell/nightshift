@@ -22,6 +22,9 @@ internal/home/         Home resolution, D2 layout, config file, init/new/ready/d
 internal/runner/       Everything else: spec resolution, state, the sandbox
                         interface + real sbx implementation, the loop itself,
                         locking/concurrency, notifications, result notes, signals
+internal/agent/        Selector parsing (claude/<model>, opencode/<provider>/<model>)
+                        and the Agent interface (claude, opencode): Argv/Parse/
+                        RateLimited/Transient, plus opencode config loading
 internal/gitx/         Host git operations (Run/IsRepo/GitDir/RunRetry/Commit)
 internal/lock/         Cross-process file locks (std-lib only, no deps on
                         anything else in this module)
@@ -36,8 +39,12 @@ vendor/                github.com/jwbonnell/go-libs/pkg/logx only
 ```
 
 `internal/lock` has zero internal dependencies so `internal/gitx` can import
-it without a cycle. Everything else may import `home`/`gitx`/`lock`/`notify`
-freely; `runner` is the only package that imports all four.
+it without a cycle. `internal/agent` imports only the std-lib, same
+constraint as `internal/lock`. Everything else may import
+`home`/`gitx`/`lock`/`notify`/`agent` freely; `runner` is the only package
+that imports all of them. `runner` and `internal/review` (if it exists) may
+both import `agent`, but must never import each other — see
+`TestPackageBoundaries` in `internal/agent`.
 
 `internal/runner`'s own files roughly mirror the reference's
 `internal/specrun` split (`spec.go`/`base.go` resolution, `state.go` setup
