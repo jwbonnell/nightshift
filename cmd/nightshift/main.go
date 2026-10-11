@@ -597,10 +597,11 @@ func cmdRun(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 	base := fs.String("base", "", "branch/ref/sha the run starts from (default: spec base:/NIGHTSHIFT_BASE/origin HEAD)")
 	maxConcurrent := fs.String("max-concurrent", "", "max simultaneous runs (default: NIGHTSHIFT_MAX_CONCURRENT/2)")
 	ignoreDeps := fs.Bool("ignore-deps", false, "skip dependency satisfaction and the integrated base")
+	jobs := fs.Int("jobs", -1, "with --next, run up to N eligible specs at once (default: NIGHTSHIFT_JOBS/1, capped by max-concurrent)")
 
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "usage: nightshift run <spec-name|path> [--fresh [--yes]] [--max-iter N] [--until HH:MM] [--base REF] [--max-concurrent N] [--ignore-deps] [--dry-run]")
-		fmt.Fprintln(stderr, "       nightshift run --next [--until HH:MM] [--max-concurrent N] [--dry-run]")
+		fmt.Fprintln(stderr, "       nightshift run --next [--until HH:MM] [--max-concurrent N] [--jobs N] [--dry-run]")
 		fs.PrintDefaults()
 	}
 
@@ -631,6 +632,17 @@ func cmdRun(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 	if *ignoreDeps && *next {
 		fmt.Fprintln(stderr, "nightshift: --ignore-deps can't be used with --next")
 		return 2
+	}
+
+	if *jobs != -1 {
+		if !*next {
+			fmt.Fprintln(stderr, "nightshift: --jobs can only be used with --next")
+			return 2
+		}
+		if *jobs < 1 {
+			fmt.Fprintf(stderr, "nightshift: --jobs %d: want 1 or more\n", *jobs)
+			return 2
+		}
 	}
 
 	// D11.4: an unparsable --until is a usage error, exit 1, nothing
@@ -667,6 +679,9 @@ func cmdRun(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 		IsTTY:         isTTY(),
 		Ctx:           ctx,
 		Version:       version,
+	}
+	if *jobs != -1 {
+		opts.Jobs = *jobs
 	}
 	if !*next {
 		opts.SpecArg = positional[0]
