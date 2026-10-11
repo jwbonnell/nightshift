@@ -65,10 +65,10 @@ func TestPrintPlanIncludesHomeLineFirst(t *testing.T) {
 	}
 }
 
-func TestDryRunShowsReview(t *testing.T) {
+func TestDryRunShowsLensesAndRounds(t *testing.T) {
 	repo := newSourceRepo(t)
 	homeDir := t.TempDir()
-	writeReadySpec(t, homeDir, "demo", "review: true\nreview_model: haiku\n", repo)
+	writeReadySpec(t, homeDir, "demo", "review: requirements, security\nreview_model: haiku\nreview_rounds: 2\n", repo)
 
 	opts := Options{
 		SpecArg:   "demo",
@@ -105,7 +105,7 @@ func TestDryRunShowsReview(t *testing.T) {
 	if want := "usage limit: none"; lines[idx+1] != want {
 		t.Fatalf("line after iter_timeout: = %q, want %q", lines[idx+1], want)
 	}
-	want := "review:      true (frontmatter), model haiku (frontmatter)"
+	want := "review:      requirements, security (frontmatter), model haiku (frontmatter), rounds 2 (frontmatter)"
 	if lines[idx+2] != want {
 		t.Fatalf("line after usage limit: = %q, want %q", lines[idx+2], want)
 	}

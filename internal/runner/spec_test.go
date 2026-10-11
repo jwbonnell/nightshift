@@ -1,8 +1,10 @@
 package runner
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -384,12 +386,124 @@ func TestReviewFrontmatterPrecedence(t *testing.T) {
 func TestReviewInvalidBool(t *testing.T) {
 	repo := newSourceRepo(t)
 	homeDir := t.TempDir()
-	writeReadySpec(t, homeDir, "demo", "review: maybe\n", repo)
+	writeReadySpec(t, homeDir, "demo", "review: Maybe\n", repo)
 
 	_, err := resolveSpec(Options{SpecArg: "demo", Home: homeDir})
-	want := `review "maybe": want true or false`
+	want := `review "Maybe": want true, false or a list of lenses`
 	if err == nil || err.Error() != want {
 		t.Fatalf("err = %v, want %q", err, want)
+	}
+}
+
+func TestReviewLensListParse(t *testing.T) {
+	homeDir := t.TempDir()
+
+	cases := []struct {
+		val     string
+		want    []string
+		wantErr string
+	}{
+		{val: "true", want: []string{"general"}},
+		{val: "false", want: nil},
+		{val: "1", want: []string{"general"}},
+		{val: "FALSE", want: nil},
+		{val: "requirements, security", want: []string{"requirements", "security"}},
+		{val: "general,general", want: []string{"general"}},
+		{val: "Foo", wantErr: `review "Foo": want true, false or a list of lenses`},
+		{val: "", wantErr: `review "": want true, false or a list of lenses`},
+		{val: "bogus", wantErr: fmt.Sprintf(`unknown review lens "bogus" (built-in: general, requirements, quality, security; or add %s)`, filepath.Join(home.LensesDir(homeDir), "bogus.md"))},
+	}
+	for _, c := range cases {
+		got, err := parseReviewSetting(c.val, homeDir)
+		if c.wantErr != "" {
+			if err == nil || err.Error() != c.wantErr {
+				t.Errorf("parseReviewSetting(%q) err = %v, want %q", c.val, err, c.wantErr)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("parseReviewSetting(%q): %v", c.val, err)
+			continue
+		}
+		if !reflect.DeepEqual(got, c.want) {
+			t.Errorf("parseReviewSetting(%q) = %v, want %v", c.val, got, c.want)
+		}
+	}
+}
+
+func TestCustomLensOverridesAndResolves(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := os.MkdirAll(home.LensesDir(homeDir), 0o755); err != nil {
+		t.Fatalf("mkdir lenses: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home.LensesDir(homeDir), "api-contract.md"), []byte("custom\n"), 0o644); err != nil {
+		t.Fatalf("write custom lens: %v", err)
+	}
+
+	got, err := parseReviewSetting("api-contract", homeDir)
+	if err != nil {
+		t.Fatalf("parseReviewSetting: %v", err)
+	}
+	if !reflect.DeepEqual(got, []string{"api-contract"}) {
+		t.Fatalf("got %v, want [api-contract]", got)
+	}
+}
+
+func TestReviewRoundsPrecedence(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "demo", "", repo)
+
+	sp, err := resolveSpec(Options{SpecArg: "demo", Home: homeDir})
+	if err != nil {
+		t.Fatalf("resolveSpec: %v", err)
+	}
+	if sp.ReviewRounds != 0 || sp.src["review_rounds"] != "default" {
+		t.Fatalf("default: review_rounds=%d src=%q", sp.ReviewRounds, sp.src["review_rounds"])
+	}
+
+	if err := os.WriteFile(home.ConfigPath(homeDir), []byte("NIGHTSHIFT_REVIEW_ROUNDS=2\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	sp, err = resolveSpec(Options{SpecArg: "demo", Home: homeDir})
+	if err != nil {
+		t.Fatalf("resolveSpec: %v", err)
+	}
+	if sp.ReviewRounds != 2 || sp.src["review_rounds"] != "config" {
+		t.Fatalf("config: review_rounds=%d src=%q", sp.ReviewRounds, sp.src["review_rounds"])
+	}
+
+	t.Setenv("NIGHTSHIFT_REVIEW_ROUNDS", "3")
+	sp, err = resolveSpec(Options{SpecArg: "demo", Home: homeDir})
+	if err != nil {
+		t.Fatalf("resolveSpec: %v", err)
+	}
+	if sp.ReviewRounds != 3 || sp.src["review_rounds"] != "env" {
+		t.Fatalf("env: review_rounds=%d src=%q", sp.ReviewRounds, sp.src["review_rounds"])
+	}
+
+	writeReadySpec(t, homeDir, "demo", "review_rounds: 5\n", repo)
+	sp, err = resolveSpec(Options{SpecArg: "demo", Home: homeDir})
+	if err != nil {
+		t.Fatalf("resolveSpec: %v", err)
+	}
+	if sp.ReviewRounds != 5 || sp.src["review_rounds"] != "frontmatter" {
+		t.Fatalf("frontmatter: review_rounds=%d src=%q", sp.ReviewRounds, sp.src["review_rounds"])
+	}
+}
+
+func TestReviewRoundsInvalid(t *testing.T) {
+	repo := newSourceRepo(t)
+
+	for _, bad := range []string{"6", "-1", "x"} {
+		homeDir := t.TempDir()
+		writeReadySpec(t, homeDir, "demo", "review_rounds: "+bad+"\n", repo)
+
+		_, err := resolveSpec(Options{SpecArg: "demo", Home: homeDir})
+		want := fmt.Sprintf(`review_rounds %q: want 0-5`, bad)
+		if err == nil || err.Error() != want {
+			t.Fatalf("review_rounds=%q: err = %v, want %q", bad, err, want)
+		}
 	}
 }
 

@@ -31,8 +31,12 @@ OPTIONAL frontmatter:
                  default allowlist (Anthropic API + Go/npm/pypi/etc. registries),
                  e.g. "api.example.com,cdn.example.com"
   review:        run a sandboxed, read-only Claude review of the work when the run
-                 ends complete, and record its verdict              (default: false)
+                 ends complete, and record its verdict. Accepts true/false or a
+                 comma list of lenses (general, requirements, quality, security,
+                 or a custom lens file)                              (default: false)
   review_model:  model for that review                              (default: opus)
+  review_rounds: hand a rejecting review back to the agent to fix, up to this many
+                 times, before the run finishes (0-5)                (default: 0)
 
 Precedence for the optional keys: CLI flag > this frontmatter > NIGHTSHIFT_* env
 > ~/.nightshift/config > default.

@@ -38,10 +38,13 @@ const commentedConfig = `# nightshift config file.
 # model for the spec interview
 # NIGHTSHIFT_INTERVIEW_MODEL=opus
 
-# run a sandboxed read-only Claude review when a run ends complete
+# run a sandboxed read-only Claude review when a run ends complete, as
+# true/false or a comma list of lenses (general, requirements, quality, security)
 # NIGHTSHIFT_REVIEW=false
 # model for that review
 # NIGHTSHIFT_REVIEW_MODEL=opus
+# fix rounds: hand a rejecting review back to the agent up to N times (0-5)
+# NIGHTSHIFT_REVIEW_ROUNDS=0
 
 # how long to wait out a usage limit with no usable reset time
 # NIGHTSHIFT_LIMIT_FALLBACK=60m

@@ -150,7 +150,11 @@ func printPlan(w io.Writer, opts Options, sp *Spec, maxConcurrent int, capSrc st
 	} else {
 		fmt.Fprint(w, "usage limit: none\n")
 	}
-	fmt.Fprintf(w, "review:      %v (%s), model %s (%s)\n", sp.Review, sp.src["review"], sp.ReviewModel, sp.src["review_model"])
+	lensesDisplay := "false"
+	if len(sp.Lenses) > 0 {
+		lensesDisplay = strings.Join(sp.Lenses, ", ")
+	}
+	fmt.Fprintf(w, "review:      %s (%s), model %s (%s), rounds %d (%s)\n", lensesDisplay, sp.src["review"], sp.ReviewModel, sp.src["review_model"], sp.ReviewRounds, sp.src["review_rounds"])
 	if len(sp.Egress) > 0 {
 		fmt.Fprintf(w, "egress+:     %s\n", strings.Join(sp.Egress, ", "))
 	}

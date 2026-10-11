@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -29,24 +30,26 @@ const (
 
 // Spec is one resolved, ready-to-run spec.
 type Spec struct {
-	Path        string // absolute path to the spec .md, under <Home>/specs/ready/
-	Slug        string
-	Repo        string // absolute
-	Verify      string
-	Model       string // Display() of ModelSel — unchanged for a bare/claude selector
-	Planner     string // Display() of PlannerSel
-	ModelSel    agent.Selector
-	PlannerSel  agent.Selector
-	MaxIter     int
-	IterTimeout time.Duration
-	Egress      []string
-	Review      bool
-	ReviewModel string // raw selector string, as handed to Reviewer
-	ReviewSel   agent.Selector
-	Created     string
-	ContentHash string
-	Base        string // requested base name
-	BaseSHA     string // resolved commit sha (filled by Run via resolveBase)
+	Path         string // absolute path to the spec .md, under <Home>/specs/ready/
+	Slug         string
+	Repo         string // absolute
+	Verify       string
+	Model        string // Display() of ModelSel — unchanged for a bare/claude selector
+	Planner      string // Display() of PlannerSel
+	ModelSel     agent.Selector
+	PlannerSel   agent.Selector
+	MaxIter      int
+	IterTimeout  time.Duration
+	Egress       []string
+	Review       bool
+	Lenses       []string // review lens names, in frontmatter order; empty when Review is false
+	ReviewRounds int
+	ReviewModel  string // raw selector string, as handed to Reviewer
+	ReviewSel    agent.Selector
+	Created      string
+	ContentHash  string
+	Base         string // requested base name
+	BaseSHA      string // resolved commit sha (filled by Run via resolveBase)
 
 	// OpencodeCfgPath/OpencodeCfg are set only when some role resolves to
 	// opencode: the expanded NIGHTSHIFT_OPENCODE_CONFIG path and its
@@ -55,6 +58,64 @@ type Spec struct {
 	OpencodeCfg     string
 
 	src map[string]string
+}
+
+// builtinLenses are the review lens names shipped with nightshift.
+var builtinLenses = map[string]bool{
+	"general":      true,
+	"requirements": true,
+	"quality":      true,
+	"security":     true,
+}
+
+// lensNameRe matches a valid lens name, built-in or custom.
+var lensNameRe = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+
+// parseReviewSetting parses the review frontmatter/env/config value val
+// into an ordered, deduplicated list of lens names: "true" means
+// ["general"], "false" means no lenses (nil), and anything else is parsed
+// as a comma list of lens names, each either built-in or a custom lens
+// file at <homeDir>/lenses/<name>.md.
+func parseReviewSetting(val, homeDir string) ([]string, error) {
+	if b, err := strconv.ParseBool(val); err == nil {
+		if b {
+			return []string{"general"}, nil
+		}
+		return nil, nil
+	}
+
+	badFormat := fmt.Errorf("review %q: want true, false or a list of lenses", val)
+
+	seen := map[string]bool{}
+	var lenses []string
+	for _, item := range strings.Split(val, ",") {
+		name := home.Unquote(strings.TrimSpace(item))
+		if name == "" {
+			continue
+		}
+		if !lensNameRe.MatchString(name) {
+			return nil, badFormat
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		lenses = append(lenses, name)
+	}
+	if len(lenses) == 0 {
+		return nil, badFormat
+	}
+
+	for _, name := range lenses {
+		if builtinLenses[name] {
+			continue
+		}
+		p := filepath.Join(home.LensesDir(homeDir), name+".md")
+		if st, err := os.Stat(p); err != nil || st.IsDir() {
+			return nil, fmt.Errorf("unknown review lens %q (built-in: general, requirements, quality, security; or add %s)", name, p)
+		}
+	}
+	return lenses, nil
 }
 
 // pick implements the five-tier precedence flag > frontmatter > env >
@@ -304,9 +365,15 @@ func resolveSpecFile(opts Options, path string) (*Spec, error) {
 	}
 
 	reviewStr := pick(src, "review", "", fmVal("review"), os.Getenv("NIGHTSHIFT_REVIEW"), cfg["NIGHTSHIFT_REVIEW"], "false")
-	review, err := strconv.ParseBool(reviewStr)
+	lenses, err := parseReviewSetting(reviewStr, opts.Home)
 	if err != nil {
-		return nil, fmt.Errorf("review %q: want true or false", reviewStr)
+		return nil, err
+	}
+	review := len(lenses) > 0
+	reviewRoundsStr := pick(src, "review_rounds", "", fmVal("review_rounds"), os.Getenv("NIGHTSHIFT_REVIEW_ROUNDS"), cfg["NIGHTSHIFT_REVIEW_ROUNDS"], "0")
+	reviewRounds, err := strconv.Atoi(reviewRoundsStr)
+	if err != nil || reviewRounds < 0 || reviewRounds > 5 {
+		return nil, fmt.Errorf("review_rounds %q: want 0-5", reviewRoundsStr)
 	}
 	reviewModel := pick(src, "review_model", "", fmVal("review_model"), os.Getenv("NIGHTSHIFT_REVIEW_MODEL"), cfg["NIGHTSHIFT_REVIEW_MODEL"], defaultReviewModel)
 	reviewSel, err := agent.ParseSelector(reviewModel)
@@ -352,6 +419,8 @@ func resolveSpecFile(opts Options, path string) (*Spec, error) {
 		IterTimeout:     iterTimeout,
 		Egress:          egress,
 		Review:          review,
+		Lenses:          lenses,
+		ReviewRounds:    reviewRounds,
 		ReviewModel:     reviewModel,
 		ReviewSel:       reviewSel,
 		OpencodeCfgPath: opencodeCfgPath,

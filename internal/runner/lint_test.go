@@ -147,6 +147,24 @@ func TestLintFrontmatterFailAndWarn(t *testing.T) {
 	})
 }
 
+func TestLintAllowsReviewRounds(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeLintSpec(t, home.DraftDir(homeDir), "demo", "review_rounds: 2\n", repo, fullSpecBody)
+
+	var buf bytes.Buffer
+	res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", NoVerify: true, Stdout: &buf})
+	if err != nil {
+		t.Fatalf("Lint: %v", err)
+	}
+	if res.Warns != 0 {
+		t.Fatalf("expected no warns, got %+v\n%s", res, buf.String())
+	}
+	if strings.Contains(buf.String(), `unknown key "review_rounds"`) {
+		t.Fatalf("output unexpectedly warns about review_rounds:\n%s", buf.String())
+	}
+}
+
 func TestLintSections(t *testing.T) {
 	repo := newSourceRepo(t)
 
