@@ -46,6 +46,15 @@ type run struct {
 	logger   *logx.Logger
 	agentLog *os.File
 	err      error // set by fail()/finalizeSync; returned alongside StatusError
+
+	deadline time.Time // the --until deadline computed by loop(), zero if unset
+
+	// Automatic review results (Task: review), set by runAutoReview and
+	// read by resultBody/notifyText. reviewVerdict == "" means no review
+	// was attempted (review: false, or status != complete).
+	reviewVerdict string
+	reviewReason  string // set only when reviewVerdict == "skipped"
+	reviewNote    string
 }
 
 // git runs args against the clone in the control sandbox, stripping any
