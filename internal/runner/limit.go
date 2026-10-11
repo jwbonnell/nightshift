@@ -190,6 +190,79 @@ func writeLimitMarker(stateRoot string, hit limitHit, now time.Time, by string, 
 	return os.Rename(tmpPath, limitMarkerPath(stateRoot))
 }
 
+// readActiveLimit reads stateRoot's usage-limit marker, returning nil
+// when there is none or its reset_at is not strictly after now (an
+// expired or corrupt marker). deleteExpired controls whether an expired
+// marker is removed from disk: run/--next pass true; --dry-run passes
+// false so it never deletes the marker (Design: "It never deletes the
+// marker").
+func readActiveLimit(stateRoot string, now time.Time, deleteExpired bool) *limitMarker {
+	m := readLimitMarkerRaw(stateRoot)
+	if m == nil {
+		return nil
+	}
+	resetAt, err := time.Parse(time.RFC3339, m.ResetAt)
+	if err != nil || !resetAt.After(now) {
+		if deleteExpired {
+			os.Remove(limitMarkerPath(stateRoot))
+		}
+		return nil
+	}
+	return m
+}
+
+// limitWake is the time to wait until for a limit with the given reset
+// (hit.ResetAt or a stored marker's reset_at): resetAt+2m, or now+fallback
+// when resetAt is zero (an unparsable message).
+func limitWake(resetAt, now time.Time, fallback time.Duration) time.Time {
+	if resetAt.IsZero() {
+		return now.Add(fallback)
+	}
+	return resetAt.Add(2 * time.Minute)
+}
+
+// limitWaitExceedsWindow reports whether waking at wake falls outside the
+// run's --until deadline (if any) or, with no deadline, more than maxWait
+// away from now.
+func limitWaitExceedsWindow(wake, now, deadline time.Time, maxWait time.Duration) bool {
+	if !deadline.IsZero() {
+		return !wake.Before(deadline)
+	}
+	return wake.Sub(now) > maxWait
+}
+
+// checkActiveLimit consults the usage-limit marker before run/--next start
+// new work: "read it after taking their locks and before creating
+// sandboxes." handled is true when the caller should return (status, err)
+// immediately without creating a sandbox; handled is false when there is
+// no active limit, or an active one was waited out and the caller should
+// proceed as normal.
+func checkActiveLimit(opts Options) (status Status, handled bool, err error) {
+	now := opts.clockFn()()
+	active := readActiveLimit(opts.StateRoot, now, true)
+	if active == nil {
+		return "", false, nil
+	}
+
+	// readActiveLimit only returns markers whose reset_at parsed and is
+	// strictly after now, so this parse cannot fail.
+	resetAt, _ := time.Parse(time.RFC3339, active.ResetAt)
+	deadline := parseUntil(opts.Until, now)
+	cfg := opts.limitCfg()
+	wake := limitWake(resetAt, now, cfg.Fallback)
+
+	if limitWaitExceedsWindow(wake, now, deadline, cfg.MaxWait) {
+		fmt.Fprintf(opts.Stderr, "usage limit active until %s (recorded by %s); not starting\n", resetAt.Format("Mon 15:04"), active.By)
+		return StatusRateLimited, true, nil
+	}
+
+	fmt.Fprintf(opts.Stdout, "usage limit active; waiting until %s\n", wake.Format("15:04 Mon"))
+	if serr := sleepFor(opts, wake.Sub(now)); serr != nil || opts.interrupted() {
+		return StatusInterrupted, true, nil
+	}
+	return "", false, nil
+}
+
 // limitCfg returns o.limits with any zero field filled from the defaults —
 // needed because tests that build a run via setup() directly (bypassing
 // Run(), which calls resolveLimitConfig) never populate o.limits.

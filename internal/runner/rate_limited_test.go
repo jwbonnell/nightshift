@@ -197,6 +197,14 @@ func TestRateLimitedResumeClearsReason(t *testing.T) {
 		t.Fatalf("StopReason not set after the rate-limited run")
 	}
 
+	// Task 5: run1 left an active usage-limit marker, which would block
+	// run2 from starting at all. Clear it (always safe, per the Design)
+	// to isolate what this test actually checks: StopReason clearing
+	// across a resume.
+	if err := os.Remove(limitMarkerPath(stateRoot)); err != nil {
+		t.Fatalf("remove usage-limit marker: %v", err)
+	}
+
 	sb2 := newStubSandbox()
 	sb2.agent = completingAgent(t)
 	sb2.verify = alwaysGreenVerify

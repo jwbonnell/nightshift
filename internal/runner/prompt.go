@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 )
 
 // iterPreamble and planPreamble are byte-identical to reference §3.8.1 /
@@ -96,6 +97,12 @@ func printPlan(w io.Writer, opts Options, sp *Spec, maxConcurrent int, capSrc st
 	fmt.Fprintf(w, "planner:     %s (%s)\n", sp.Planner, sp.src["planner_model"])
 	fmt.Fprintf(w, "max_iter:    %d (%s)\n", sp.MaxIter, sp.src["max_iter"])
 	fmt.Fprintf(w, "iter_timeout:%s (%s)\n", sp.IterTimeout, sp.src["iter_timeout"]) // NB: no space after the colon
+	if active := readActiveLimit(opts.StateRoot, opts.clockFn()(), false); active != nil {
+		resetAt, _ := time.Parse(time.RFC3339, active.ResetAt)
+		fmt.Fprintf(w, "usage limit: active until %s\n", resetAt.Format("Mon 15:04"))
+	} else {
+		fmt.Fprint(w, "usage limit: none\n")
+	}
 	fmt.Fprintf(w, "review:      %v (%s), model %s (%s)\n", sp.Review, sp.src["review"], sp.ReviewModel, sp.src["review_model"])
 	if len(sp.Egress) > 0 {
 		fmt.Fprintf(w, "egress+:     %s\n", strings.Join(sp.Egress, ", "))

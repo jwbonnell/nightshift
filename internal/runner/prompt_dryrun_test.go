@@ -102,8 +102,11 @@ func TestDryRunShowsReview(t *testing.T) {
 	if idx == -1 {
 		t.Fatalf("no iter_timeout: line in output:\n%s", out)
 	}
-	want := "review:      true (frontmatter), model haiku (frontmatter)"
-	if lines[idx+1] != want {
+	if want := "usage limit: none"; lines[idx+1] != want {
 		t.Fatalf("line after iter_timeout: = %q, want %q", lines[idx+1], want)
+	}
+	want := "review:      true (frontmatter), model haiku (frontmatter)"
+	if lines[idx+2] != want {
+		t.Fatalf("line after usage limit: = %q, want %q", lines[idx+2], want)
 	}
 }

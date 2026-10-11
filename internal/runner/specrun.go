@@ -340,6 +340,10 @@ func runLocked(opts Options, sp *Spec, limit int, capSrc string, specLock *lock.
 	}
 	defer slotLock.Release()
 
+	if status, handled, err := checkActiveLimit(opts); handled {
+		return status, err
+	}
+
 	sb := opts.Sandbox
 	if sb == nil {
 		sb = newSbxSandbox(opts.SbxBin, opts.ClaudeBin, sp.Slug)

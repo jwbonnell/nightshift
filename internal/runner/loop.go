@@ -320,13 +320,9 @@ func (r *run) loop() Status {
 				r.logf("write usage-limit marker: %v", err)
 			}
 
-			wake := hit.ResetAt.Add(2 * time.Minute)
-			if hit.ResetAt.IsZero() {
-				wake = now.Add(cfg.Fallback)
-			}
+			wake := limitWake(hit.ResetAt, now, cfg.Fallback)
 
-			stop := (!deadline.IsZero() && !wake.Before(deadline)) ||
-				(deadline.IsZero() && wake.Sub(now) > cfg.MaxWait) ||
+			stop := limitWaitExceedsWindow(wake, now, deadline, cfg.MaxWait) ||
 				limitHits >= cfg.MaxHits
 			if stop {
 				st.StopReason = res.Message
