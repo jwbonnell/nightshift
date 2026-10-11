@@ -341,7 +341,7 @@ func TestSyncBackFailureIsError(t *testing.T) {
 	sb := newStubSandbox()
 	sb.agent = completingAgent(t)
 	sb.verify = alwaysGreenVerify
-	r := newTestRun(t, repo, "", Options{Stdout: io.Discard}, sb)
+	r := newTestRun(t, repo, "", Options{Stdout: io.Discard, Notifier: noopNotifierForTest{}}, sb)
 	status := r.loop()
 	if status != StatusComplete {
 		t.Fatalf("loop status = %v, want Complete (a sync failure defers via SyncOwed, not loop itself)", status)

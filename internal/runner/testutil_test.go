@@ -12,7 +12,7 @@ import (
 
 func TestMain(m *testing.M) {
 	testenv.HermeticGit()
-	os.Exit(m.Run())
+	os.Exit(runWithNotifyGuard(m))
 }
 
 func mustGit(t *testing.T, dir string, args ...string) string {
