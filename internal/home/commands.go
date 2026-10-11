@@ -15,6 +15,12 @@ import (
 
 var slugRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
+// ValidSlug reports whether s is a valid spec slug: lowercase letters,
+// digits, '.', '_' or '-', starting with a letter or digit.
+func ValidSlug(s string) bool {
+	return slugRe.MatchString(s)
+}
+
 const commentedConfig = `# nightshift config file.
 #
 # Precedence for these settings: CLI flag > spec frontmatter > NIGHTSHIFT_*
@@ -168,7 +174,7 @@ func replaceFrontmatterValue(content, key, value string) string {
 // repo/verify when given. repo and verify of "" leave the template's
 // values untouched.
 func New(home, slug, repo, verify string, now time.Time, stdout io.Writer) error {
-	if !slugRe.MatchString(slug) {
+	if !ValidSlug(slug) {
 		return fmt.Errorf("invalid slug %q: use lowercase letters, digits, '.', '_' or '-'", slug)
 	}
 

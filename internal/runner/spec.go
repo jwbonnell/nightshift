@@ -48,8 +48,10 @@ type Spec struct {
 	ReviewSel    agent.Selector
 	Created      string
 	ContentHash  string
-	Base         string // requested base name
-	BaseSHA      string // resolved commit sha (filled by Run via resolveBase)
+	Base         string   // requested base name
+	BaseSHA      string   // resolved commit sha (filled by Run via resolveBase)
+	DependsOn    []string // other spec slugs this one depends on, frontmatter order
+	Owns         []string // repo-relative paths this spec may change; empty means unrestricted
 
 	// OpencodeCfgPath/OpencodeCfg are set only when some role resolves to
 	// opencode: the expanded NIGHTSHIFT_OPENCODE_CONFIG path and its
@@ -116,6 +118,71 @@ func parseReviewSetting(val, homeDir string) ([]string, error) {
 		}
 	}
 	return lenses, nil
+}
+
+// parseDependsOn parses raw as a comma list of spec slugs: trimmed,
+// unquoted, deduplicated (keeping the first occurrence's order), each
+// validated with home.ValidSlug.
+func parseDependsOn(raw string) ([]string, error) {
+	var deps []string
+	seen := map[string]bool{}
+	for _, item := range strings.Split(raw, ",") {
+		s := home.Unquote(strings.TrimSpace(item))
+		if s == "" {
+			continue
+		}
+		if !home.ValidSlug(s) {
+			return nil, fmt.Errorf("depends_on entry %q: want a spec slug", s)
+		}
+		if seen[s] {
+			continue
+		}
+		seen[s] = true
+		deps = append(deps, s)
+	}
+	return deps, nil
+}
+
+// ownsEntryOK reports whether e is a clean, relative, repo-local path:
+// filepath.Clean(e) matches e with any trailing "/" stripped, it isn't
+// absolute, and it has no ".." component.
+func ownsEntryOK(e string) bool {
+	trimmed := strings.TrimSuffix(e, "/")
+	if trimmed == "" || trimmed == "." || filepath.Clean(e) != trimmed {
+		return false
+	}
+	if strings.HasPrefix(e, "/") {
+		return false
+	}
+	for _, part := range strings.Split(trimmed, string(filepath.Separator)) {
+		if part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+// parseOwns parses raw as a comma list of repo-relative paths: trimmed,
+// unquoted, deduplicated (keeping the first occurrence's order), each
+// validated with ownsEntryOK.
+func parseOwns(raw string) ([]string, error) {
+	var owns []string
+	seen := map[string]bool{}
+	for _, item := range strings.Split(raw, ",") {
+		e := home.Unquote(strings.TrimSpace(item))
+		if e == "" {
+			continue
+		}
+		if !ownsEntryOK(e) {
+			return nil, fmt.Errorf("owns entry %q: want a clean repo-relative path", e)
+		}
+		if seen[e] {
+			continue
+		}
+		seen[e] = true
+		owns = append(owns, e)
+	}
+	return owns, nil
 }
 
 // pick implements the five-tier precedence flag > frontmatter > env >
@@ -389,6 +456,15 @@ func resolveSpecFile(opts Options, path string) (*Spec, error) {
 		}
 	}
 
+	dependsOn, err := parseDependsOn(fm["depends_on"])
+	if err != nil {
+		return nil, err
+	}
+	owns, err := parseOwns(fm["owns"])
+	if err != nil {
+		return nil, err
+	}
+
 	var opencodeCfgPath, opencodeCfg string
 	if modelSel.Agent == "opencode" || plannerSel.Agent == "opencode" || reviewSel.Agent == "opencode" {
 		cfgRaw := envConfigDefault("NIGHTSHIFT_OPENCODE_CONFIG", cfg, "")
@@ -428,6 +504,8 @@ func resolveSpecFile(opts Options, path string) (*Spec, error) {
 		Created:         fmVal("created"),
 		ContentHash:     contentHash,
 		Base:            baseName,
+		DependsOn:       dependsOn,
+		Owns:            owns,
 		src:             src,
 	}, nil
 }

@@ -37,6 +37,12 @@ OPTIONAL frontmatter:
   review_model:  model for that review                              (default: opus)
   review_rounds: hand a rejecting review back to the agent to fix, up to this many
                  times, before the run finishes (0-5)                (default: 0)
+  depends_on:    comma list of other spec slugs this one builds on; it won't run
+                 until each is complete, and starts from a base that already
+                 contains their branches merged in
+  owns:          comma list of repo-relative paths this spec may change (a trailing
+                 "/" means a directory prefix, anything else an exact file); a
+                 change outside owns resets the iteration
 
 Precedence for the optional keys: CLI flag > this frontmatter > NIGHTSHIFT_* env
 > ~/.nightshift/config > default.
