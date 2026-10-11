@@ -24,8 +24,8 @@ func ValidSlug(s string) bool {
 const commentedConfig = `# nightshift config file.
 #
 # Precedence for these settings: CLI flag > spec frontmatter > NIGHTSHIFT_*
-# env var > this file > default. (max_concurrent is flag > env > this file
-# > default; frontmatter is never consulted for it.)
+# env var > this file > default. (max_concurrent and jobs are flag > env >
+# this file > default; frontmatter is never consulted for either.)
 #
 # Uncomment a line and set a value to override that default.
 
@@ -35,6 +35,9 @@ const commentedConfig = `# nightshift config file.
 # NIGHTSHIFT_MAX_ITER=10
 # NIGHTSHIFT_ITER_TIMEOUT=30m
 # NIGHTSHIFT_MAX_CONCURRENT=2
+# how many eligible specs 'run --next --jobs' can start at once, capped by
+# NIGHTSHIFT_MAX_CONCURRENT
+# NIGHTSHIFT_JOBS=1
 # NIGHTSHIFT_SBX_BIN=sbx
 # NIGHTSHIFT_CLAUDE_BIN=claude
 # NIGHTSHIFT_NOTIFY=on

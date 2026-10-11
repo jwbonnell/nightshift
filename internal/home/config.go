@@ -16,6 +16,7 @@ var configKeys = map[string]bool{
 	"NIGHTSHIFT_MAX_ITER":        true,
 	"NIGHTSHIFT_ITER_TIMEOUT":    true,
 	"NIGHTSHIFT_MAX_CONCURRENT":  true,
+	"NIGHTSHIFT_JOBS":            true,
 	"NIGHTSHIFT_SBX_BIN":         true,
 	"NIGHTSHIFT_CLAUDE_BIN":      true,
 	"NIGHTSHIFT_NOTIFY":          true,

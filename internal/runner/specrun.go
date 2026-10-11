@@ -78,6 +78,7 @@ type Options struct {
 	DryRun        bool
 	Base          string // "" = fall through to frontmatter/env/config/default
 	MaxConcurrent string // raw flag value ("" = unset)
+	Jobs          int    // --jobs flag value, 0 = unset; only valid with Next (resolveJobsCount)
 	Home          string
 	StateRoot     string    // default: <Home>/runs
 	Now           time.Time // stamps run.json "started" and PROGRESS.md lines; zero = time.Now()
