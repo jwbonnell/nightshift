@@ -228,6 +228,18 @@ func Run(opts Options) (Status, error) {
 		}
 		return runJobs(opts, limit, capSrc, jobs)
 	}
+	if opts.Next && opts.DryRun {
+		jobs, _, err := resolveJobsCount(opts, limit)
+		if err != nil {
+			return StatusError, err
+		}
+		if jobs > 1 {
+			if err := printJobsDryRun(opts, jobs, limit); err != nil {
+				return StatusError, err
+			}
+			return statusDryRun, nil
+		}
+	}
 	if opts.Next {
 		next, waits, err := selectNext(opts)
 		if err != nil {

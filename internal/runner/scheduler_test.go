@@ -511,3 +511,44 @@ func TestJobsStopsAtUntil(t *testing.T) {
 		t.Fatalf("calls = %v, want exactly [a] — b must not start once the --until deadline has passed", calls)
 	}
 }
+
+// TestJobsDryRun: `--next --jobs N --dry-run` prints the jobs plan —
+// what would start now, and what starts in the round right after — and
+// spawns or creates nothing.
+func TestJobsDryRun(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "a", "", repo)
+	writeReadySpec(t, homeDir, "b", "", repo)
+	writeReadySpec(t, homeDir, "c", "depends_on: a, b\n", repo)
+	stateRoot := home.RunsDir(homeDir)
+
+	spawnCalled := false
+	var stdout strings.Builder
+	opts := Options{
+		Next: true, DryRun: true, Jobs: 2, Home: homeDir, StateRoot: stateRoot,
+		Stdout: &stdout, Stderr: io.Discard, Stdin: strings.NewReader(""),
+		Spawn: func(ctx context.Context, args []string, stdout, stderr *linePrefixWriter) (Waiter, error) {
+			spawnCalled = true
+			return nil, fmt.Errorf("--dry-run must never spawn a child")
+		},
+	}
+	status, err := Run(opts)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if status != statusDryRun {
+		t.Fatalf("status = %v, want dry-run", status)
+	}
+	if spawnCalled {
+		t.Fatal("--jobs --dry-run must not spawn")
+	}
+	if _, serr := os.Stat(filepath.Join(stateRoot, "a", "run.json")); !os.IsNotExist(serr) {
+		t.Fatalf("--jobs --dry-run must not create state: %v", serr)
+	}
+
+	want := "jobs: 2 (max_concurrent 2)\nwould start: a, b\nthen: c (after a, b)\n"
+	if stdout.String() != want {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+	}
+}
