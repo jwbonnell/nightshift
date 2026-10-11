@@ -53,7 +53,6 @@ type run struct {
 
 	removeErr error         // Task 5: the explicit, pre-finish sb.Remove() result
 	prChecks  postRunReport // Task 5: computed once in finish(), reused by printSummary/resultBody/notify
-	err       error         // set by fail()/finalizeSync; returned alongside StatusError
 
 	deadline time.Time // the --until deadline computed by loop(), zero if unset
 

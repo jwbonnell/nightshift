@@ -86,7 +86,7 @@ func (r *run) resultBody(status Status) string {
 	var b strings.Builder
 
 	ended := r.opts.clockFn()().Format("2006-01-02T15:04:05Z07:00")
-	fmt.Fprintf(&b, "---\ntype: nightshift-result\nspec: %s\nstatus: %s\nstarted: %s\nended: %s\niterations: %d\ncommits: %d\nbranch: %s\nrepo: %s\nbase_ref: %s\nbase: %s\nnightshift: %s\n---\n\n",
+	fmt.Fprintf(&b, "---\ntype: nightshift-result\nspec: %s\nstatus: %s\nstarted: %s\nended: %s\niterations: %d\ncommits: %d\nbranch: %s\nrepo: %s\nbase_ref: %s\nbase: %s\nnightshift: %s\n",
 		sp.Slug, status, st.Started, ended, st.Iterations, st.Commits, st.Branch, sp.Repo, st.BaseRef, short(st.Base), r.version)
 	if r.reviewVerdict != "" {
 		fmt.Fprintf(&b, "review: %s\n", r.reviewVerdict)
@@ -131,8 +131,6 @@ func (r *run) resultBody(status Status) string {
 		}
 		b.WriteString("```\n\n")
 	}
-
-	fmt.Fprintf(&b, "## Review\n\n")
 
 	if r.reviewVerdict != "" {
 		fmt.Fprintf(&b, "## Review\n\n")
@@ -214,10 +212,11 @@ func (r *run) notifyText(status Status) (title, msg string) {
 	if r.prChecks.fails > 0 {
 		title += " (checks failed)"
 	}
+	msg = summaryLine(status, r.st)
 	if r.reviewVerdict != "" {
 		msg += fmt.Sprintf(" · review: %s", r.reviewVerdict)
 	}
-	return title, summaryLine(status, r.st)
+	return title, msg
 }
 
 // resolveNotifier honors Options.Notifier if injected, else resolves
@@ -257,8 +256,8 @@ func (r *run) notify(status Status) {
 		return
 	}
 	title, msg := r.notifyText(status)
-	urgent := status == StatusError || status == StatusRed || status == StatusStalled || r.prChecks.fails > 0 ||
-		r.reviewVerdict == "reject" || r.reviewVerdict == "error"
+	urgent := status == StatusError || status == StatusRed || status == StatusStalled ||
+		r.prChecks.fails > 0 || r.reviewVerdict == "reject" || r.reviewVerdict == "error"
 	n.Notify(title, msg, urgent)
 }
 
