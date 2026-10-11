@@ -73,7 +73,8 @@ usage:
   nightshift run <spec> [flags]         run one ready spec (nightshift run -h for flags)
   nightshift run --next [flags]         run the oldest eligible ready spec
   nightshift status [<slug>]            list runs, or show one run in detail
-  nightshift review <slug> [--model M]  sandboxed Claude review of a run's work
+  nightshift review <slug> [--model M] [--lens a,b]
+                                        sandboxed Claude review of a run's work
   nightshift version                    print the version
 `
 
@@ -528,15 +529,16 @@ func cmdStatus(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// cmdReview implements `nightshift review <slug> [--model M]`: a headless,
-// read-only Claude review of a run's work, in its own sbx sandbox. It
-// never changes the run's own status or exit code.
+// cmdReview implements `nightshift review <slug> [--model M] [--lens a,b]`:
+// a headless, read-only Claude review of a run's work, in its own sbx
+// sandbox. It never changes the run's own status or exit code.
 func cmdReview(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("nightshift review", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	model := fs.String("model", "", "")
+	lens := fs.String("lens", "", "")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: nightshift review <slug> [--model M]")
+		fmt.Fprintln(stderr, "usage: nightshift review <slug> [--model M] [--lens a,b]")
 	}
 
 	positional, err := parseLintFlags(fs, args)
@@ -558,6 +560,7 @@ func cmdReview(args []string, stdout, stderr io.Writer) int {
 		Home:   h,
 		Slug:   slug,
 		Model:  *model,
+		Lenses: *lens,
 		Now:    time.Now(),
 		Stdout: stdout,
 		Stderr: stderr,

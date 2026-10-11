@@ -72,6 +72,55 @@ func TestAutoReviewOnComplete(t *testing.T) {
 	}
 }
 
+// TestAutoReviewMultiLens checks that finish's automatic review (rounds
+// off) honors a multi-lens `review:` setting, not just the single
+// "general" lens: both lenses run, and the note/verdict reflect the
+// combined outcome, exactly as a multi-lens `nightshift review` would.
+func TestAutoReviewMultiLens(t *testing.T) {
+	repo := newSourceRepo(t)
+	sb := newStubSandbox()
+	sb.agent = completingAgent(t)
+	sb.verify = alwaysGreenVerify
+
+	rv := &seqReviewer{texts: []string{
+		"VERDICT: approve\nSUMMARY: requirements are met.\n",
+		"VERDICT: concerns\nSUMMARY: minor security nit.\n",
+	}}
+
+	opts := Options{Stdout: &bytes.Buffer{}, Reviewer: rv}
+	r := newTestRun(t, repo, "review: requirements, security\n", opts, sb)
+
+	status := r.loop()
+	finalStatus, err := r.finish(status)
+	if err != nil || finalStatus != StatusComplete {
+		t.Fatalf("finish: status=%v err=%v", finalStatus, err)
+	}
+	if len(rv.prompts) != 2 {
+		t.Fatalf("reviewer calls = %d, want 2", len(rv.prompts))
+	}
+	if !strings.Contains(rv.prompts[0], "Your lens is requirements.") {
+		t.Fatalf("prompt[0] not the requirements lens: %q", rv.prompts[0])
+	}
+	if !strings.Contains(rv.prompts[1], "Your lens is security.") {
+		t.Fatalf("prompt[1] not the security lens: %q", rv.prompts[1])
+	}
+	if r.reviewVerdict != "concerns" {
+		t.Fatalf("reviewVerdict = %q, want concerns", r.reviewVerdict)
+	}
+
+	data, err := os.ReadFile(r.reviewNote)
+	if err != nil {
+		t.Fatalf("read review note: %v", err)
+	}
+	note := string(data)
+	if !strings.Contains(note, "lenses: requirements, security\n") {
+		t.Fatalf("note missing lenses frontmatter:\n%s", note)
+	}
+	if !strings.Contains(note, "## requirements — approve\n") || !strings.Contains(note, "## security — concerns\n") {
+		t.Fatalf("note missing per-lens sections:\n%s", note)
+	}
+}
+
 func TestNoAutoReviewWhenDisabled(t *testing.T) {
 	repo := newSourceRepo(t)
 	sb := newStubSandbox()

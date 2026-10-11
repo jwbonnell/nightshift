@@ -27,6 +27,7 @@ type recordingReviewer struct {
 	ws          string
 	deadline    time.Time
 	hasDeadline bool
+	prompts     []string
 }
 
 func (s *recordingReviewer) Review(ctx context.Context, ws, model, prompt string) (string, error) {
@@ -34,6 +35,7 @@ func (s *recordingReviewer) Review(ctx context.Context, ws, model, prompt string
 	s.model = model
 	s.ws = ws
 	s.deadline, s.hasDeadline = ctx.Deadline()
+	s.prompts = append(s.prompts, prompt)
 	return s.text, s.err
 }
 
@@ -349,6 +351,89 @@ func TestReviewCommandInvalidIterTimeout(t *testing.T) {
 	if len(matches) != 0 {
 		t.Fatalf("expected no review notes, got %v", matches)
 	}
+}
+
+func TestReviewCommandLensFlag(t *testing.T) {
+	slug := "demo"
+	homeDir, _, _, _ := newReviewFixture(t, slug)
+	t.Setenv("NIGHTSHIFT_HOME", homeDir)
+
+	if err := os.MkdirAll(home.ReadyDir(homeDir), 0o755); err != nil {
+		t.Fatalf("mkdir ready: %v", err)
+	}
+	specPath := filepath.Join(home.ReadyDir(homeDir), slug+".md")
+	if err := os.WriteFile(specPath, []byte("---\nrepo: .\nverify: true\nreview: quality\n---\n\n# spec\n"), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+
+	t.Run("flag overrides the spec's review list", func(t *testing.T) {
+		rv := &recordingReviewer{text: "VERDICT: approve\n"}
+		withStubReviewer(t, rv)
+		var stdout, stderr bytes.Buffer
+		if exit := dispatch([]string{"review", slug, "--lens", "requirements,security"}, &stdout, &stderr, strings.NewReader("")); exit != 0 {
+			t.Fatalf("exit=%d stderr=%s", exit, stderr.String())
+		}
+		if rv.calls != 2 {
+			t.Fatalf("calls = %d, want 2", rv.calls)
+		}
+		if !strings.Contains(rv.prompts[0], "Your lens is requirements.") {
+			t.Fatalf("prompt[0] not the requirements lens: %q", rv.prompts[0])
+		}
+		if !strings.Contains(rv.prompts[1], "Your lens is security.") {
+			t.Fatalf("prompt[1] not the security lens: %q", rv.prompts[1])
+		}
+	})
+
+	t.Run("no flag uses the spec's review list", func(t *testing.T) {
+		rv := &recordingReviewer{text: "VERDICT: approve\n"}
+		withStubReviewer(t, rv)
+		var stdout, stderr bytes.Buffer
+		if exit := dispatch([]string{"review", slug}, &stdout, &stderr, strings.NewReader("")); exit != 0 {
+			t.Fatalf("exit=%d stderr=%s", exit, stderr.String())
+		}
+		if rv.calls != 1 {
+			t.Fatalf("calls = %d, want 1", rv.calls)
+		}
+		if !strings.Contains(rv.prompts[0], "Your lens is code quality.") {
+			t.Fatalf("prompt not the quality lens: %q", rv.prompts[0])
+		}
+	})
+
+	t.Run("neither flag nor spec setting uses general", func(t *testing.T) {
+		if err := os.Remove(specPath); err != nil {
+			t.Fatalf("remove spec: %v", err)
+		}
+		rv := &recordingReviewer{text: "VERDICT: approve\n"}
+		withStubReviewer(t, rv)
+		var stdout, stderr bytes.Buffer
+		if exit := dispatch([]string{"review", slug}, &stdout, &stderr, strings.NewReader("")); exit != 0 {
+			t.Fatalf("exit=%d stderr=%s", exit, stderr.String())
+		}
+		if rv.calls != 1 {
+			t.Fatalf("calls = %d, want 1", rv.calls)
+		}
+		if !strings.Contains(rv.prompts[0], "Review for, in priority order:") {
+			t.Fatalf("prompt not the general lens: %q", rv.prompts[0])
+		}
+	})
+
+	t.Run("unknown lens exits 1 with the exact error", func(t *testing.T) {
+		rv := &recordingReviewer{text: "VERDICT: approve\n"}
+		withStubReviewer(t, rv)
+		var stdout, stderr bytes.Buffer
+		exit := dispatch([]string{"review", slug, "--lens", "bogus"}, &stdout, &stderr, strings.NewReader(""))
+		if exit != 1 {
+			t.Fatalf("exit=%d, want 1; stderr=%s", exit, stderr.String())
+		}
+		wantErr := `unknown review lens "bogus" (built-in: general, requirements, quality, security; or add ` +
+			filepath.Join(home.LensesDir(homeDir), "bogus.md") + ")"
+		if !strings.Contains(stderr.String(), wantErr) {
+			t.Fatalf("stderr = %q, want to contain %q", stderr.String(), wantErr)
+		}
+		if rv.calls != 0 {
+			t.Fatalf("reviewer should not have been called")
+		}
+	})
 }
 
 func TestUsageListsReview(t *testing.T) {

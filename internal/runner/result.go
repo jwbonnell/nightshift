@@ -314,6 +314,17 @@ func (r *run) finish(status Status) (Status, error) {
 	return status, nil
 }
 
+// reviewer returns the Reviewer a review should use: r.opts.Reviewer when
+// a test has injected one, otherwise the real sbxReviewer built from the
+// run's own spec and options. Shared by runAutoReview and (Task 4) the
+// in-loop fix-round review, so both run the reviewer identically.
+func (r *run) reviewer() Reviewer {
+	if r.opts.Reviewer != nil {
+		return r.opts.Reviewer
+	}
+	return sbxReviewer{bin: r.opts.SbxBin, claudeBin: r.opts.ClaudeBin, slug: r.spec.Slug, opencodeBin: r.opts.OpencodeBin, opencodeConfig: r.spec.OpencodeCfg}
+}
+
 // runAutoReview runs the spec's automatic review (review: true, status
 // complete) and records the outcome on r for resultBody/notifyText to
 // report. A review failure, timeout or skip never touches r.err or the
@@ -334,10 +345,7 @@ func (r *run) runAutoReview() {
 
 	r.logf("review: start model=%s", r.spec.ReviewModel)
 
-	rv := r.opts.Reviewer
-	if rv == nil {
-		rv = sbxReviewer{bin: r.opts.SbxBin, claudeBin: r.opts.ClaudeBin, slug: r.spec.Slug, opencodeBin: r.opts.OpencodeBin, opencodeConfig: r.spec.OpencodeCfg}
-	}
+	rv := r.reviewer()
 
 	ctx, cancel := r.iterCtx(r.deadline, clock)
 	defer cancel()
@@ -355,6 +363,7 @@ func (r *run) runAutoReview() {
 		summary: reviewSummary(string(StatusComplete), strconv.Itoa(st.Iterations),
 			strconv.Itoa(st.Commits), short(st.Base), short(st.LastGreen), st.Branch),
 		model:    r.spec.ReviewModel,
+		lenses:   r.spec.Lenses,
 		now:      r.opts.Now,
 		ctxBase:  r.opts.Ctx,
 		deadline: r.deadline,

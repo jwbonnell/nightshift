@@ -603,6 +603,7 @@ type ReviewOptions struct {
 	StateRoot   string // default: <Home>/runs
 	Slug        string
 	Model       string   // --model flag; "" falls through to spec frontmatter/env/config/default
+	Lenses      string   // --lens flag (comma list or true/false); "" falls through to the spec's review setting, else "general"
 	Reviewer    Reviewer // nil = sbxReviewer
 	SbxBin      string   // default "sbx"
 	ClaudeBin   string   // default "claude"
@@ -722,6 +723,19 @@ func Review(opts ReviewOptions) (Status, error) {
 		}
 	}
 
+	lensVal := opts.Lenses
+	if lensVal == "" {
+		fmReview := home.Unquote(strings.TrimSpace(fm["review"]))
+		lensVal = pick(map[string]string{}, "review", "", fmReview, os.Getenv("NIGHTSHIFT_REVIEW"), cfg["NIGHTSHIFT_REVIEW"], "")
+	}
+	var lenses []string
+	if lensVal != "" {
+		lenses, err = parseReviewSetting(lensVal, opts.Home)
+		if err != nil {
+			return StatusError, err
+		}
+	}
+
 	fmIterTimeout := home.Unquote(strings.TrimSpace(fm["iter_timeout"]))
 	iterTimeout, err := parseIterTimeout(map[string]string{}, fmIterTimeout, os.Getenv("NIGHTSHIFT_ITER_TIMEOUT"), cfg["NIGHTSHIFT_ITER_TIMEOUT"])
 	if err != nil {
@@ -759,8 +773,9 @@ func Review(opts ReviewOptions) (Status, error) {
 		progress: progress,
 		summary: reviewSummary(st.Status, strconv.Itoa(st.Iterations), strconv.Itoa(st.Commits),
 			short(st.Base), short(st.LastGreen), st.Branch),
-		model: model,
-		now:   opts.Now,
+		model:  model,
+		lenses: lenses,
+		now:    opts.Now,
 	}
 
 	verdict, notePath, _, err := runReview(ctx, rv, params)
