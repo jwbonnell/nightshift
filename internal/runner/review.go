@@ -355,18 +355,6 @@ func (o *ReviewOptions) fill() {
 func Review(opts ReviewOptions) (Status, error) {
 	opts.fill()
 
-	data, err := os.ReadFile(filepath.Join(opts.StateRoot, opts.Slug, "run.json"))
-	if err != nil {
-		return StatusError, fmt.Errorf("no run state for %s", opts.Slug)
-	}
-	var st runState
-	if err := json.Unmarshal(data, &st); err != nil {
-		return StatusError, fmt.Errorf("no run state for %s", opts.Slug)
-	}
-	if st.Commits < 1 {
-		return StatusError, fmt.Errorf("nothing to review: %s has no commits since base", opts.Slug)
-	}
-
 	specLock, err := lock.TryAcquire(specLockPath(opts.StateRoot, opts.Slug), opts.Slug)
 	if err != nil {
 		var held *lock.HeldError
@@ -378,6 +366,18 @@ func Review(opts ReviewOptions) (Status, error) {
 		return StatusError, err
 	}
 	defer specLock.Release()
+
+	data, err := os.ReadFile(filepath.Join(opts.StateRoot, opts.Slug, "run.json"))
+	if err != nil {
+		return StatusError, fmt.Errorf("no run state for %s", opts.Slug)
+	}
+	var st runState
+	if err := json.Unmarshal(data, &st); err != nil {
+		return StatusError, fmt.Errorf("no run state for %s", opts.Slug)
+	}
+	if st.Commits < 1 {
+		return StatusError, fmt.Errorf("nothing to review: %s has no commits since base", opts.Slug)
+	}
 
 	specPath := ""
 	if p, ok := findCaseInsensitive(home.ReadyDir(opts.Home), opts.Slug+".md"); ok {
@@ -393,11 +393,18 @@ func Review(opts ReviewOptions) (Status, error) {
 		}
 	}
 
+	cfg, _ := home.ParseConfig(home.ConfigPath(opts.Home))
+
 	model := opts.Model
 	if model == "" {
-		cfg, _ := home.ParseConfig(home.ConfigPath(opts.Home))
 		fmModel := home.Unquote(strings.TrimSpace(fm["review_model"]))
 		model = pick(map[string]string{}, "review_model", "", fmModel, os.Getenv("NIGHTSHIFT_REVIEW_MODEL"), cfg["NIGHTSHIFT_REVIEW_MODEL"], defaultReviewModel)
+	}
+
+	fmIterTimeout := home.Unquote(strings.TrimSpace(fm["iter_timeout"]))
+	iterTimeout, err := parseIterTimeout(map[string]string{}, fmIterTimeout, os.Getenv("NIGHTSHIFT_ITER_TIMEOUT"), cfg["NIGHTSHIFT_ITER_TIMEOUT"])
+	if err != nil {
+		return StatusError, err
 	}
 
 	progress, _ := ReadScaffold(filepath.Join(opts.StateRoot, opts.Slug, "repo", "PROGRESS.md"))
@@ -407,7 +414,7 @@ func Review(opts ReviewOptions) (Status, error) {
 		rv = sbxReviewer{bin: opts.SbxBin, claudeBin: opts.ClaudeBin, slug: opts.Slug}
 	}
 
-	ctx, cancel := context.WithTimeout(opts.Ctx, defaultIterTimeout)
+	ctx, cancel := context.WithTimeout(opts.Ctx, iterTimeout)
 	defer cancel()
 
 	params := reviewParams{
