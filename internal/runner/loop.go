@@ -14,6 +14,10 @@ import (
 
 var fullSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
+// transientDelays are the backoff waits between transient-error retries
+// within a single iteration (spec Task 4): 1m, 5m, 15m.
+var transientDelays = [3]time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute}
+
 // validSHA reports an error if s does not look like a full commit id.
 func validSHA(what, s string) error {
 	if !fullSHA.MatchString(s) {
@@ -236,40 +240,66 @@ func (r *run) loop() Status {
 			return r.fail(err)
 		}
 
-		ctx, cancel := r.iterCtx(deadline, clock)
 		r.logf("iter %d (session %d) model=%s planning=%v", st.Iterations, session, model, planning)
-		r.writeAgentHeader(st.Iterations, session, model, planning, clock)
-		tail := &tailBuffer{max: 64 << 10}
-		var w io.Writer = tail
-		if r.agentLog != nil {
-			w = io.MultiWriter(r.agentLog, tail)
-		}
-		agentErr := r.sb.RunAgent(ctx, model, buildPrompt(sp, planning), w)
-		cancel()
-		res := parseAgentResult(tail.String())
-		switch {
-		case agentErr == context.DeadlineExceeded:
-			r.logf("iter %d timed out after %s", st.Iterations, sp.IterTimeout)
-		case agentErr != nil:
-			r.logf("iter %d agent exited: %v", st.Iterations, agentErr)
-		}
-		if res.IsError {
-			r.logf("iter %d agent error: %s", st.Iterations, res.Message)
-		}
-		if stopErr := r.sb.StopAgent(); stopErr != nil {
-			r.logf("iter %d stop agent: %v", st.Iterations, stopErr)
+
+		var agentErr error
+		var res agentResult
+		transientRetries := 0
+		for {
+			ctx, cancel := r.iterCtx(deadline, clock)
+			r.writeAgentHeader(st.Iterations, session, model, planning, clock)
+			tail := &tailBuffer{max: 64 << 10}
+			var w io.Writer = tail
+			if r.agentLog != nil {
+				w = io.MultiWriter(r.agentLog, tail)
+			}
+			agentErr = r.sb.RunAgent(ctx, model, buildPrompt(sp, planning), w)
+			cancel()
+			res = parseAgentResult(tail.String())
+			switch {
+			case agentErr == context.DeadlineExceeded:
+				r.logf("iter %d timed out after %s", st.Iterations, sp.IterTimeout)
+			case agentErr != nil:
+				r.logf("iter %d agent exited: %v", st.Iterations, agentErr)
+			}
+			if res.IsError {
+				r.logf("iter %d agent error: %s", st.Iterations, res.Message)
+			}
+			if stopErr := r.sb.StopAgent(); stopErr != nil {
+				r.logf("iter %d stop agent: %v", st.Iterations, stopErr)
+			}
+
+			if r.interrupted() { // D8: the agent/verify ctx was just cut short by a signal
+				r.captureDirty(st.Iterations)
+				_ = r.saveState()
+				return StatusInterrupted
+			}
+			if !deadline.IsZero() && !clock().Before(deadline) {
+				r.captureDirty(st.Iterations)
+				_ = r.saveState()
+				return StatusWindowClosed
+			}
+			if res.rateLimited() || !res.transient() || transientRetries >= 3 {
+				break
+			}
+
+			now := clock()
+			d := transientDelays[transientRetries]
+			if !deadline.IsZero() && !now.Add(d).Before(deadline) {
+				r.logf("iter %d transient API error (%s); window closes before retry", st.Iterations, res.Message)
+				r.captureDirty(st.Iterations)
+				_ = r.saveState()
+				return StatusWindowClosed
+			}
+			transientRetries++
+			r.logf("iter %d transient API error (%s); retry %d in %s", st.Iterations, res.Message, transientRetries, d)
+			if err := r.sleep(d); err != nil || r.interrupted() {
+				r.captureDirty(st.Iterations)
+				_ = r.saveState()
+				return StatusInterrupted
+			}
 		}
 
-		if r.interrupted() { // D8: the agent/verify ctx was just cut short by a signal
-			r.captureDirty(st.Iterations)
-			_ = r.saveState()
-			return StatusInterrupted
-		}
-		if !deadline.IsZero() && !clock().Before(deadline) {
-			r.captureDirty(st.Iterations)
-			_ = r.saveState()
-			return StatusWindowClosed
-		}
 		if res.rateLimited() {
 			r.logf("iter %d rate-limited: %s", st.Iterations, res.Message)
 			r.captureDirty(st.Iterations)

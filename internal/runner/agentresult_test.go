@@ -90,6 +90,29 @@ func TestFirstLineRunes(t *testing.T) {
 	}
 }
 
+func TestAgentResultTransient(t *testing.T) {
+	cases := []struct {
+		name string
+		res  agentResult
+		want bool
+	}{
+		{"529", agentResult{IsError: true, APIStatus: 529, Message: "Overloaded"}, true},
+		{"503", agentResult{IsError: true, APIStatus: 503}, true},
+		{"overloaded message, no status", agentResult{IsError: true, Message: "the API is overloaded, try again"}, true},
+		{"429 is rate-limited, not transient", agentResult{IsError: true, APIStatus: 429, Message: "overloaded"}, false},
+		{"rate-limit message, not transient", agentResult{IsError: true, Message: "You've hit your session limit · resets 7am (UTC)"}, false},
+		{"plain failure", agentResult{IsError: true, APIStatus: 400, Message: "bad request"}, false},
+		{"success", agentResult{IsError: false}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.res.transient(); got != c.want {
+				t.Errorf("transient() = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
 func TestTailBufferKeepsOnlyLastMaxBytes(t *testing.T) {
 	tb := &tailBuffer{max: 10}
 	n, err := tb.Write([]byte("0123456789abcdef"))

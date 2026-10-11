@@ -10,6 +10,13 @@ import (
 // hit your session limit · resets 7am (UTC)".
 var rateLimitRe = regexp.MustCompile(`(?i)hit your .*limit`)
 
+// overloadedRe matches Claude's overload result message.
+var overloadedRe = regexp.MustCompile(`(?i)overloaded`)
+
+// transientAPIStatuses are HTTP statuses worth a short, bounded retry
+// rather than treating the iteration as a failed agent run.
+var transientAPIStatuses = map[int]bool{500: true, 502: true, 503: true, 504: true, 529: true}
+
 // agentResult is the information loop() needs from the agent's structured
 // result line (one JSON object per `claude -p --output-format json`
 // invocation, found among possible sbx banner lines and other noise).
@@ -62,6 +69,17 @@ func parseAgentResult(out string) agentResult {
 // limit directly.
 func (a agentResult) rateLimited() bool {
 	return a.APIStatus == 429 || rateLimitRe.MatchString(a.Message)
+}
+
+// transient reports whether a represents an overload or server error worth
+// a short, bounded retry rather than treating the iteration as a failed
+// agent run: an HTTP 500, 502, 503, 504 or 529, or a result message that
+// names an overload directly. A rate-limited result is never transient.
+func (a agentResult) transient() bool {
+	if a.rateLimited() {
+		return false
+	}
+	return transientAPIStatuses[a.APIStatus] || overloadedRe.MatchString(a.Message)
 }
 
 // firstLineRunes returns s's first line, cut to at most n runes.
