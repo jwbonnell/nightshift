@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/jwbonnell/nightshift/internal/agent"
 )
 
 // childWaitDelay bounds how long execStream/execSplit wait for a child's
@@ -41,7 +43,7 @@ const cleanupTimeout = 60 * time.Second
 type Sandbox interface {
 	Available() bool
 	Create(mountDir string, egress []string) error
-	RunAgent(ctx context.Context, model, prompt string, logw io.Writer) error
+	RunAgent(ctx context.Context, ag agent.Agent, inv agent.Invocation, prompt string, logw io.Writer) error
 	StopAgent() error
 	Git(ctx context.Context, args ...string) (string, error)
 	ResetVerify() error
@@ -118,10 +120,9 @@ func (s *sbxSandbox) Create(mountDir string, egress []string) error {
 	return nil
 }
 
-func (s *sbxSandbox) RunAgent(ctx context.Context, model, prompt string, logw io.Writer) error {
-	_, err := execStream(ctx, strings.NewReader(prompt), logw, s.bin,
-		"exec", "-w", s.mountDir, s.agentName, s.claudeBin,
-		"-p", "--model", model, "--output-format", "json", "--permission-mode", "bypassPermissions")
+func (s *sbxSandbox) RunAgent(ctx context.Context, ag agent.Agent, inv agent.Invocation, prompt string, logw io.Writer) error {
+	args := append([]string{"exec", "-w", s.mountDir, s.agentName}, ag.Argv(inv)...)
+	_, err := execStream(ctx, strings.NewReader(prompt), logw, s.bin, args...)
 	return err
 }
 

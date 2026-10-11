@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jwbonnell/nightshift/internal/agent"
 )
 
 var fullSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -203,6 +205,27 @@ func (r *run) loop() Status {
 	st.StopReason = ""
 	r.deadline = deadline
 
+	// codeAg/planAg are built once per run, directly from the spec's raw
+	// model strings (resolveSpecFile doesn't parse selectors yet — that
+	// moves here in a later step). With no selector syntax in use, this
+	// is exactly agent.Selector{Agent: "claude", Model: sp.Model/Planner}.
+	codeSel, err := agent.ParseSelector(sp.Model)
+	if err != nil {
+		return r.fail(err)
+	}
+	codeAg, err := agent.New(codeSel, agent.Settings{ClaudeBin: r.opts.ClaudeBin})
+	if err != nil {
+		return r.fail(err)
+	}
+	planSel, err := agent.ParseSelector(sp.Planner)
+	if err != nil {
+		return r.fail(err)
+	}
+	planAg, err := agent.New(planSel, agent.Settings{ClaudeBin: r.opts.ClaudeBin})
+	if err != nil {
+		return r.fail(err)
+	}
+
 	redStreak, noProgress, session := 0, 0, 0
 
 	for session < sp.MaxIter {
@@ -217,8 +240,10 @@ func (r *run) loop() Status {
 		st.Iterations++
 		planning := needPlan
 		model := sp.Model
+		ag, sel, role := codeAg, codeSel, agent.RoleCode
 		if planning {
 			model = sp.Planner
+			ag, sel, role = planAg, planSel, agent.RolePlan
 		}
 
 		progressBefore := r.scaffoldRead(r.progressPath())
@@ -235,9 +260,10 @@ func (r *run) loop() Status {
 		if r.agentLog != nil {
 			w = io.MultiWriter(r.agentLog, tail)
 		}
-		agentErr := r.sb.RunAgent(ctx, model, buildPrompt(sp, planning), w)
+		inv := agent.Invocation{Role: role, Model: sel.Model}
+		agentErr := r.sb.RunAgent(ctx, ag, inv, buildPrompt(sp, planning), w)
 		cancel()
-		res := parseAgentResult(tail.String())
+		res := ag.Parse(tail.String())
 		switch {
 		case agentErr == context.DeadlineExceeded:
 			r.logf("iter %d timed out after %s", st.Iterations, sp.IterTimeout)
@@ -261,7 +287,7 @@ func (r *run) loop() Status {
 			_ = r.saveState()
 			return StatusWindowClosed
 		}
-		if res.rateLimited() {
+		if ag.RateLimited(res) {
 			r.logf("iter %d rate-limited: %s", st.Iterations, res.Message)
 			r.captureDirty(st.Iterations)
 			st.StopReason = res.Message

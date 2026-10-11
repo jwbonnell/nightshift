@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jwbonnell/nightshift/internal/agent"
 	"github.com/jwbonnell/nightshift/internal/home"
 )
 
@@ -193,8 +194,14 @@ func TestRunAgentArgvAndStdin(t *testing.T) {
 	stdinFile := filepath.Join(t.TempDir(), "stdin.txt")
 	t.Setenv("FAKE_SBX_STDIN_FILE", stdinFile)
 
+	ag, err := agent.New(agent.Selector{Agent: "claude"}, agent.Settings{ClaudeBin: "claude"})
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+	inv := agent.Invocation{Role: agent.RoleCode, Model: "sonnet"}
+
 	var logw strings.Builder
-	err := sb.RunAgent(context.Background(), "sonnet", "the prompt text", &logw)
+	err = sb.RunAgent(context.Background(), ag, inv, "the prompt text", &logw)
 	if err != nil {
 		t.Fatalf("RunAgent: %v", err)
 	}

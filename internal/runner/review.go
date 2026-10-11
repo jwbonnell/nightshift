@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jwbonnell/nightshift/internal/agent"
 	"github.com/jwbonnell/nightshift/internal/gitx"
 	"github.com/jwbonnell/nightshift/internal/home"
 	"github.com/jwbonnell/nightshift/internal/lock"
@@ -160,8 +161,21 @@ func (rv sbxReviewer) name() string {
 
 // Review creates a fresh sandbox mounting ws, runs claude in it with only
 // Read, Grep and Glob tools and no permission-bypass flag, and always
-// removes the sandbox afterward — even when create or exec fails.
+// removes the sandbox afterward — even when create or exec fails. model
+// is a raw agent selector (see internal/agent); today it's always a bare
+// or claude/<model> selector, since review_model doesn't yet accept
+// opencode selectors.
 func (rv sbxReviewer) Review(ctx context.Context, ws, model, prompt string) (string, error) {
+	sel, err := agent.ParseSelector(model)
+	if err != nil {
+		return "", err
+	}
+	ag, err := agent.New(sel, agent.Settings{ClaudeBin: rv.claudeBin})
+	if err != nil {
+		return "", err
+	}
+	inv := agent.Invocation{Role: agent.RoleReview, Model: sel.Model, ReadOnly: true}
+
 	name := rv.name()
 	_, _ = execStream(context.Background(), nil, io.Discard, rv.bin, "rm", "-f", name)
 	defer func() {
@@ -175,28 +189,21 @@ func (rv sbxReviewer) Review(ctx context.Context, ws, model, prompt string) (str
 	}
 
 	var stdout, stderr bytes.Buffer
-	err := execSplit(ctx, strings.NewReader(prompt), &stdout, &stderr, rv.bin,
-		"exec", "-w", ws, name, rv.claudeBin,
-		"-p", "--model", model, "--tools", "Read,Grep,Glob", "--disallowedTools", "mcp__*", "--output-format", "json")
+	args := append([]string{"exec", "-w", ws, name}, ag.Argv(inv)...)
+	err = execSplit(ctx, strings.NewReader(prompt), &stdout, &stderr, rv.bin, args...)
 	out := stripSbxBanner(stdout.String())
 	if err != nil {
 		return "", fmt.Errorf("exec: %w: %s", err, firstBytes(out, 500))
 	}
 
-	var resp struct {
-		Result  *string `json:"result"`
-		IsError bool    `json:"is_error"`
-	}
-	if jerr := json.Unmarshal([]byte(out), &resp); jerr != nil {
-		return "", fmt.Errorf("parse review output: %v: %s", jerr, firstBytes(out, 500))
-	}
-	if resp.Result == nil {
+	res := ag.Parse(out)
+	if !res.Found {
 		return "", fmt.Errorf("review output missing result: %s", firstBytes(out, 500))
 	}
-	if resp.IsError {
+	if res.IsError {
 		return "", fmt.Errorf("review reported an error: %s", firstBytes(out, 500))
 	}
-	return *resp.Result, nil
+	return res.Text, nil
 }
 
 // firstBytes returns the first n bytes of s, unchanged if shorter.
