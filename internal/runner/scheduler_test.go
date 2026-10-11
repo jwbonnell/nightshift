@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -43,12 +44,15 @@ func (w *fakeWaiter) Pid() int { return 0 }
 // childScript describes one slug's scripted child: its exit code, the
 // run.json status it writes (as if it were the real child process) right
 // before "exiting" ("" writes nothing, simulating a child that never got
-// as far as creating state — e.g. a busy exit), and an optional block gate
-// for concurrency tests.
+// as far as creating state — e.g. a busy exit), an optional block gate
+// for concurrency tests, and whether it writes the usage-limit marker
+// before exiting (simulating a real child that hit the Claude limit).
 type childScript struct {
-	exit      int
-	runStatus string
-	block     chan struct{}
+	exit        int
+	runStatus   string
+	block       chan struct{}
+	writeMarker bool
+	afterWait   func() // called after block releases but before Wait returns; tests use it to flip shared test state deterministically
 }
 
 // slugFromRunArgs extracts the spec slug from a scheduler-built child argv
@@ -93,6 +97,12 @@ func (w *scriptedChildWaiter) Wait() error {
 	if w.sc.block != nil {
 		<-w.sc.block
 	}
+	if w.sc.writeMarker {
+		hit := limitHit{ResetAt: time.Now().Add(time.Hour)}
+		if err := writeLimitMarker(w.stateRoot, hit, time.Now(), w.slug, time.Hour); err != nil {
+			w.t.Fatalf("write limit marker: %v", err)
+		}
+	}
 	if w.sc.runStatus != "" {
 		dir := filepath.Join(w.stateRoot, w.slug)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -102,6 +112,9 @@ func (w *scriptedChildWaiter) Wait() error {
 		if err := os.WriteFile(filepath.Join(dir, "run.json"), []byte(runJSON), 0o644); err != nil {
 			w.t.Fatalf("write run.json: %v", err)
 		}
+	}
+	if w.sc.afterWait != nil {
+		w.sc.afterWait()
 	}
 	if w.sc.exit == 0 {
 		return nil
@@ -372,4 +385,129 @@ func TestJobsExitCodes(t *testing.T) {
 			t.Fatalf("ExitCode(%v) = %d, want 0", status, ExitCode(status))
 		}
 	})
+}
+
+// waitForSchedulerCalls polls calls (guarded by callsMu) until it holds at
+// least n entries, failing the test after 2s.
+func waitForSchedulerCalls(t *testing.T, calls *[]string, callsMu *sync.Mutex, n int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		callsMu.Lock()
+		got := len(*calls)
+		callsMu.Unlock()
+		if got >= n {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %d spawn calls", n)
+}
+
+// TestJobsStopsOnLimitMarker: a child that hits the usage limit writes the
+// marker itself (just as a real single run would) right before exiting
+// rate-limited. Once that marker is on disk, the scheduler must not start
+// a second, otherwise-eligible spec — even though nothing about that
+// second spec's own eligibility changed.
+func TestJobsStopsOnLimitMarker(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "a", "", repo)
+	stateRoot := home.RunsDir(homeDir)
+
+	blockA := make(chan struct{})
+	scripts := map[string]childScript{
+		"a": {exit: 9, runStatus: "rate-limited", block: blockA, writeMarker: true},
+	}
+	var calls []string
+	var callsMu sync.Mutex
+	spawn := fakeSchedulerSpawner(t, stateRoot, scripts, &calls, &callsMu)
+
+	opts := Options{
+		Next: true, Jobs: 2, Home: homeDir, StateRoot: stateRoot,
+		Stdout: io.Discard, Stderr: io.Discard, Stdin: strings.NewReader(""), Spawn: spawn,
+	}
+
+	done := make(chan struct{})
+	var status Status
+	var runErr error
+	go func() {
+		defer close(done)
+		status, runErr = Run(opts)
+	}()
+
+	waitForSchedulerCalls(t, &calls, &callsMu, 1)
+	// Only now does the second, independent spec exist — so the scheduler
+	// can only have skipped it below because of the marker, not because it
+	// was never offered.
+	writeReadySpec(t, homeDir, "b", "", repo)
+	close(blockA)
+	<-done
+
+	if runErr != nil {
+		t.Fatalf("Run: %v", runErr)
+	}
+	if status != statusJobsDone {
+		t.Fatalf("status = %v, want jobs-done", status)
+	}
+	if len(calls) != 1 || calls[0] != "a" {
+		t.Fatalf("calls = %v, want exactly [a] — b must not start once the limit marker is active", calls)
+	}
+}
+
+// TestJobsStopsAtUntil: once the clock reaches the --until deadline, the
+// scheduler must stop starting new, otherwise-eligible specs — but it
+// still waits for and records whatever already started.
+func TestJobsStopsAtUntil(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "a", "", repo)
+	stateRoot := home.RunsDir(homeDir)
+
+	ref := time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)
+	deadline := parseUntil("09:00", ref)
+	var pastDeadline atomic.Bool
+	clock := func() time.Time {
+		if pastDeadline.Load() {
+			return deadline.Add(time.Minute)
+		}
+		return ref
+	}
+
+	blockA := make(chan struct{})
+	scripts := map[string]childScript{
+		"a": {exit: 0, runStatus: "complete", block: blockA, afterWait: func() { pastDeadline.Store(true) }},
+	}
+	var calls []string
+	var callsMu sync.Mutex
+	spawn := fakeSchedulerSpawner(t, stateRoot, scripts, &calls, &callsMu)
+
+	opts := Options{
+		Next: true, Jobs: 2, Until: "09:00", Home: homeDir, StateRoot: stateRoot,
+		Stdout: io.Discard, Stderr: io.Discard, Stdin: strings.NewReader(""), Spawn: spawn,
+	}
+	opts.clock = clock
+
+	done := make(chan struct{})
+	var status Status
+	var runErr error
+	go func() {
+		defer close(done)
+		status, runErr = Run(opts)
+	}()
+
+	waitForSchedulerCalls(t, &calls, &callsMu, 1)
+	writeReadySpec(t, homeDir, "b", "", repo)
+	close(blockA)
+	<-done
+
+	if runErr != nil {
+		t.Fatalf("Run: %v", runErr)
+	}
+	if status != statusJobsDone {
+		t.Fatalf("status = %v, want jobs-done", status)
+	}
+	if len(calls) != 1 || calls[0] != "a" {
+		t.Fatalf("calls = %v, want exactly [a] — b must not start once the --until deadline has passed", calls)
+	}
 }

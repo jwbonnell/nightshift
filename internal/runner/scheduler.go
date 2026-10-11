@@ -109,10 +109,10 @@ type jobsResult struct {
 // eligible specs at once as child "nightshift run <path>" processes,
 // starting dependents as their dependencies finish, never starting the
 // same spec twice in this invocation, and stops starting new work once
-// nothing is eligible or the context is cancelled (D8) — it still waits
-// for whatever is already running. --until/the usage-limit-marker stop
-// conditions and signal forwarding to children are not implemented yet;
-// see PROGRESS.md.
+// nothing is eligible, the --until window has ended, the usage-limit
+// marker is active, or the context is cancelled (D8) — it still waits
+// for whatever is already running. Signal forwarding to children is not
+// implemented yet; see PROGRESS.md.
 func runJobs(opts Options, limit int, capSrc string, jobs int) (Status, error) {
 	_ = capSrc
 	spawn := opts.Spawn
@@ -135,8 +135,21 @@ func runJobs(opts Options, limit int, capSrc string, jobs int) (Status, error) {
 		ctx = context.Background()
 	}
 
+	// deadline is resolved once, like loop()'s own --until deadline:
+	// parseUntil anchors "next occurrence of HH:MM" to ref, so calling it
+	// again with a ref already past the first deadline would roll forward
+	// to the next day instead of reporting the window closed.
+	deadline := parseUntil(opts.Until, opts.clockFn()())
+
 	startEligible := func() {
 		for running < jobs && !opts.interrupted() {
+			now := opts.clockFn()()
+			if !deadline.IsZero() && !now.Before(deadline) {
+				return
+			}
+			if readActiveLimit(opts.StateRoot, now, true) != nil {
+				return
+			}
 			cands, _, err := selectNextCandidates(opts)
 			if err != nil {
 				return
