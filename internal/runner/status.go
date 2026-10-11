@@ -182,6 +182,32 @@ func PrintStatusDetail(w io.Writer, homeDir, stateRoot, slug string) error {
 	}
 	fmt.Fprintf(w, "latest result: %s\n", latest)
 
+	latestReview := "none"
+	if matches, err := filepath.Glob(filepath.Join(home.ResultsDir(homeDir), slug+"-*-review.md")); err == nil && len(matches) > 0 {
+		var newest string
+		var newestMod int64
+		for _, m := range matches {
+			fi, err := os.Stat(m)
+			if err != nil {
+				continue
+			}
+			if mod := fi.ModTime().UnixNano(); newest == "" || mod > newestMod {
+				newest, newestMod = m, mod
+			}
+		}
+		if newest != "" {
+			verdict := "unknown"
+			if data, err := os.ReadFile(newest); err == nil {
+				fm := home.ParseFrontmatter(data)
+				if v := home.Unquote(strings.TrimSpace(fm["verdict"])); v != "" {
+					verdict = v
+				}
+			}
+			latestReview = fmt.Sprintf("%s — %s", verdict, newest)
+		}
+	}
+	fmt.Fprintf(w, "latest review: %s\n", latestReview)
+
 	fmt.Fprintf(w, "review: git -C %s log --oneline %s..%s\n", st.Repo, short(st.Base), reviewRefFor(&st, slug))
 	return nil
 }

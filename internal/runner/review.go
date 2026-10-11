@@ -5,17 +5,20 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/jwbonnell/nightshift/internal/gitx"
 	"github.com/jwbonnell/nightshift/internal/home"
+	"github.com/jwbonnell/nightshift/internal/lock"
 )
 
 // reviewDiffMax caps the diff.patch written into a review workspace;
@@ -291,4 +294,141 @@ func runReview(ctx context.Context, rv Reviewer, p reviewParams) (verdict, noteP
 		return verdict, "", err
 	}
 	return verdict, notePath, nil
+}
+
+// ReviewOptions configures `nightshift review <slug>`: a one-shot,
+// headless review of a prior (or in-progress) run's work, independent of
+// that run's own status.
+type ReviewOptions struct {
+	Home      string
+	StateRoot string // default: <Home>/runs
+	Slug      string
+	Model     string   // --model flag; "" falls through to spec frontmatter/env/config/default
+	Reviewer  Reviewer // nil = sbxReviewer
+	SbxBin    string   // default "sbx"
+	ClaudeBin string   // default "claude"
+	Now       time.Time
+	Ctx       context.Context
+	Stdout    io.Writer
+	Stderr    io.Writer
+}
+
+func (o *ReviewOptions) fill() {
+	if o.Now.IsZero() {
+		o.Now = time.Now()
+	}
+	if o.StateRoot == "" {
+		o.StateRoot = home.RunsDir(o.Home)
+	}
+	if o.Ctx == nil {
+		o.Ctx = context.Background()
+	}
+	if o.Stdout == nil {
+		o.Stdout = io.Discard
+	}
+	if o.Stderr == nil {
+		o.Stderr = io.Discard
+	}
+
+	cfg, _ := home.ParseConfig(home.ConfigPath(o.Home))
+	if o.SbxBin == "" {
+		o.SbxBin = envConfigDefault("NIGHTSHIFT_SBX_BIN", cfg, "sbx")
+	}
+	if o.ClaudeBin == "" {
+		o.ClaudeBin = envConfigDefault("NIGHTSHIFT_CLAUDE_BIN", cfg, "claude")
+	}
+}
+
+// Review runs `nightshift review <slug>`: it loads the run's state,
+// builds a review workspace at the reviewed ref, runs the reviewer, and
+// writes a review note — exactly like an automatic review in finish,
+// except there's no live *run and the outcome never touches anything but
+// the note and this function's own return. A busy spec lock mirrors
+// Run's own busy handling (same message, StatusBusy); any other failure
+// before a note could be attempted (no run state, no commits, a lock
+// error) is StatusError with a descriptive err. Once runReview is
+// reached, the "review: <verdict> — <note path>" line is printed to
+// Stdout whatever the outcome — including a failed review, which still
+// returns StatusError (exit 1) alongside the written "error" note.
+func Review(opts ReviewOptions) (Status, error) {
+	opts.fill()
+
+	data, err := os.ReadFile(filepath.Join(opts.StateRoot, opts.Slug, "run.json"))
+	if err != nil {
+		return StatusError, fmt.Errorf("no run state for %s", opts.Slug)
+	}
+	var st runState
+	if err := json.Unmarshal(data, &st); err != nil {
+		return StatusError, fmt.Errorf("no run state for %s", opts.Slug)
+	}
+	if st.Commits < 1 {
+		return StatusError, fmt.Errorf("nothing to review: %s has no commits since base", opts.Slug)
+	}
+
+	specLock, err := lock.TryAcquire(specLockPath(opts.StateRoot, opts.Slug), opts.Slug)
+	if err != nil {
+		var held *lock.HeldError
+		if errors.As(err, &held) {
+			fmt.Fprintf(opts.Stderr, "spec %s is already running (pid %d, since %s). Wait for it to finish. (%s)\n",
+				opts.Slug, held.Holder.PID, held.Holder.Start.Format("15:04"), held.Path)
+			return StatusBusy, nil
+		}
+		return StatusError, err
+	}
+	defer specLock.Release()
+
+	specPath := ""
+	if p, ok := findCaseInsensitive(home.ReadyDir(opts.Home), opts.Slug+".md"); ok {
+		specPath = p
+	} else if p, ok := findCaseInsensitive(home.DoneDir(opts.Home), opts.Slug+".md"); ok {
+		specPath = p
+	}
+
+	var fm map[string]string
+	if specPath != "" {
+		if raw, rerr := os.ReadFile(specPath); rerr == nil {
+			fm = home.ParseFrontmatter(raw)
+		}
+	}
+
+	model := opts.Model
+	if model == "" {
+		cfg, _ := home.ParseConfig(home.ConfigPath(opts.Home))
+		fmModel := home.Unquote(strings.TrimSpace(fm["review_model"]))
+		model = pick(map[string]string{}, "review_model", "", fmModel, os.Getenv("NIGHTSHIFT_REVIEW_MODEL"), cfg["NIGHTSHIFT_REVIEW_MODEL"], defaultReviewModel)
+	}
+
+	progress, _ := ReadScaffold(filepath.Join(opts.StateRoot, opts.Slug, "repo", "PROGRESS.md"))
+
+	rv := opts.Reviewer
+	if rv == nil {
+		rv = sbxReviewer{bin: opts.SbxBin, claudeBin: opts.ClaudeBin, slug: opts.Slug}
+	}
+
+	ctx, cancel := context.WithTimeout(opts.Ctx, defaultIterTimeout)
+	defer cancel()
+
+	params := reviewParams{
+		home:      opts.Home,
+		stateRoot: opts.StateRoot,
+		slug:      opts.Slug,
+		repo:      st.Repo,
+		base:      st.Base,
+		ref:       reviewRefFor(&st, opts.Slug),
+		specPath:  specPath,
+		progress:  progress,
+		summary: reviewSummary(st.Status, strconv.Itoa(st.Iterations), strconv.Itoa(st.Commits),
+			short(st.Base), short(st.LastGreen), st.Branch),
+		model: model,
+		now:   opts.Now,
+	}
+
+	verdict, notePath, err := runReview(ctx, rv, params)
+	if notePath != "" {
+		fmt.Fprintf(opts.Stdout, "review: %s — %s\n", verdict, notePath)
+	}
+	if err != nil {
+		return StatusError, err
+	}
+	return StatusComplete, nil
 }
