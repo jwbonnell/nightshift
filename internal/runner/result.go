@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jwbonnell/nightshift/internal/gitx"
 	"github.com/jwbonnell/nightshift/internal/home"
@@ -69,6 +70,12 @@ func summaryLine(status Status, st *runState) string {
 	case StatusInterrupted:
 		return "The run was interrupted. Uncommitted work was saved as a patch; re-run to continue."
 	case StatusRateLimited:
+		if st.LimitReset != "" {
+			if t, err := time.Parse(time.RFC3339, st.LimitReset); err == nil {
+				return fmt.Sprintf("Hit the Claude usage limit (%s); it resets %s, outside this run's window. Nothing was lost; re-run after it resets.",
+					st.StopReason, t.In(time.Local).Format("Mon 15:04"))
+			}
+		}
 		return fmt.Sprintf("Hit the Claude usage limit (%s). Nothing was lost; re-run after it resets.", st.StopReason)
 	case StatusError:
 		return "The runner hit an error and stopped; nothing was recorded from the failing step."
@@ -86,8 +93,16 @@ func (r *run) resultBody(status Status) string {
 	var b strings.Builder
 
 	ended := r.opts.clockFn()().Format("2006-01-02T15:04:05Z07:00")
-	fmt.Fprintf(&b, "---\ntype: nightshift-result\nspec: %s\nstatus: %s\nstarted: %s\nended: %s\niterations: %d\ncommits: %d\nbranch: %s\nrepo: %s\nbase_ref: %s\nbase: %s\nnightshift: %s\n",
-		sp.Slug, status, st.Started, ended, st.Iterations, st.Commits, st.Branch, sp.Repo, st.BaseRef, short(st.Base), r.version)
+	fmt.Fprintf(&b, "---\ntype: nightshift-result\nspec: %s\nstatus: %s\nstarted: %s\nended: %s\niterations: %d\ncommits: %d\nbranch: %s\nrepo: %s\nbase_ref: %s\nbase: %s\n",
+		sp.Slug, status, st.Started, ended, st.Iterations, st.Commits, st.Branch, sp.Repo, st.BaseRef, short(st.Base))
+	if status == StatusRateLimited {
+		limitReset := st.LimitReset
+		if limitReset == "" {
+			limitReset = "unknown"
+		}
+		fmt.Fprintf(&b, "limit_reset: %s\n", limitReset)
+	}
+	fmt.Fprintf(&b, "nightshift: %s\n", r.version)
 	if r.reviewVerdict != "" {
 		fmt.Fprintf(&b, "review: %s\n", r.reviewVerdict)
 	}

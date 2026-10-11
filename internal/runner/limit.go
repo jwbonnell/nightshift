@@ -1,7 +1,11 @@
 package runner
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -76,6 +80,114 @@ func resolveLimitInt(key string, cfg map[string]string, def int) (int, error) {
 		return 0, fmt.Errorf("%s=%q: want a positive integer", key, raw)
 	}
 	return n, nil
+}
+
+// sleepFor waits for d, honoring opts.Sleep if injected; otherwise it runs
+// a real timer that returns ctx.Err() early if opts.Ctx is cancelled. A nil
+// opts.Ctx defaults to context.Background(), matching Options.interrupted.
+func sleepFor(opts Options, d time.Duration) error {
+	ctx := opts.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if opts.Sleep != nil {
+		return opts.Sleep(ctx, d)
+	}
+	if d <= 0 {
+		return nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// usageLimitMarkerName is the per-state-root marker file recording an
+// active Claude usage limit; run/--next/nightshift pr consult it (Task 5)
+// before starting new work.
+const usageLimitMarkerName = ".usage-limit"
+
+// limitMarker is the on-disk JSON shape of the usage-limit marker file.
+type limitMarker struct {
+	ResetAt  string `json:"reset_at"`
+	Weekly   bool   `json:"weekly"`
+	Recorded string `json:"recorded"`
+	By       string `json:"by"`
+}
+
+func limitMarkerPath(stateRoot string) string {
+	return filepath.Join(stateRoot, usageLimitMarkerName)
+}
+
+// readLimitMarkerRaw reads and parses the marker file with no expiry
+// handling (readActiveLimit, Task 5, adds that); nil on any read/parse
+// error or if the file doesn't exist.
+func readLimitMarkerRaw(stateRoot string) *limitMarker {
+	data, err := os.ReadFile(limitMarkerPath(stateRoot))
+	if err != nil {
+		return nil
+	}
+	var m limitMarker
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil
+	}
+	return &m
+}
+
+// writeLimitMarker records hit as the active usage limit for stateRoot, by
+// slug by, as of now. A zero hit.ResetAt is stored as now+fallback. An
+// existing marker whose reset_at is later than the new one is kept as-is.
+func writeLimitMarker(stateRoot string, hit limitHit, now time.Time, by string, fallback time.Duration) error {
+	resetAt := hit.ResetAt
+	if resetAt.IsZero() {
+		resetAt = now.Add(fallback)
+	}
+
+	if existing := readLimitMarkerRaw(stateRoot); existing != nil {
+		if t, err := time.Parse(time.RFC3339, existing.ResetAt); err == nil && t.After(resetAt) {
+			return nil
+		}
+	}
+
+	m := limitMarker{
+		ResetAt:  resetAt.UTC().Format(time.RFC3339),
+		Weekly:   hit.Weekly,
+		Recorded: now.UTC().Format(time.RFC3339),
+		By:       by,
+	}
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+
+	if err := os.MkdirAll(stateRoot, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(stateRoot, usageLimitMarkerName+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	_, werr := tmp.Write(data)
+	cerr := tmp.Close()
+	if werr != nil {
+		os.Remove(tmpPath)
+		return werr
+	}
+	if cerr != nil {
+		os.Remove(tmpPath)
+		return cerr
+	}
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return os.Rename(tmpPath, limitMarkerPath(stateRoot))
 }
 
 // limitCfg returns o.limits with any zero field filled from the defaults —

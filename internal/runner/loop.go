@@ -96,6 +96,12 @@ func (r *run) iterCtx(deadline time.Time, clock func() time.Time) (context.Conte
 	return context.WithTimeout(base, d)
 }
 
+// sleep waits for d via Options.Sleep if injected, else a real timer. See
+// sleepFor (limit.go).
+func (r *run) sleep(d time.Duration) error {
+	return sleepFor(r.opts, d)
+}
+
 func (r *run) headSHA() (string, error) {
 	out, err := r.git("rev-parse", "HEAD")
 	if err != nil {
@@ -201,11 +207,13 @@ func (r *run) loop() Status {
 	needPlan := st.SpecHash != sp.ContentHash || !st.Planned
 	deadline := parseUntil(r.opts.Until, clock())
 	st.StopReason = ""
+	st.WaitingUntil = ""
+	st.LimitReset = ""
 	r.deadline = deadline
 
-	redStreak, noProgress, session := 0, 0, 0
+	redStreak, noProgress, session, charged, limitHits := 0, 0, 0, 0, 0
 
-	for session < sp.MaxIter {
+	for charged < sp.MaxIter {
 		if r.interrupted() { // D8: checked before each iteration
 			return StatusInterrupted
 		}
@@ -214,6 +222,7 @@ func (r *run) loop() Status {
 			return StatusWindowClosed
 		}
 		session++
+		charged++
 		st.Iterations++
 		planning := needPlan
 		model := sp.Model
@@ -264,14 +273,54 @@ func (r *run) loop() Status {
 		if res.rateLimited() {
 			r.logf("iter %d rate-limited: %s", st.Iterations, res.Message)
 			r.captureDirty(st.Iterations)
-			st.StopReason = res.Message
-			commits, err := r.commitCount()
-			if err != nil {
-				return r.fail(err)
+			charged-- // this iteration doesn't count toward max_iter
+
+			now := clock()
+			hit := parseLimit(res.Message, now)
+			limitHits++
+
+			resetStr := ""
+			if !hit.ResetAt.IsZero() {
+				resetStr = hit.ResetAt.Format(time.RFC3339)
 			}
-			st.Commits = commits
+			st.History = append(st.History, now.Format("2006-01-02 15:04")+fmt.Sprintf(" iter %d rate-limited limit_reset=%s", st.Iterations, resetStr))
+
+			cfg := r.opts.limitCfg()
+			if err := writeLimitMarker(r.opts.StateRoot, hit, now, sp.Slug, cfg.Fallback); err != nil {
+				r.logf("write usage-limit marker: %v", err)
+			}
+
+			wake := hit.ResetAt.Add(2 * time.Minute)
+			if hit.ResetAt.IsZero() {
+				wake = now.Add(cfg.Fallback)
+			}
+
+			stop := (!deadline.IsZero() && !wake.Before(deadline)) ||
+				(deadline.IsZero() && wake.Sub(now) > cfg.MaxWait) ||
+				limitHits >= cfg.MaxHits
+			if stop {
+				st.StopReason = res.Message
+				st.LimitReset = resetStr
+				commits, err := r.commitCount()
+				if err != nil {
+					return r.fail(err)
+				}
+				st.Commits = commits
+				_ = r.saveState()
+				return StatusRateLimited
+			}
+
+			r.logf("iter %d rate-limited; waiting until %s", st.Iterations, wake.Format("15:04 Mon"))
+			st.WaitingUntil = wake.Format(time.RFC3339)
 			_ = r.saveState()
-			return StatusRateLimited
+			if err := r.sleep(wake.Sub(now)); err != nil || r.interrupted() {
+				st.WaitingUntil = ""
+				_ = r.saveState()
+				return StatusInterrupted
+			}
+			st.WaitingUntil = ""
+			_ = r.saveState()
+			continue
 		}
 		statusBeforeCapture, _ := r.git("status", "--porcelain")
 		commitsAfterAgent, err := r.commitCount()
@@ -348,6 +397,7 @@ func (r *run) loop() Status {
 					st.SyncOwed = false
 				}
 				redStreak = 0
+				limitHits = 0 // Task 3: MaxHits counts limits with no green iteration in between
 			} else {
 				r.logf("iter %d verify RED (streak %d)", st.Iterations, redStreak+1)
 				r.saveRed(st.Iterations, vout)

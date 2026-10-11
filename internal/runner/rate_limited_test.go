@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jwbonnell/nightshift/internal/home"
 )
@@ -31,7 +33,13 @@ func readRunState(t *testing.T, stateRoot, slug string) runState {
 // TestRateLimitedStopsImmediately: iteration 1 plans normally, iteration 2
 // (a worker iteration) comes back with the real 429 result line. The run
 // must stop right there as rate-limited, never reaching verify.
+// TestRateLimitedStopsImmediately: the reset (7am UTC) is always more than
+// NIGHTSHIFT_LIMIT_MAX_WAIT away given a 1ns max wait, so this deterministically
+// takes the stop path (Task 3) regardless of wall-clock time-of-day — the
+// run must still stop right there as rate-limited, never reaching verify.
 func TestRateLimitedStopsImmediately(t *testing.T) {
+	t.Setenv("NIGHTSHIFT_LIMIT_MAX_WAIT", "1ns")
+
 	repo := newSourceRepo(t)
 	homeDir := t.TempDir()
 	writeReadySpec(t, homeDir, "demo", "", repo)
@@ -55,6 +63,10 @@ func TestRateLimitedStopsImmediately(t *testing.T) {
 	opts := Options{
 		SpecArg: "demo", Home: homeDir, Sandbox: sb,
 		Stdout: io.Discard, Stderr: io.Discard, Stdin: strings.NewReader(""), Notifier: noopNotifierForTest{},
+		Sleep: func(ctx context.Context, d time.Duration) error {
+			t.Fatalf("unexpected sleep %s — expected an immediate stop", d)
+			return nil
+		},
 	}
 	status, err := Run(opts)
 	if err != nil || status != StatusRateLimited {
@@ -72,6 +84,9 @@ func TestRateLimitedStopsImmediately(t *testing.T) {
 	if st.StopReason != wantMsg {
 		t.Fatalf("StopReason = %q, want %q", st.StopReason, wantMsg)
 	}
+	if st.LimitReset == "" {
+		t.Fatalf("LimitReset not set")
+	}
 
 	entries, err := os.ReadDir(home.ResultsDir(homeDir))
 	if err != nil || len(entries) != 1 {
@@ -81,9 +96,17 @@ func TestRateLimitedStopsImmediately(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read result note: %v", err)
 	}
-	wantLine := "Hit the Claude usage limit (" + wantMsg + "). Nothing was lost; re-run after it resets."
+	resetAt, err := time.Parse(time.RFC3339, st.LimitReset)
+	if err != nil {
+		t.Fatalf("parse LimitReset: %v", err)
+	}
+	wantLine := fmt.Sprintf("Hit the Claude usage limit (%s); it resets %s, outside this run's window. Nothing was lost; re-run after it resets.",
+		wantMsg, resetAt.In(time.Local).Format("Mon 15:04"))
 	if !strings.Contains(string(noteData), wantLine) {
 		t.Fatalf("result note missing the rate-limited summary line:\n%s", noteData)
+	}
+	if !strings.Contains(string(noteData), "limit_reset: "+st.LimitReset) {
+		t.Fatalf("result note missing limit_reset frontmatter:\n%s", noteData)
 	}
 }
 
@@ -101,7 +124,14 @@ func TestRateLimitedPlannerNotPlanned(t *testing.T) {
 	}
 	sb.verify = alwaysGreenVerify
 
-	r := newTestRun(t, repo, "max_iter: 1\n", Options{}, sb)
+	opts := Options{
+		limits: limitConfig{MaxWait: time.Nanosecond},
+		Sleep: func(ctx context.Context, d time.Duration) error {
+			t.Fatalf("unexpected sleep %s — expected an immediate stop", d)
+			return nil
+		},
+	}
+	r := newTestRun(t, repo, "max_iter: 1\n", opts, sb)
 	status := r.loop()
 	if status != StatusRateLimited {
 		t.Fatalf("status = %v, want RateLimited", status)
@@ -129,6 +159,8 @@ func TestRateLimitedPlannerNotPlanned(t *testing.T) {
 // TestRateLimitedResumeClearsReason: a resumed run that completes normally
 // must not carry the previous run's StopReason forward.
 func TestRateLimitedResumeClearsReason(t *testing.T) {
+	t.Setenv("NIGHTSHIFT_LIMIT_MAX_WAIT", "1ns")
+
 	repo := newSourceRepo(t)
 	homeDir := t.TempDir()
 	writeReadySpec(t, homeDir, "demo", "", repo)
@@ -152,6 +184,10 @@ func TestRateLimitedResumeClearsReason(t *testing.T) {
 	opts := Options{
 		SpecArg: "demo", Home: homeDir, Sandbox: sb1,
 		Stdout: io.Discard, Stderr: io.Discard, Stdin: strings.NewReader(""), Notifier: noopNotifierForTest{},
+		Sleep: func(ctx context.Context, d time.Duration) error {
+			t.Fatalf("unexpected sleep %s — expected an immediate stop", d)
+			return nil
+		},
 	}
 	status1, err1 := Run(opts)
 	if err1 != nil || status1 != StatusRateLimited {

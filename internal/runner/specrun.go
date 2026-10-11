@@ -86,12 +86,13 @@ type Options struct {
 	Stderr        io.Writer
 	Stdin         io.Reader // not in the reference's Options (which reads os.Stdin directly); added for testability
 	IsTTY         bool
-	Notifier      notify.Notifier  // nil = resolve from NIGHTSHIFT_NOTIFY/config
-	Reviewer      Reviewer         // nil = sbxReviewer
-	Ctx           context.Context  // D8: cancellation source; nil = context.Background()
-	Version       string           // the running binary's version; "" is recorded as "dev"
-	clock         func() time.Time // unexported: wall clock for --until and log stamps; nil = time.Now
-	limits        limitConfig      // unexported: resolved by Run() via resolveLimitConfig; zero fields mean "use limitCfg()'s defaults"
+	Notifier      notify.Notifier                                  // nil = resolve from NIGHTSHIFT_NOTIFY/config
+	Reviewer      Reviewer                                         // nil = sbxReviewer
+	Ctx           context.Context                                  // D8: cancellation source; nil = context.Background()
+	Version       string                                           // the running binary's version; "" is recorded as "dev"
+	Sleep         func(ctx context.Context, d time.Duration) error // injectable waiter for Task 3's usage-limit wait; nil = a real timer that returns ctx.Err() early on cancellation
+	clock         func() time.Time                                 // unexported: wall clock for --until and log stamps; nil = time.Now
+	limits        limitConfig                                      // unexported: resolved by Run() via resolveLimitConfig; zero fields mean "use limitCfg()'s defaults"
 }
 
 // clockFn returns o.clock if set, else time.Now. D11.9: PROGRESS.md and

@@ -17,22 +17,24 @@ import (
 
 // runState is the on-disk run.json. Field order is the JSON field order.
 type runState struct {
-	Slug       string   `json:"slug"`
-	Repo       string   `json:"repo"`
-	Branch     string   `json:"branch"`
-	Base       string   `json:"base"`                // immutable base commit sha
-	BaseRef    string   `json:"base_ref"`            // requested base name at run start
-	LastGreen  string   `json:"last_green"`          // sha of the last verify-green HEAD
-	SyncRef    string   `json:"sync_ref,omitempty"`  // refs/heads/<branch> or refs/nightshift/<slug>
-	SyncOwed   bool     `json:"sync_owed,omitempty"` // a copy-back failed and hasn't succeeded since
-	SpecHash   string   `json:"spec_hash"`           // spec content hash at last plan
-	Planned    bool     `json:"planned"`             // a planning iteration ran for SpecHash
-	Iterations int      `json:"iterations"`          // cumulative across resumes
-	Commits    int      `json:"commits"`             // base..HEAD at last write
-	Status     string   `json:"status"`
-	StopReason string   `json:"stop_reason,omitempty"` // Task 1: the rate-limit message that ended the run, if any
-	Started    string   `json:"started"`               // RFC3339, first run
-	History    []string `json:"history"`               // human-readable status trail
+	Slug         string   `json:"slug"`
+	Repo         string   `json:"repo"`
+	Branch       string   `json:"branch"`
+	Base         string   `json:"base"`                // immutable base commit sha
+	BaseRef      string   `json:"base_ref"`            // requested base name at run start
+	LastGreen    string   `json:"last_green"`          // sha of the last verify-green HEAD
+	SyncRef      string   `json:"sync_ref,omitempty"`  // refs/heads/<branch> or refs/nightshift/<slug>
+	SyncOwed     bool     `json:"sync_owed,omitempty"` // a copy-back failed and hasn't succeeded since
+	SpecHash     string   `json:"spec_hash"`           // spec content hash at last plan
+	Planned      bool     `json:"planned"`             // a planning iteration ran for SpecHash
+	Iterations   int      `json:"iterations"`          // cumulative across resumes
+	Commits      int      `json:"commits"`             // base..HEAD at last write
+	Status       string   `json:"status"`
+	StopReason   string   `json:"stop_reason,omitempty"`   // Task 1: the rate-limit message that ended the run, if any
+	WaitingUntil string   `json:"waiting_until,omitempty"` // Task 3: RFC3339, set only while loop() is sleeping out a usage limit
+	LimitReset   string   `json:"limit_reset,omitempty"`   // Task 3: RFC3339 reset time, recorded only when ending rate-limited with a known reset
+	Started      string   `json:"started"`                 // RFC3339, first run
+	History      []string `json:"history"`                 // human-readable status trail
 
 	NightshiftVersion string `json:"nightshift_version"` // Task 4: the binary version that ran this invocation
 }
