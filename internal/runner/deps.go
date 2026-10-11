@@ -135,6 +135,39 @@ func checkDeps(opts Options, sp *Spec) error {
 	return nil
 }
 
+// checkDepTipsResume is setup()'s resume-time counterpart to the
+// fresh-clone integration path. If a previous invocation never finished
+// integrating depends_on (interrupted or blocked before BaseResolved was
+// recorded, so no agent iteration ran either), it sets r.needIntegrate so
+// runSpec retries integrateDeps with freshly resolved tips. Otherwise it
+// refuses if a recorded tip has moved, or a newly added dependency now
+// resolves to one — the agent's own commits may already sit on top of the
+// old integrated base and can't be rebased mechanically.
+func checkDepTipsResume(r *run, sp *Spec) error {
+	if len(sp.DependsOn) == 0 || r.opts.IgnoreDeps {
+		return nil
+	}
+	if r.st.BaseResolved == "" && r.st.Iterations == 0 {
+		r.needIntegrate = true
+		return nil
+	}
+	for _, t := range sp.depTips {
+		old, existed := r.st.DepTips[t.slug]
+		if old == t.sha {
+			continue
+		}
+		oldDisp, newDisp := "(none)", "(none)"
+		if existed {
+			oldDisp = short(old)
+		}
+		if t.sha != "" {
+			newDisp = short(t.sha)
+		}
+		return fmt.Errorf("dependency %s changed since this run started (%s → %s); re-run with --fresh", t.slug, oldDisp, newDisp)
+	}
+	return nil
+}
+
 // depsCheck runs the lint depends check for one spec: an unknown
 // dependency or a cycle through slug produces FAIL text (one line each,
 // unknown deps first, then at most one cycle line); otherwise an unmet

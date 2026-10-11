@@ -1,6 +1,9 @@
 package runner
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -121,5 +124,233 @@ func TestBaseMergesTwoDeps(t *testing.T) {
 	}
 	if r.st.DepTips["b"] != bSHA {
 		t.Fatalf("st.DepTips[b] = %s, want %s", r.st.DepTips["b"], bSHA)
+	}
+}
+
+// TestDepAlreadyMergedOrDeletedSkipped covers the two cases D-g skips
+// without merging: a tip that's already an ancestor of the base (the
+// owner merged it upstream already), and a missing branch (the owner
+// merged and deleted it).
+func TestDepAlreadyMergedOrDeletedSkipped(t *testing.T) {
+	t.Run("already an ancestor", func(t *testing.T) {
+		repo := newSourceRepo(t)
+		mustGit(t, repo, "checkout", "-b", "spec/dep")
+		commitFile(t, repo, "dep.go", "package dep\n", "dep work")
+		mustGit(t, repo, "checkout", "main")
+		mustGit(t, repo, "merge", "--no-ff", "-m", "merge dep", "spec/dep")
+
+		sb := newStubSandbox()
+		r := newTestRun(t, repo, "depends_on: dep\n", Options{}, sb)
+		baseBefore := r.st.Base
+
+		if status := r.integrateDeps(); status != "" {
+			t.Fatalf("integrateDeps() = %q, want \"\" (continue)", status)
+		}
+		if sb.verifyN != 0 {
+			t.Fatalf("verifyN = %d, want 0 (nothing applied)", sb.verifyN)
+		}
+		if r.st.Base != baseBefore {
+			t.Fatalf("st.Base = %s, want unchanged %s", r.st.Base, baseBefore)
+		}
+		if r.st.DepTips != nil {
+			t.Fatalf("st.DepTips = %v, want nil", r.st.DepTips)
+		}
+		if r.st.BaseResolved != baseBefore {
+			t.Fatalf("st.BaseResolved = %s, want %s", r.st.BaseResolved, baseBefore)
+		}
+	})
+
+	t.Run("branch deleted", func(t *testing.T) {
+		repo := newSourceRepo(t)
+		mustGit(t, repo, "checkout", "-b", "spec/dep")
+		commitFile(t, repo, "dep.go", "package dep\n", "dep work")
+		mustGit(t, repo, "checkout", "main")
+		mustGit(t, repo, "branch", "-D", "spec/dep")
+
+		sb := newStubSandbox()
+		r := newTestRun(t, repo, "depends_on: dep\n", Options{}, sb)
+		baseBefore := r.st.Base
+
+		if status := r.integrateDeps(); status != "" {
+			t.Fatalf("integrateDeps() = %q, want \"\" (continue)", status)
+		}
+		if sb.verifyN != 0 {
+			t.Fatalf("verifyN = %d, want 0 (nothing applied)", sb.verifyN)
+		}
+		if r.st.Base != baseBefore {
+			t.Fatalf("st.Base = %s, want unchanged %s", r.st.Base, baseBefore)
+		}
+		if r.st.DepTips != nil {
+			t.Fatalf("st.DepTips = %v, want nil", r.st.DepTips)
+		}
+	})
+}
+
+// TestDepConflictBlocks covers two depends_on tips that conflict with each
+// other: the first (a) fast-forwards in; the second (b) diverged from the
+// same base and edits the same line, so the --no-ff merge conflicts. That
+// must abort the merge, leave no remotes, run no agent iteration, and
+// write the conflict question with the path.
+func TestDepConflictBlocks(t *testing.T) {
+	repo := newSourceRepo(t)
+
+	mustGit(t, repo, "checkout", "-b", "spec/a")
+	commitFile(t, repo, "main.go", "package main\n\nvar X = \"a\"\n", "a work")
+
+	mustGit(t, repo, "checkout", "main")
+	mustGit(t, repo, "checkout", "-b", "spec/b")
+	commitFile(t, repo, "main.go", "package main\n\nvar X = \"b\"\n", "b work")
+
+	mustGit(t, repo, "checkout", "main")
+
+	sb := newStubSandbox()
+	r := newTestRun(t, repo, "depends_on: a, b\n", Options{}, sb)
+
+	status := r.integrateDeps()
+	if status != StatusBlocked {
+		t.Fatalf("integrateDeps() = %q, want StatusBlocked", status)
+	}
+	if sb.verifyN != 0 {
+		t.Fatalf("verifyN = %d, want 0 (blocked before any verify)", sb.verifyN)
+	}
+	if sb.agentN != 0 {
+		t.Fatalf("agentN = %d, want 0 (no agent iteration ran)", sb.agentN)
+	}
+
+	mergeHead, _ := r.git("rev-parse", "--verify", "--quiet", "MERGE_HEAD")
+	if strings.TrimSpace(mergeHead) != "" {
+		t.Fatalf("MERGE_HEAD still set, want merge aborted")
+	}
+	remotes, err := r.git("remote")
+	if err != nil {
+		t.Fatalf("remote: %v", err)
+	}
+	if strings.TrimSpace(remotes) != "" {
+		t.Fatalf("remotes = %q, want none", remotes)
+	}
+
+	q, err := os.ReadFile(r.questionPath())
+	if err != nil {
+		t.Fatalf("read QUESTION.md: %v", err)
+	}
+	want := "Merging the dependencies conflicts on main.go. Merge them by hand on a branch and set base:, or narrow their owns:.\n"
+	if string(q) != want {
+		t.Fatalf("QUESTION.md = %q, want %q", q, want)
+	}
+	if r.st.BaseResolved != "" {
+		t.Fatalf("st.BaseResolved = %s, want empty (integration never completed)", r.st.BaseResolved)
+	}
+}
+
+// TestIntegratedBaseRedBlocks covers a dependency merge that applies
+// cleanly but leaves verify red on the combined base: the clone is reset
+// back to the original base, the question explains the block, and
+// run.json records nothing (BaseResolved stays empty).
+func TestIntegratedBaseRedBlocks(t *testing.T) {
+	repo := newSourceRepo(t)
+	mustGit(t, repo, "checkout", "-b", "spec/dep")
+	commitFile(t, repo, "dep.go", "package dep\n", "dep work")
+	mustGit(t, repo, "checkout", "main")
+
+	sb := newStubSandbox()
+	sb.verify = func(iter int, dir string) error { return errors.New("red") }
+	r := newTestRun(t, repo, "depends_on: dep\n", Options{}, sb)
+	baseBefore := r.st.Base
+
+	status := r.integrateDeps()
+	if status != StatusBlocked {
+		t.Fatalf("integrateDeps() = %q, want StatusBlocked", status)
+	}
+	if sb.verifyN != 1 {
+		t.Fatalf("verifyN = %d, want 1", sb.verifyN)
+	}
+
+	head, err := r.git("rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	if strings.TrimSpace(head) != baseBefore {
+		t.Fatalf("HEAD = %s, want reset back to base %s", head, baseBefore)
+	}
+	if r.st.Base != baseBefore {
+		t.Fatalf("st.Base = %s, want unchanged %s", r.st.Base, baseBefore)
+	}
+	if r.st.BaseResolved != "" {
+		t.Fatalf("st.BaseResolved = %s, want empty (integration never completed)", r.st.BaseResolved)
+	}
+
+	logData, err := os.ReadFile(filepath.Join(r.attemptsDir(), "integrate.log"))
+	if err != nil {
+		t.Fatalf("read integrate.log: %v", err)
+	}
+	if len(logData) == 0 {
+		t.Fatalf("integrate.log is empty")
+	}
+
+	q, err := os.ReadFile(r.questionPath())
+	if err != nil {
+		t.Fatalf("read QUESTION.md: %v", err)
+	}
+	want := "The dependencies merged cleanly but verify is red on the combined base. Fix the dependency specs first.\n"
+	if string(q) != want {
+		t.Fatalf("QUESTION.md = %q, want %q", q, want)
+	}
+}
+
+// TestResumeDepMovedRefuses covers D-h's resume check: once integration has
+// completed and a recorded dependency tip later moves (the owner pushed
+// more work to spec/dep), setup() must refuse the resume rather than
+// silently re-integrating on top of commits the agent may already have
+// made — and must leave run.json untouched.
+func TestResumeDepMovedRefuses(t *testing.T) {
+	repo := newSourceRepo(t)
+	mustGit(t, repo, "checkout", "-b", "spec/dep")
+	commitFile(t, repo, "dep.go", "package dep\n", "dep work v1")
+	mustGit(t, repo, "checkout", "main")
+
+	sb := newStubSandbox()
+	r := newTestRun(t, repo, "depends_on: dep\n", Options{}, sb)
+	if status := r.integrateDeps(); status != "" {
+		t.Fatalf("integrateDeps() = %q, want \"\" (continue)", status)
+	}
+	savedBase := r.st.Base
+	if r.logFile != nil {
+		r.logFile.Close()
+	}
+	if r.agentLog != nil {
+		r.agentLog.Close()
+	}
+
+	mustGit(t, repo, "checkout", "spec/dep")
+	commitFile(t, repo, "dep2.go", "package dep\n", "dep work v2")
+	mustGit(t, repo, "checkout", "main")
+
+	sp, err := resolveSpec(r.opts)
+	if err != nil {
+		t.Fatalf("resolveSpec: %v", err)
+	}
+	sha, err := resolveBase(sp.Repo, sp.Base)
+	if err != nil {
+		t.Fatalf("resolveBase: %v", err)
+	}
+	sp.BaseSHA = sha
+
+	if _, err := setup(r.opts, sp); err == nil {
+		t.Fatalf("setup() = nil, want refusal error")
+	} else {
+		if !strings.Contains(err.Error(), "dependency dep changed since this run started") {
+			t.Fatalf("err = %v, want dep-moved message", err)
+		}
+		if !strings.Contains(err.Error(), "re-run with --fresh") {
+			t.Fatalf("err = %v, want --fresh hint", err)
+		}
+	}
+
+	st2 := loadPriorState(r.opts, "demo")
+	if st2 == nil {
+		t.Fatalf("run.json missing")
+	}
+	if st2.Base != savedBase {
+		t.Fatalf("st.Base = %s, want unchanged %s", st2.Base, savedBase)
 	}
 }

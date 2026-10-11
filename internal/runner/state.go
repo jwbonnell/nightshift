@@ -540,6 +540,9 @@ func setup(opts Options, sp *Spec) (*run, error) {
 		if err := r.checkBase(sp); err != nil {
 			return nil, err
 		}
+		if err := checkDepTipsResume(r, sp); err != nil {
+			return nil, err
+		}
 		if err := validSHA("run.json base", r.st.Base); err != nil {
 			return nil, fmt.Errorf("run.json has a corrupt base %q; re-run with --fresh", r.st.Base)
 		}
