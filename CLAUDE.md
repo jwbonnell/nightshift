@@ -80,10 +80,13 @@ of stopping `rate-limited` — see the `run` subcommand section there.
   so nothing from a prior iteration or from verify itself persists).
 - **The agent is always stopped before verify or any git op**, in the same
   iteration, even a timed-out one — see `TestAgentKilledBeforeVerify`.
-- **Scaffold files** (`PROGRESS.md`, `QUESTION.md`, `.spec-complete`) are
-  read/written on the host but only via `Lstat` + `O_NOFOLLOW` — an agent
-  that symlinks one of these to a host path gets the link itself ignored
-  or removed, never the target followed. See `TestScaffoldSymlinkRejected`.
+- **Scaffold files** (`PROGRESS.md`, `QUESTION.md`, `.spec-complete`,
+  `REVIEW.md`) are read/written on the host but only via `Lstat` +
+  `O_NOFOLLOW` — an agent that symlinks one of these to a host path gets
+  the link itself ignored or removed, never the target followed. See
+  `TestScaffoldSymlinkRejected`. `REVIEW.md` is written only by a
+  rejecting fix round (`review_rounds > 0`), to hand blocking findings
+  back to the agent — see `docs/nightshift.md`'s Review section.
 - **The clone has no remotes.** The only way work reaches the source repo
   is the runner's own `syncBranchBack`, under a repo lock, from the host,
   fetching *out of* the clone — never the reverse.
