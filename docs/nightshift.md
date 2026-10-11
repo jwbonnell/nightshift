@@ -229,20 +229,60 @@ sync ref from your source repo too) and starts clean.
 | `window-closed` | 6 | the `--until` deadline arrived mid-run |
 | `busy` | 7 | another process already holds this spec, or every concurrency slot is full |
 | `interrupted` | 8 | SIGINT/SIGTERM arrived; resumable |
-| `rate-limited` | 9 | the agent hit the Claude usage limit; resumable |
+| `rate-limited` | 9 | the Claude usage limit's reset falls outside `--until`, is too far away with no `--until`, or hit too many times in a row; resumable |
 
 `blocked`, `red`, `stalled`, `capped`, `window-closed`, `interrupted`, and
 `rate-limited` are all resumable — just run the same spec again (or let
 `--next` pick it up; `--next` only skips a spec whose *last* status was
 `blocked` or `complete` with an unchanged content hash).
 
-A `rate-limited` run stops at the first iteration (worker or planning) whose
-agent result reports a 429 or a message matching `hit your ... limit` —
-no verify runs that iteration, and the limit message is saved as
-`stop_reason` in `run.json` and shown in runner.log and the result note's
-summary. Nothing is lost: re-run the spec after the limit resets and it
-resumes exactly like any other resumable status. `--next` treats it the
-same as `stalled`.
+A Claude usage limit is detected at the first iteration (worker or
+planning) whose agent result reports a 429 or a message matching `hit
+your ... limit` — no verify runs that iteration, and the limit message is
+saved as `stop_reason` in `run.json`. What happens next depends on when
+the limit resets:
+
+- **Inside the run's `--until` window** (and this isn't the
+  `NIGHTSHIFT_LIMIT_MAX_HITS`-th limit in a row with no green iteration in
+  between — a guard against a pattern that misfires), the run **waits**
+  for the reset plus a 2-minute margin, then starts a fresh session and
+  carries on. Nothing is lost, and that iteration counts toward neither
+  `max_iter` nor the no-progress counter. While waiting, `nightshift
+  status` shows that run as `waiting (until 15:04)` instead of `running`.
+  A message with no parseable reset time waits `NIGHTSHIFT_LIMIT_FALLBACK`
+  from when the limit was hit instead.
+- **Outside the window** — the reset is later than `--until`, more than
+  `NIGHTSHIFT_LIMIT_MAX_WAIT` away with no `--until` set, or this is the
+  `NIGHTSHIFT_LIMIT_MAX_HITS`-th limit in a row with no green iteration
+  between — the run stops `rate-limited` instead. The result note's
+  summary and runner.log show the reset time when one was found; a
+  message with no parseable reset time falls back to the plain "re-run
+  after it resets" wording. Either way, re-run the spec (or let `--next`
+  pick it up) and it resumes exactly like any other resumable status;
+  `--next` treats a stopped `rate-limited` run the same as `stalled`.
+
+Every limit hit, waited-out or not, writes `<state dir>/.usage-limit`, a
+small JSON marker recording the reset time, whether it's a weekly limit,
+when it was recorded, and which spec hit it (an existing marker with a
+later reset is left alone). `run <spec>` and `run --next` check this
+marker before creating any sandbox, after taking their locks: an active
+limit that can't be waited out prints `usage limit active until <Mon
+15:04> (recorded by <slug>); not starting` and exits `9` without touching
+sandboxes, a result note, or that run's own `run.json` status; one that
+can be waited out prints `usage limit active; waiting until <time>` and
+waits exactly like a limit hit mid-run. `--dry-run` prints `usage limit:
+none` or `usage limit: active until <Mon 15:04>` and never deletes the
+marker, even an expired one. Deleting `.usage-limit` by hand is always
+safe — the next run just finds no marker.
+
+An overload or 5xx result (a transient API error, distinct from a usage
+limit) retries the same iteration — same session, same prompt — up to
+three times, waiting 1m, then 5m, then 15m between attempts through the
+same injectable sleeper, so these waits don't count toward `max_iter`
+either. A retry whose wait would land after `--until` closes takes the
+window-closed path instead of retrying. A fourth consecutive transient
+error falls through to the normal failed-agent handling (verify skipped,
+counted as no-progress).
 
 Two refinements to "two iterations made no progress": a session only
 counts as having planned once the planner's agent call exits cleanly *and*
@@ -449,6 +489,9 @@ env > config > default.)
 | — | `NIGHTSHIFT_NOTIFY` | `NIGHTSHIFT_NOTIFY` | `on` (`off` disables desktop notifications) |
 | — | `NIGHTSHIFT_HOST_CLAUDE_BIN` | `NIGHTSHIFT_HOST_CLAUDE_BIN` | `claude` (the *host* claude the interview execs; see [Interview](#interview)) |
 | — | `NIGHTSHIFT_INTERVIEW_MODEL` | `NIGHTSHIFT_INTERVIEW_MODEL` | `opus` (the interview's `--model`) |
+| — | `NIGHTSHIFT_LIMIT_FALLBACK` | `NIGHTSHIFT_LIMIT_FALLBACK` | `60m` — wait when a usage-limit message has no parseable reset time |
+| — | `NIGHTSHIFT_LIMIT_MAX_WAIT` | `NIGHTSHIFT_LIMIT_MAX_WAIT` | `6h` — longest wait for a usage limit when no `--until` is set |
+| — | `NIGHTSHIFT_LIMIT_MAX_HITS` | `NIGHTSHIFT_LIMIT_MAX_HITS` | `3` — consecutive limit hits with no green iteration between before stopping anyway |
 | `repo:`, `verify:`, `egress:` | — | — | frontmatter only, required (`repo:`/`verify:`) |
 
 The config file is `KEY=value` lines; blank lines and lines starting with

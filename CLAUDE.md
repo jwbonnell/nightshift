@@ -57,7 +57,9 @@ see `docs/nightshift.md` for the level mapping and a sample line.
 One Ctrl+C ends a run `interrupted` and resumable (state saved, agent
 stopped); a second force-quits with no cleanup, and any leftover sandboxes
 it left behind are removed automatically on the next run of that spec —
-see `docs/nightshift.md`'s Interrupts section.
+see `docs/nightshift.md`'s Interrupts section. A usage limit that resets
+inside the run's `--until` window waits and resumes automatically instead
+of stopping `rate-limited` — see the `run` subcommand section there.
 
 ## Trust model — read this before touching sandbox.go or loop.go
 
