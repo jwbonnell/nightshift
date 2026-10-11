@@ -33,6 +33,14 @@ const (
 	StatusRateLimited  Status = "rate-limited"     // Task 1: agent hit the Claude usage limit
 	statusDryRun       Status = "dry-run"          // internal
 	statusNothing      Status = "nothing-eligible" // internal: --next found nothing
+
+	// Task 5: --jobs scheduler terminal statuses. Distinct from the
+	// single-spec statuses above because a scheduler invocation's outcome
+	// isn't any one spec's outcome — see runJobs's exit-code mapping in
+	// scheduler.go.
+	statusJobsNothingStarted Status = "jobs-nothing-started" // internal: started no child the whole run
+	statusJobsChildFailed    Status = "jobs-child-failed"    // internal: a child exited 1
+	statusJobsDone           Status = "jobs-done"            // internal: scheduler finished, nothing failed
 )
 
 const defaultMaxConcurrent = 2
@@ -42,7 +50,7 @@ const defaultMaxConcurrent = 2
 // StatusError) is 1.
 func ExitCode(s Status) int {
 	switch s {
-	case StatusComplete, statusDryRun, statusNothing:
+	case StatusComplete, statusDryRun, statusNothing, statusJobsDone:
 		return 0
 	case StatusBlocked:
 		return 2
@@ -54,7 +62,7 @@ func ExitCode(s Status) int {
 		return 5
 	case StatusWindowClosed:
 		return 6
-	case StatusBusy:
+	case StatusBusy, statusJobsNothingStarted:
 		return 7
 	case StatusInterrupted:
 		return 8
@@ -76,9 +84,10 @@ type Options struct {
 	MaxIter       int    // 0 = unset
 	Until         string // "HH:MM" local deadline, or ""
 	DryRun        bool
-	Base          string // "" = fall through to frontmatter/env/config/default
-	MaxConcurrent string // raw flag value ("" = unset)
-	Jobs          int    // --jobs flag value, 0 = unset; only valid with Next (resolveJobsCount)
+	Base          string  // "" = fall through to frontmatter/env/config/default
+	MaxConcurrent string  // raw flag value ("" = unset)
+	Jobs          int     // --jobs flag value, 0 = unset; only valid with Next (resolveJobsCount)
+	Spawn         Spawner // nil = defaultSpawner (a real exec.CommandContext); --jobs child processes
 	Home          string
 	StateRoot     string    // default: <Home>/runs
 	Now           time.Time // stamps run.json "started" and PROGRESS.md lines; zero = time.Now()
@@ -210,7 +219,14 @@ func Run(opts Options) (Status, error) {
 	}
 
 	if opts.Next && !opts.DryRun {
-		return runNext(opts, limit, capSrc)
+		jobs, _, err := resolveJobsCount(opts, limit)
+		if err != nil {
+			return StatusError, err
+		}
+		if jobs <= 1 {
+			return runNext(opts, limit, capSrc)
+		}
+		return runJobs(opts, limit, capSrc, jobs)
 	}
 	if opts.Next {
 		next, waits, err := selectNext(opts)
