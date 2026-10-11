@@ -85,7 +85,7 @@ func ensureLayout(home string) error {
 func Init(home, sbxBin string, stdout, stderr io.Writer) error {
 	var created []string
 
-	for _, d := range []string{home, DraftDir(home), ReadyDir(home), DoneDir(home), ResultsDir(home), RunsDir(home), LogsDir(home), ContextDir(home)} {
+	for _, d := range []string{home, DraftDir(home), ReadyDir(home), DoneDir(home), ResultsDir(home), RunsDir(home), LogsDir(home), ContextDir(home), LensesDir(home)} {
 		existed := dirExists(d)
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err

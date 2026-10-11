@@ -73,6 +73,49 @@ func TestInitCreatesLayout(t *testing.T) {
 	}
 }
 
+func TestInitCreatesLensesDir(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "nightshift-home")
+	t.Setenv("PATH", fakeBin(t, "sbx"))
+
+	var stdout, stderr bytes.Buffer
+	if err := Init(home, "sbx", &stdout, &stderr); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	lensesDir := LensesDir(home)
+	info, err := os.Stat(lensesDir)
+	if err != nil {
+		t.Fatalf("lenses dir missing: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("%s is not a directory", lensesDir)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("lenses dir mode = %o, want 0755", info.Mode().Perm())
+	}
+
+	entries, err := os.ReadDir(lensesDir)
+	if err != nil {
+		t.Fatalf("read lenses dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("lenses dir not empty: %v", entries)
+	}
+
+	count := strings.Count(stdout.String(), "created "+lensesDir+"\n")
+	if count != 1 {
+		t.Fatalf("stdout has %d lines creating %s, want 1: %q", count, lensesDir, stdout.String())
+	}
+
+	var stdout2 bytes.Buffer
+	if err := Init(home, "sbx", &stdout2, &stderr); err != nil {
+		t.Fatalf("second Init: %v", err)
+	}
+	if strings.Contains(stdout2.String(), lensesDir) {
+		t.Fatalf("second Init mentioned %s: %q", lensesDir, stdout2.String())
+	}
+}
+
 func TestInitWarnsWithoutSbx(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "nightshift-home")
 	t.Setenv("PATH", t.TempDir()) // empty PATH: sbx cannot be found

@@ -3,11 +3,12 @@ package runner
 import (
 	"bytes"
 	"context"
-	_ "embed"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,11 +27,39 @@ import (
 // longer diffs are truncated with a pointer to read repo/ directly.
 const reviewDiffMax = 200 << 10
 
-// reviewPrompt is the headless review prompt, embedded verbatim and sent
-// on stdin to the reviewing claude. See review-prompt.md.
+// lensFS holds the built-in review lens prompts, one file per lens name.
+// See internal/runner/lenses/.
 //
-//go:embed review-prompt.md
-var reviewPrompt string
+//go:embed lenses/*.md
+var lensFS embed.FS
+
+// reviewPrompt is the general lens's prompt: the headless review prompt,
+// embedded verbatim and sent on stdin to the reviewing claude. See
+// lenses/general.md.
+var reviewPrompt = mustLens("general")
+
+func mustLens(name string) string {
+	data, err := fs.ReadFile(lensFS, "lenses/"+name+".md")
+	if err != nil {
+		panic(err)
+	}
+	return string(data)
+}
+
+// lensPrompt resolves a lens's prompt text: a custom <homeDir>/lenses/<name>.md
+// file wins over a built-in of the same name, otherwise the embedded
+// built-in is used. It returns the same "unknown review lens" error as
+// parseReviewSetting when name is neither.
+func lensPrompt(homeDir, name string) (string, error) {
+	p := filepath.Join(home.LensesDir(homeDir), name+".md")
+	if data, err := os.ReadFile(p); err == nil {
+		return string(data), nil
+	}
+	if builtinLenses[name] {
+		return mustLens(name), nil
+	}
+	return "", fmt.Errorf("unknown review lens %q (built-in: general, requirements, quality, security; or add %s)", name, p)
+}
 
 // reviewWSDir is where a review's workspace lives: rebuilt from scratch
 // for every review and removed afterwards, whatever the outcome.
