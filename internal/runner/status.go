@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/jwbonnell/nightshift/internal/home"
 	"github.com/jwbonnell/nightshift/internal/lock"
@@ -52,6 +53,9 @@ func PrintStatusTable(w io.Writer, homeDir, stateRoot string) error {
 		status := st.Status
 		if info, held := lock.Probe(specLockPath(stateRoot, slug)); held {
 			status = fmt.Sprintf("running (pid %d)", info.PID)
+			if waitingUntil, err := time.Parse(time.RFC3339, st.WaitingUntil); err == nil {
+				status = fmt.Sprintf("waiting (until %s)", waitingUntil.Local().Format("15:04"))
+			}
 		} else if status == "" {
 			status = "new"
 		}
@@ -121,6 +125,11 @@ func PrintStatusTable(w io.Writer, homeDir, stateRoot string) error {
 		_ = tw.Flush()
 	}
 
+	if active := readActiveLimit(stateRoot, time.Now(), false); active != nil {
+		resetAt, _ := time.Parse(time.RFC3339, active.ResetAt)
+		fmt.Fprintf(w, "usage limit: until %s\n", resetAt.Format("Mon 15:04"))
+	}
+
 	if len(readyNotStarted) > 0 {
 		fmt.Fprintf(w, "ready, not started: %s\n", strings.Join(readyNotStarted, ", "))
 	}
@@ -154,6 +163,9 @@ func PrintStatusDetail(w io.Writer, homeDir, stateRoot, slug string) error {
 	fmt.Fprintf(w, "iterations: %d\n", st.Iterations)
 	fmt.Fprintf(w, "commits: %d\n", st.Commits)
 	fmt.Fprintf(w, "status: %s\n", st.Status)
+	if st.WaitingUntil != "" {
+		fmt.Fprintf(w, "waiting_until: %s\n", st.WaitingUntil)
+	}
 	fmt.Fprintf(w, "started: %s\n", st.Started)
 	fmt.Fprintf(w, "history: %v\n", st.History)
 

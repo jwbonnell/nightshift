@@ -75,6 +75,72 @@ func TestStatusTable(t *testing.T) {
 	}
 }
 
+func TestStatusShowsWaiting(t *testing.T) {
+	homeDir := t.TempDir()
+	stateRoot := home.RunsDir(homeDir)
+
+	wakeAt := time.Now().Add(10 * time.Minute).UTC().Truncate(time.Second)
+	writeRunState(t, stateRoot, "waiting1", &runState{
+		Slug: "waiting1", Branch: "spec/waiting1", Iterations: 1, Commits: 0,
+		Started: "2026-01-03T00:00:00Z", WaitingUntil: wakeAt.Format(time.RFC3339),
+	})
+	l, err := lock.TryAcquire(specLockPath(stateRoot, "waiting1"), "waiting1")
+	if err != nil {
+		t.Fatalf("TryAcquire: %v", err)
+	}
+	defer l.Release()
+
+	var buf bytes.Buffer
+	if err := PrintStatusTable(&buf, homeDir, stateRoot); err != nil {
+		t.Fatalf("PrintStatusTable: %v", err)
+	}
+	out := buf.String()
+
+	want := fmt.Sprintf("waiting (until %s)", wakeAt.Local().Format("15:04"))
+	if !strings.Contains(out, want) {
+		t.Fatalf("output missing %q:\n%s", want, out)
+	}
+	if strings.Contains(out, fmt.Sprintf("running (pid %d)", os.Getpid())) {
+		t.Fatalf("output still shows running, want waiting:\n%s", out)
+	}
+
+	var detailBuf bytes.Buffer
+	if err := PrintStatusDetail(&detailBuf, homeDir, stateRoot, "waiting1"); err != nil {
+		t.Fatalf("PrintStatusDetail: %v", err)
+	}
+	wantDetail := "waiting_until: " + wakeAt.Format(time.RFC3339)
+	if !strings.Contains(detailBuf.String(), wantDetail) {
+		t.Fatalf("detail output missing %q:\n%s", wantDetail, detailBuf.String())
+	}
+}
+
+func TestStatusShowsUsageLimitMarker(t *testing.T) {
+	homeDir := t.TempDir()
+	stateRoot := home.RunsDir(homeDir)
+
+	writeRunState(t, stateRoot, "done1", &runState{
+		Slug: "done1", Branch: "spec/done1", Iterations: 3, Commits: 2, Status: "complete",
+		Started: "2026-01-01T00:00:00Z", History: []string{"2026-01-01 00:05 complete"},
+	})
+
+	now := time.Now()
+	resetAt := now.Add(30 * time.Minute)
+	if err := writeLimitMarker(stateRoot, limitHit{ResetAt: resetAt}, now, "demo", time.Hour); err != nil {
+		t.Fatalf("writeLimitMarker: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := PrintStatusTable(&buf, homeDir, stateRoot); err != nil {
+		t.Fatalf("PrintStatusTable: %v", err)
+	}
+	out := buf.String()
+
+	want := "usage limit: until " + resetAt.Format("Mon 15:04")
+	if !strings.Contains(out, want) {
+		t.Fatalf("output missing %q:\n%s", want, out)
+	}
+}
+
 func TestStatusTableEmpty(t *testing.T) {
 	homeDir := t.TempDir()
 	stateRoot := home.RunsDir(homeDir)
