@@ -367,7 +367,7 @@ func (r *run) loop() Status {
 			_ = r.saveState()
 			continue
 		}
-		statusBeforeCapture, _ := r.git("status", "--porcelain")
+		statusBeforeCapture, _ := r.git("status", "--porcelain", "--untracked-files=all")
 		commitsAfterAgent, err := r.commitCount()
 		if err != nil {
 			return r.fail(err)
@@ -428,6 +428,18 @@ func (r *run) loop() Status {
 			vcancel()
 			green = verr == nil
 
+			var ownsViolated []string
+			if green && len(sp.Owns) > 0 {
+				ov, err := r.ownsViolations(sp, statusBeforeCapture)
+				if err != nil {
+					return r.fail(err)
+				}
+				if len(ov) > 0 {
+					ownsViolated = ov
+					green = false
+				}
+			}
+
 			if green {
 				sha, err := r.headSHA()
 				if err != nil {
@@ -443,6 +455,14 @@ func (r *run) loop() Status {
 				}
 				redStreak = 0
 				limitHits = 0 // Task 3: MaxHits counts limits with no green iteration in between
+			} else if len(ownsViolated) > 0 {
+				r.logf("iter %d changed paths outside owns: %s", st.Iterations, formatPathList(ownsViolated, 5))
+				r.appendProgress(fmt.Sprintf("iteration %d changed %s outside owns (%s) — it was reset; stay inside owns or stop and ask",
+					st.Iterations, strings.Join(ownsViolated, ", "), strings.Join(sp.Owns, ", ")))
+				if err := r.resetTo(st.LastGreen); err != nil {
+					return r.fail(err)
+				}
+				redStreak++
 			} else {
 				r.logf("iter %d verify RED (streak %d)", st.Iterations, redStreak+1)
 				r.saveRed(st.Iterations, vout)
