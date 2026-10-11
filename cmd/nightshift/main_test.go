@@ -426,6 +426,44 @@ func TestReadyRefusesFailingLint(t *testing.T) {
 	}
 }
 
+// TestReadyRefusesCycle asserts that a dependency cycle between two
+// drafts fails lint's depends check and keeps "ready" from moving either
+// one out of specs/draft/.
+func TestReadyRefusesCycle(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("NIGHTSHIFT_HOME", homeDir)
+	repo := newTestSourceRepo(t)
+	withStubVerifier(t)
+
+	dir := home.DraftDir(homeDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeSpec := func(slug, dependsOn string) {
+		content := "---\nrepo: " + repo + "\nverify: true\nmax_iter: 5\ndepends_on: " + dependsOn + "\n---\n" + fullSpecBody
+		if err := os.WriteFile(filepath.Join(dir, slug+".md"), []byte(content), 0o644); err != nil {
+			t.Fatalf("write spec: %v", err)
+		}
+	}
+	writeSpec("a", "b")
+	writeSpec("b", "a")
+
+	var stdout, stderr bytes.Buffer
+	got := dispatch([]string{"ready", "a"}, &stdout, &stderr, strings.NewReader(""))
+	if got != 1 {
+		t.Fatalf("exit = %d, want 1; stdout=%s stderr=%s", got, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "FAIL  depends: dependency cycle: a -> b -> a") {
+		t.Fatalf("stdout missing cycle FAIL line:\n%s", stdout.String())
+	}
+	if fileExistsForTest(filepath.Join(home.ReadyDir(homeDir), "a.md")) {
+		t.Fatalf("spec was moved to specs/ready/ despite a dependency cycle")
+	}
+	if !fileExistsForTest(filepath.Join(home.DraftDir(homeDir), "a.md")) {
+		t.Fatalf("draft a.md was removed")
+	}
+}
+
 func TestReadyNoLintKeepsOldBehavior(t *testing.T) {
 	homeDir := t.TempDir()
 	t.Setenv("NIGHTSHIFT_HOME", homeDir)

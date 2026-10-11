@@ -95,6 +95,7 @@ func TestLintOutputFormat(t *testing.T) {
 		"ok    acceptance\n" +
 		"ok    max_iter\n" +
 		"ok    base: main @ " + sha + "\n" +
+		"skip  depends (no depends_on)\n" +
 		"skip  verify-on-base (--no-verify)\n" +
 		"lint: 0 failed, 0 warnings\n"
 	if buf.String() != want {
@@ -787,6 +788,7 @@ func TestLintNoOriginNoFetch(t *testing.T) {
 		"ok    acceptance\n" +
 		"ok    max_iter\n" +
 		"ok    base: main @ " + sha + "\n" +
+		"skip  depends (no depends_on)\n" +
 		"skip  verify-on-base (--no-verify)\n" +
 		"lint: 0 failed, 0 warnings\n"
 	if buf.String() != want {

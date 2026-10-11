@@ -3,6 +3,7 @@ package runner
 import (
 	"bytes"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/jwbonnell/nightshift/internal/home"
@@ -68,6 +69,117 @@ func TestDependsOnAndOwnsParse(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestLintDependsCheck covers the lint "depends" check: an unknown
+// dependency, a self-dependency and a 3-cycle all FAIL with the exact
+// text; an unmet-but-known dependency warns; no depends_on skips; and an
+// unparsable sibling spec doesn't hide the others.
+func TestLintDependsCheck(t *testing.T) {
+	repo := newSourceRepo(t)
+
+	t.Run("unknown dependency FAILs", func(t *testing.T) {
+		homeDir := t.TempDir()
+		writeLintSpec(t, home.DraftDir(homeDir), "demo", "depends_on: ghost\n", repo, fullSpecBody)
+
+		var buf bytes.Buffer
+		res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", NoVerify: true, Stdout: &buf})
+		if err != nil {
+			t.Fatalf("Lint: %v", err)
+		}
+		want := `FAIL  depends: demo depends on ghost, which isn't in specs/draft, specs/ready or specs/done` + "\n"
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, buf.String())
+		}
+		if res.Fails == 0 {
+			t.Fatalf("res = %+v, want a FAIL", res)
+		}
+	})
+
+	t.Run("self-dependency FAILs as a cycle", func(t *testing.T) {
+		homeDir := t.TempDir()
+		writeLintSpec(t, home.DraftDir(homeDir), "demo", "depends_on: demo\n", repo, fullSpecBody)
+
+		var buf bytes.Buffer
+		if _, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", NoVerify: true, Stdout: &buf}); err != nil {
+			t.Fatalf("Lint: %v", err)
+		}
+		want := "FAIL  depends: dependency cycle: demo -> demo\n"
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, buf.String())
+		}
+	})
+
+	t.Run("3-cycle FAILs with the shortest path through this spec", func(t *testing.T) {
+		homeDir := t.TempDir()
+		writeLintSpec(t, home.DraftDir(homeDir), "a", "depends_on: b\n", repo, fullSpecBody)
+		writeLintSpec(t, home.ReadyDir(homeDir), "b", "depends_on: c\n", repo, fullSpecBody)
+		writeLintSpec(t, home.ReadyDir(homeDir), "c", "depends_on: a\n", repo, fullSpecBody)
+
+		var buf bytes.Buffer
+		if _, err := Lint(LintOptions{Home: homeDir, SpecArg: "a", NoVerify: true, Stdout: &buf}); err != nil {
+			t.Fatalf("Lint: %v", err)
+		}
+		want := "FAIL  depends: dependency cycle: a -> b -> c -> a\n"
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, buf.String())
+		}
+	})
+
+	t.Run("unmet known dependency warns", func(t *testing.T) {
+		homeDir := t.TempDir()
+		writeLintSpec(t, home.DraftDir(homeDir), "demo", "depends_on: other\n", repo, fullSpecBody)
+		writeLintSpec(t, home.ReadyDir(homeDir), "other", "", repo, fullSpecBody)
+
+		var buf bytes.Buffer
+		res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", NoVerify: true, Stdout: &buf})
+		if err != nil {
+			t.Fatalf("Lint: %v", err)
+		}
+		want := "warn  depends: waits on other (not started)\n"
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, buf.String())
+		}
+		if res.Warns == 0 {
+			t.Fatalf("res = %+v, want a warn", res)
+		}
+	})
+
+	t.Run("no depends_on skips", func(t *testing.T) {
+		homeDir := t.TempDir()
+		writeLintSpec(t, home.DraftDir(homeDir), "demo", "", repo, fullSpecBody)
+
+		var buf bytes.Buffer
+		if _, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", NoVerify: true, Stdout: &buf}); err != nil {
+			t.Fatalf("Lint: %v", err)
+		}
+		if !strings.Contains(buf.String(), "skip  depends (no depends_on)\n") {
+			t.Fatalf("output missing skip line:\n%s", buf.String())
+		}
+	})
+
+	t.Run("an unparsable sibling spec doesn't hide the others", func(t *testing.T) {
+		homeDir := t.TempDir()
+		writeLintSpec(t, home.DraftDir(homeDir), "demo", "depends_on: other\n", repo, fullSpecBody)
+		writeLintSpec(t, home.ReadyDir(homeDir), "other", "", repo, fullSpecBody)
+		// "Bad Slug!" fails parseDependsOn, so bogus contributes no edges —
+		// but its own slug must still register, so it doesn't matter here;
+		// this just proves loadSpecGraph doesn't choke on it.
+		writeLintSpec(t, home.ReadyDir(homeDir), "bogus", "depends_on: \"Bad Slug!\"\n", repo, fullSpecBody)
+
+		var buf bytes.Buffer
+		res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", NoVerify: true, Stdout: &buf})
+		if err != nil {
+			t.Fatalf("Lint: %v", err)
+		}
+		want := "warn  depends: waits on other (not started)\n"
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, buf.String())
+		}
+		if res.Fails != 0 {
+			t.Fatalf("res = %+v, want no FAILs (bogus sibling shouldn't leak in)\n%s", res, buf.String())
+		}
+	})
 }
 
 func TestLintAllowsDependsOwns(t *testing.T) {

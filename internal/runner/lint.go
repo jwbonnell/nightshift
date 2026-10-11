@@ -327,6 +327,31 @@ func Lint(o LintOptions) (LintResult, error) {
 		}
 	}
 
+	// Check 9: depends.
+	switch {
+	case fmErr != nil:
+		lintLine(o.Stdout, "skip", "depends (earlier failure)")
+	case len(sp.DependsOn) == 0:
+		lintLine(o.Stdout, "skip", "depends (no depends_on)")
+	default:
+		g := loadSpecGraph(o.Home)
+		depOpts := Options{Home: o.Home, StateRoot: home.RunsDir(o.Home)}
+		fails, warns := depsCheck(depOpts, g, sp.Slug, sp.DependsOn)
+		for _, f := range fails {
+			lintLine(o.Stdout, "FAIL", "depends: "+f)
+			res.Fails++
+		}
+		if len(fails) == 0 {
+			for _, w := range warns {
+				lintLine(o.Stdout, "warn", "depends: "+w)
+				res.Warns++
+			}
+			if len(warns) == 0 {
+				lintLine(o.Stdout, "ok", "depends")
+			}
+		}
+	}
+
 	// Check 8: verify-on-base.
 	switch {
 	case o.NoVerify:
