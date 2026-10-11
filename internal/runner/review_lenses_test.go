@@ -19,10 +19,18 @@ type seqReviewer struct {
 	errs    []error
 	i       int
 	prompts []string
+
+	// onCall, if set, runs during each Review call (e.g. to assert the
+	// fix-round review ref exists in the source repo, or to inspect ws's
+	// inputs/summary.md) before the scripted response is returned.
+	onCall func(ws string)
 }
 
 func (s *seqReviewer) Review(ctx context.Context, ws, model, prompt string) (string, error) {
 	s.prompts = append(s.prompts, prompt)
+	if s.onCall != nil {
+		s.onCall(ws)
+	}
 	idx := s.i
 	s.i++
 	var text string

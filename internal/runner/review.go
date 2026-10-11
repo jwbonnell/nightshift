@@ -492,29 +492,26 @@ type reviewParams struct {
 	ctxFn    func() (context.Context, context.CancelFunc)
 }
 
-// runReview builds the review workspace once, runs rv over it once per
-// lens (in order), writes the combined review note (even on failure,
-// with verdict "error"), and always removes the workspace afterward,
-// whatever the outcome. noteErr is set only when writeReviewNoteLenses
-// itself fails, distinct from err (which also covers a workspace or
-// reviewer failure) so a caller can tell a review failure apart from a
-// note-write failure and report "note not written" instead of an empty
-// note path. err is non-nil iff the workspace build failed, or every
-// lens errored (the combined verdict is "error").
-func runReview(ctx context.Context, rv Reviewer, p reviewParams) (verdict, notePath string, noteErr, err error) {
+// reviewLenses builds the review workspace once and runs rv over it once
+// per lens (in order), returning each lens's result — so a caller can both
+// write a note (runReview) and extract blocking items (a fix round,
+// reviewRound) — and always removes the workspace afterward, whatever the
+// outcome. buildErr is set only when the workspace itself failed to build,
+// in which case results is empty; names is always the resolved lens list
+// (p.lenses, defaulted to ["general"]), even on a build error, so a caller
+// can still write a note naming the right lenses.
+func reviewLenses(ctx context.Context, rv Reviewer, p reviewParams) (results []lensResult, names []string, head string, buildErr error) {
 	ws := reviewWSDir(p.stateRoot, p.slug)
 	defer os.RemoveAll(ws)
 
-	names := p.lenses
+	names = p.lenses
 	if len(names) == 0 {
 		names = []string{"general"}
 	}
 
-	head, err := buildReviewWorkspace(ctx, ws, p.repo, p.base, p.ref, p.specPath, p.progress, p.summary)
-	if err != nil {
-		buildErr := err
-		notePath, noteErr = writeReviewNoteLenses(p.home, p.slug, "error", short(head), short(p.base), p.model, names, p.round, "Review failed: "+buildErr.Error(), p.now)
-		return "error", notePath, noteErr, buildErr
+	head, buildErr = buildReviewWorkspace(ctx, ws, p.repo, p.base, p.ref, p.specPath, p.progress, p.summary)
+	if buildErr != nil {
+		return nil, names, head, buildErr
 	}
 
 	clock := p.clock
@@ -527,7 +524,7 @@ func runReview(ctx context.Context, rv Reviewer, p reviewParams) (verdict, noteP
 	}
 	limits := fillLimitConfig(p.limits)
 
-	results := make([]lensResult, 0, len(names))
+	results = make([]lensResult, 0, len(names))
 	for _, name := range names {
 		prompt, perr := lensPrompt(p.home, name)
 		if perr != nil {
@@ -574,10 +571,26 @@ func runReview(ctx context.Context, rv Reviewer, p reviewParams) (verdict, noteP
 		}
 		results = append(results, lensResult{lens: name, verdict: parseVerdict(text), text: text})
 	}
+	return results, names, head, nil
+}
+
+// runReview is reviewLenses plus writing the combined review note (even on
+// failure, with verdict "error"). noteErr is set only when
+// writeReviewNoteLenses itself fails, distinct from err (which also covers
+// a workspace or reviewer failure) so a caller can tell a review failure
+// apart from a note-write failure and report "note not written" instead of
+// an empty note path. err is non-nil iff the workspace build failed, or
+// every lens errored (the combined verdict is "error").
+func runReview(ctx context.Context, rv Reviewer, p reviewParams) (verdict, notePath string, noteErr, err error) {
+	results, names, head, buildErr := reviewLenses(ctx, rv, p)
+	if buildErr != nil {
+		notePath, noteErr = writeReviewNoteLenses(p.home, p.slug, "error", short(head), short(p.base), p.model, names, p.round, "Review failed: "+buildErr.Error(), p.now)
+		return "error", notePath, noteErr, buildErr
+	}
 
 	verdicts := make([]string, len(results))
-	for i, r := range results {
-		verdicts[i] = r.verdict
+	for i, res := range results {
+		verdicts[i] = res.verdict
 	}
 	verdict = combineVerdicts(verdicts)
 	body := reviewNoteBody(results)
@@ -585,9 +598,9 @@ func runReview(ctx context.Context, rv Reviewer, p reviewParams) (verdict, noteP
 
 	if verdict == "error" {
 		var errs []error
-		for _, r := range results {
-			if r.err != nil {
-				errs = append(errs, r.err)
+		for _, res := range results {
+			if res.err != nil {
+				errs = append(errs, res.err)
 			}
 		}
 		return verdict, notePath, noteErr, errors.Join(errs...)

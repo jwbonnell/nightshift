@@ -151,7 +151,18 @@ func (r *run) resultBody(status Status) string {
 		b.WriteString("```\n\n")
 	}
 
-	if r.reviewVerdict != "" {
+	switch {
+	case len(r.reviewRounds) > 0:
+		fmt.Fprintf(&b, "## Review\n\n")
+		for _, rr := range r.reviewRounds {
+			if rr.notePath == "" && rr.noteErr != nil {
+				fmt.Fprintf(&b, "round %d: %s — (note not written: %v)\n", rr.round, rr.verdict, rr.noteErr)
+			} else {
+				fmt.Fprintf(&b, "round %d: %s — %s\n", rr.round, rr.verdict, rr.notePath)
+			}
+		}
+		b.WriteString("\n")
+	case r.reviewVerdict != "":
 		fmt.Fprintf(&b, "## Review\n\n")
 		switch {
 		case r.reviewVerdict == "skipped":
@@ -301,7 +312,8 @@ func (r *run) finish(status Status) (Status, error) {
 
 	r.printSummary(status)
 
-	if r.spec.Review && status == StatusComplete {
+	r.scaffoldRemove(r.reviewPath())
+	if r.spec.Review && status == StatusComplete && len(r.reviewRounds) == 0 {
 		r.runAutoReview()
 	}
 

@@ -63,6 +63,13 @@ type stubSandbox struct {
 	// fail with a synthetic error instead of running the real command —
 	// simulating e.g. a hard reset failing in the control sandbox.
 	failGit func(args []string) bool
+
+	// gitBin, if set, is the absolute path Git execs instead of looking up
+	// "git" on PATH — used by tests that put a logging wrapper first on
+	// PATH (to catch host git ever running with the agent's clone as its
+	// cwd) and need the simulated -ctl sandbox's own git calls, which
+	// legitimately use the clone as cwd, to bypass that wrapper.
+	gitBin string
 }
 
 func newStubSandbox() *stubSandbox { return &stubSandbox{avail: true} }
@@ -121,7 +128,11 @@ func (s *stubSandbox) Git(ctx context.Context, args ...string) (string, error) {
 	if s.failGit != nil && s.failGit(args) {
 		return "simulated git failure", errors.New("simulated git failure")
 	}
-	cmd := exec.CommandContext(ctx, "git", args...)
+	bin := "git"
+	if s.gitBin != "" {
+		bin = s.gitBin
+	}
+	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = s.mountDir
 	out, err := cmd.CombinedOutput()
 	result := strings.TrimRight(string(out), " \t\r\n")

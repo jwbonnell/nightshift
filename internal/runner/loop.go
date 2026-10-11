@@ -462,12 +462,21 @@ func (r *run) loop() Status {
 			}
 			if green && commits >= 1 {
 				st.Commits = commits
-				_ = r.saveState()
-				return StatusComplete
+				roundDue := sp.Review && sp.ReviewRounds > 0 && !r.interrupted() && (deadline.IsZero() || clock().Before(deadline))
+				if !roundDue || !r.reviewRound() {
+					_ = r.saveState()
+					return StatusComplete
+				}
+				// Handed back: reviewRound already wrote REVIEW.md, removed
+				// .spec-complete, appended to PROGRESS.md and saved state.
+				// Fall through to the usual question/progress accounting
+				// below instead of returning, so this iteration counts as
+				// progress.
+			} else {
+				r.logf("rejected .spec-complete (green=%v commits=%d)", green, commits)
+				r.scaffoldRemove(r.completePath())
+				r.appendProgress("Runner: rejected .spec-complete — verify was not green or there were no commits since base.")
 			}
-			r.logf("rejected .spec-complete (green=%v commits=%d)", green, commits)
-			r.scaffoldRemove(r.completePath())
-			r.appendProgress("Runner: rejected .spec-complete — verify was not green or there were no commits since base.")
 		}
 
 		if !green && redStreak >= 2 {

@@ -77,6 +77,13 @@ type run struct {
 	reviewReason  string // set only when reviewVerdict == "skipped"
 	reviewNote    string
 	reviewNoteErr error // set only when the review note itself failed to write
+
+	// reviewRounds records every fix round run during this invocation, oldest
+	// first, for resultBody's "## Review" section (see review_rounds.go). It
+	// lives only in memory: a resume after a hand-back starts a fresh slice,
+	// so the result note only ever lists the rounds run since the last start
+	// or resume, not the full history across resumes.
+	reviewRounds []roundRec
 }
 
 // git runs args against the clone in the control sandbox, stripping any
