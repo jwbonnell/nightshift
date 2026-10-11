@@ -20,17 +20,20 @@ import (
 // injected through the newReviewer test seam var (runner's own
 // stubReviewer, in internal/runner's test files, isn't visible here).
 type recordingReviewer struct {
-	text  string
-	err   error
-	calls int
-	model string
-	ws    string
+	text        string
+	err         error
+	calls       int
+	model       string
+	ws          string
+	deadline    time.Time
+	hasDeadline bool
 }
 
 func (s *recordingReviewer) Review(ctx context.Context, ws, model, prompt string) (string, error) {
 	s.calls++
 	s.model = model
 	s.ws = ws
+	s.deadline, s.hasDeadline = ctx.Deadline()
 	return s.text, s.err
 }
 
@@ -224,6 +227,128 @@ func TestReviewCommandModelPrecedence(t *testing.T) {
 			t.Fatalf("model = %q, want haiku (from --model flag)", rv.model)
 		}
 	})
+}
+
+func TestReviewCommandLockBeforeState(t *testing.T) {
+	slug := "demo"
+	homeDir := t.TempDir()
+	t.Setenv("NIGHTSHIFT_HOME", homeDir)
+
+	stateRoot := home.RunsDir(homeDir)
+	// Mirrors runner's own (unexported) specLockPath format: stateRoot/
+	// .locks/spec-<slug>.lock. No run.json exists anywhere under
+	// stateRoot/<slug> — the lock must still win first.
+	lockPath := filepath.Join(stateRoot, ".locks", "spec-"+slug+".lock")
+	l, err := lock.TryAcquire(lockPath, slug)
+	if err != nil {
+		t.Fatalf("TryAcquire: %v", err)
+	}
+	defer l.Release()
+
+	rv := &recordingReviewer{text: "VERDICT: approve\n"}
+	withStubReviewer(t, rv)
+
+	var stdout, stderr bytes.Buffer
+	exit := dispatch([]string{"review", slug}, &stdout, &stderr, strings.NewReader(""))
+	if exit != runner.ExitCode(runner.StatusBusy) {
+		t.Fatalf("exit=%d, want %d; stderr=%s", exit, runner.ExitCode(runner.StatusBusy), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "already running") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "no run state") {
+		t.Fatalf("stderr should not mention missing run state when busy: %q", stderr.String())
+	}
+	if rv.calls != 0 {
+		t.Fatalf("reviewer should not have been called while busy")
+	}
+}
+
+func TestReviewCommandUsesIterTimeout(t *testing.T) {
+	slug := "demo"
+	homeDir, _, _, _ := newReviewFixture(t, slug)
+	t.Setenv("NIGHTSHIFT_HOME", homeDir)
+	t.Setenv("NIGHTSHIFT_ITER_TIMEOUT", "")
+
+	if err := os.MkdirAll(home.ReadyDir(homeDir), 0o755); err != nil {
+		t.Fatalf("mkdir ready: %v", err)
+	}
+	specPath := filepath.Join(home.ReadyDir(homeDir), slug+".md")
+	if err := os.WriteFile(specPath, []byte("---\nrepo: .\nverify: true\niter_timeout: 5m\n---\n\n# spec\n"), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+
+	t.Run("frontmatter iter_timeout", func(t *testing.T) {
+		rv := &recordingReviewer{text: "VERDICT: approve\n"}
+		withStubReviewer(t, rv)
+		var stdout, stderr bytes.Buffer
+		if exit := dispatch([]string{"review", slug}, &stdout, &stderr, strings.NewReader("")); exit != 0 {
+			t.Fatalf("exit=%d stderr=%s", exit, stderr.String())
+		}
+		if !rv.hasDeadline {
+			t.Fatalf("reviewer ctx has no deadline")
+		}
+		want := time.Now().Add(5 * time.Minute)
+		if d := rv.deadline.Sub(want); d < -time.Minute || d > time.Minute {
+			t.Fatalf("deadline = %v, want within 1m of %v", rv.deadline, want)
+		}
+	})
+
+	if err := os.Remove(specPath); err != nil {
+		t.Fatalf("remove spec: %v", err)
+	}
+
+	t.Run("default iter_timeout", func(t *testing.T) {
+		rv := &recordingReviewer{text: "VERDICT: approve\n"}
+		withStubReviewer(t, rv)
+		var stdout, stderr bytes.Buffer
+		if exit := dispatch([]string{"review", slug}, &stdout, &stderr, strings.NewReader("")); exit != 0 {
+			t.Fatalf("exit=%d stderr=%s", exit, stderr.String())
+		}
+		if !rv.hasDeadline {
+			t.Fatalf("reviewer ctx has no deadline")
+		}
+		want := time.Now().Add(30 * time.Minute)
+		if d := rv.deadline.Sub(want); d < -time.Minute || d > time.Minute {
+			t.Fatalf("deadline = %v, want within 1m of %v", rv.deadline, want)
+		}
+	})
+}
+
+func TestReviewCommandInvalidIterTimeout(t *testing.T) {
+	slug := "demo"
+	homeDir, _, _, _ := newReviewFixture(t, slug)
+	t.Setenv("NIGHTSHIFT_HOME", homeDir)
+
+	if err := os.MkdirAll(home.ReadyDir(homeDir), 0o755); err != nil {
+		t.Fatalf("mkdir ready: %v", err)
+	}
+	specPath := filepath.Join(home.ReadyDir(homeDir), slug+".md")
+	if err := os.WriteFile(specPath, []byte("---\nrepo: .\nverify: true\niter_timeout: bogus\n---\n\n# spec\n"), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+
+	rv := &recordingReviewer{text: "VERDICT: approve\n"}
+	withStubReviewer(t, rv)
+
+	var stdout, stderr bytes.Buffer
+	exit := dispatch([]string{"review", slug}, &stdout, &stderr, strings.NewReader(""))
+	if exit != 1 {
+		t.Fatalf("exit=%d, want 1; stdout=%s stderr=%s", exit, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), `iter_timeout "bogus"`) {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+	if rv.calls != 0 {
+		t.Fatalf("reviewer called %d times, want 0", rv.calls)
+	}
+	matches, err := filepath.Glob(filepath.Join(home.ResultsDir(homeDir), slug+"-*-review*.md"))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("expected no review notes, got %v", matches)
+	}
 }
 
 func TestUsageListsReview(t *testing.T) {

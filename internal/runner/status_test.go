@@ -290,4 +290,138 @@ func TestStatusShowsLatestReview(t *testing.T) {
 			t.Fatalf("output missing %q:\n%s", want, buf.String())
 		}
 	})
+
+	newTime := time.Now().Add(time.Hour)
+	if err := os.Chtimes(newPath, newTime, newTime); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	repeatPath := filepath.Join(resultsDir, "demo-2026-01-02-review-2.md")
+	if err := os.WriteFile(repeatPath, []byte("---\nverdict: reject\n---\n\nrepeat\n"), 0o644); err != nil {
+		t.Fatalf("write repeat review note: %v", err)
+	}
+	repeatTime := newTime.Add(time.Hour)
+	if err := os.Chtimes(repeatPath, repeatTime, repeatTime); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	t.Run("same-day repeat review note wins", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := PrintStatusDetail(&buf, homeDir, stateRoot, "demo"); err != nil {
+			t.Fatalf("PrintStatusDetail: %v", err)
+		}
+		want := "latest review: reject — " + repeatPath
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, buf.String())
+		}
+	})
+}
+
+// TestLatestResultIgnoresReviewNotes is a regression test: a review note
+// newer than the result note must not make "latest result:" report the
+// review note instead.
+func TestLatestResultIgnoresReviewNotes(t *testing.T) {
+	homeDir := t.TempDir()
+	stateRoot := home.RunsDir(homeDir)
+	writeRunState(t, stateRoot, "demo", &runState{
+		Slug: "demo", Repo: "/path/to/repo", Branch: "spec/demo",
+		Base: strings.Repeat("a", 40), BaseRef: "main", LastGreen: strings.Repeat("b", 40),
+		Iterations: 1, Commits: 1, Status: "complete",
+		Started: "2026-01-01T00:00:00Z",
+	})
+
+	resultsDir := home.ResultsDir(homeDir)
+	if err := os.MkdirAll(resultsDir, 0o755); err != nil {
+		t.Fatalf("mkdir results: %v", err)
+	}
+	resultPath := filepath.Join(resultsDir, "demo-2026-01-01.md")
+	if err := os.WriteFile(resultPath, []byte("result"), 0o644); err != nil {
+		t.Fatalf("write result note: %v", err)
+	}
+	oldTime := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(resultPath, oldTime, oldTime); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	reviewPath := filepath.Join(resultsDir, "demo-2026-01-01-review.md")
+	if err := os.WriteFile(reviewPath, []byte("---\nverdict: approve\n---\n\nreview\n"), 0o644); err != nil {
+		t.Fatalf("write review note: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := PrintStatusDetail(&buf, homeDir, stateRoot, "demo"); err != nil {
+		t.Fatalf("PrintStatusDetail: %v", err)
+	}
+	out := buf.String()
+	want := "latest result: " + resultPath
+	if !strings.Contains(out, want) {
+		t.Fatalf("output missing %q:\n%s", want, out)
+	}
+	if strings.Contains(out, "latest result: "+reviewPath) {
+		t.Fatalf("latest result matched the review note:\n%s", out)
+	}
+}
+
+// TestLatestNoteIgnoresLongerSlugs is a regression test: notes for a
+// longer slug that shares this slug as a prefix (e.g. "demo-extra") must
+// never match "demo"'s latest result or latest review.
+func TestLatestNoteIgnoresLongerSlugs(t *testing.T) {
+	homeDir := t.TempDir()
+	stateRoot := home.RunsDir(homeDir)
+	writeRunState(t, stateRoot, "demo", &runState{
+		Slug: "demo", Repo: "/path/to/repo", Branch: "spec/demo",
+		Base: strings.Repeat("a", 40), BaseRef: "main", LastGreen: strings.Repeat("b", 40),
+		Iterations: 1, Commits: 1, Status: "complete",
+		Started: "2026-01-01T00:00:00Z",
+	})
+
+	resultsDir := home.ResultsDir(homeDir)
+	if err := os.MkdirAll(resultsDir, 0o755); err != nil {
+		t.Fatalf("mkdir results: %v", err)
+	}
+
+	demoResult := filepath.Join(resultsDir, "demo-2026-01-01.md")
+	if err := os.WriteFile(demoResult, []byte("demo result"), 0o644); err != nil {
+		t.Fatalf("write demo result note: %v", err)
+	}
+	demoReview := filepath.Join(resultsDir, "demo-2026-01-01-review.md")
+	if err := os.WriteFile(demoReview, []byte("---\nverdict: approve\n---\n\ndemo review\n"), 0o644); err != nil {
+		t.Fatalf("write demo review note: %v", err)
+	}
+	oldTime := time.Now().Add(-time.Hour)
+	for _, p := range []string{demoResult, demoReview} {
+		if err := os.Chtimes(p, oldTime, oldTime); err != nil {
+			t.Fatalf("chtimes: %v", err)
+		}
+	}
+
+	extraResult := filepath.Join(resultsDir, "demo-extra-2026-01-02.md")
+	if err := os.WriteFile(extraResult, []byte("extra result"), 0o644); err != nil {
+		t.Fatalf("write demo-extra result note: %v", err)
+	}
+	extraReview := filepath.Join(resultsDir, "demo-extra-2026-01-02-review.md")
+	if err := os.WriteFile(extraReview, []byte("---\nverdict: reject\n---\n\nextra review\n"), 0o644); err != nil {
+		t.Fatalf("write demo-extra review note: %v", err)
+	}
+	newTime := time.Now().Add(time.Hour)
+	for _, p := range []string{extraResult, extraReview} {
+		if err := os.Chtimes(p, newTime, newTime); err != nil {
+			t.Fatalf("chtimes: %v", err)
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := PrintStatusDetail(&buf, homeDir, stateRoot, "demo"); err != nil {
+		t.Fatalf("PrintStatusDetail: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"latest result: " + demoResult,
+		"latest review: approve — " + demoReview,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "demo-extra") {
+		t.Fatalf("output matched demo-extra's notes:\n%s", out)
+	}
 }

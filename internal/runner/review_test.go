@@ -2,6 +2,7 @@ package runner
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,7 +23,7 @@ func TestReviewWorkspaceAtRef(t *testing.T) {
 	head := mustGit(t, repo, "rev-parse", "HEAD")
 
 	ws := filepath.Join(t.TempDir(), "review-ws")
-	got, err := buildReviewWorkspace(ws, repo, base, "main", "", "", "")
+	got, err := buildReviewWorkspace(context.Background(), ws, repo, base, "main", "", "", "")
 	if err != nil {
 		t.Fatalf("buildReviewWorkspace: %v", err)
 	}
@@ -57,7 +58,7 @@ func TestReviewWorkspaceAtPendingRef(t *testing.T) {
 	mustGit(t, repo, "checkout", "main")
 
 	ws := filepath.Join(t.TempDir(), "review-ws")
-	got, err := buildReviewWorkspace(ws, repo, base, "refs/nightshift/demo", "", "", "")
+	got, err := buildReviewWorkspace(context.Background(), ws, repo, base, "refs/nightshift/demo", "", "", "")
 	if err != nil {
 		t.Fatalf("buildReviewWorkspace: %v", err)
 	}
@@ -88,7 +89,7 @@ func TestReviewWorkspaceInputs(t *testing.T) {
 
 	ws := filepath.Join(t.TempDir(), "review-ws")
 	summary := reviewSummary("complete", "1", "1", base[:7], head[:7], "spec/demo")
-	if _, err := buildReviewWorkspace(ws, repo, base, "main", specPath, "some progress notes", summary); err != nil {
+	if _, err := buildReviewWorkspace(context.Background(), ws, repo, base, "main", specPath, "some progress notes", summary); err != nil {
 		t.Fatalf("buildReviewWorkspace: %v", err)
 	}
 
@@ -145,7 +146,7 @@ func TestReviewWorkspaceMissingSpecAndProgress(t *testing.T) {
 	base := mustGit(t, repo, "rev-parse", "HEAD")
 
 	ws := filepath.Join(t.TempDir(), "review-ws")
-	if _, err := buildReviewWorkspace(ws, repo, base, "main", "", "", ""); err != nil {
+	if _, err := buildReviewWorkspace(context.Background(), ws, repo, base, "main", "", "", ""); err != nil {
 		t.Fatalf("buildReviewWorkspace: %v", err)
 	}
 	spec, err := os.ReadFile(filepath.Join(ws, "inputs", "spec.md"))
@@ -171,7 +172,7 @@ func TestReviewDiffTruncated(t *testing.T) {
 	head := mustGit(t, repo, "rev-parse", "HEAD")
 
 	ws := filepath.Join(t.TempDir(), "review-ws")
-	if _, err := buildReviewWorkspace(ws, repo, base, head, "", "", ""); err != nil {
+	if _, err := buildReviewWorkspace(context.Background(), ws, repo, base, head, "", "", ""); err != nil {
 		t.Fatalf("buildReviewWorkspace: %v", err)
 	}
 	patch, err := os.ReadFile(filepath.Join(ws, "inputs", "diff.patch"))
@@ -192,4 +193,58 @@ func TestReviewDiffTruncated(t *testing.T) {
 func gitDiffOutput(repo string, args ...string) ([]byte, error) {
 	full := append([]string{"-C", repo}, args...)
 	return exec.Command("git", full...).Output()
+}
+
+// TestReviewDiffFlags confirms the diffs run with --no-ext-diff
+// --no-textconv: a textconv driver configured on the source repo must
+// not change what lands in inputs/diff.patch.
+func TestReviewDiffFlags(t *testing.T) {
+	repo := newSourceRepo(t)
+	base := mustGit(t, repo, "rev-parse", "HEAD")
+
+	if err := os.WriteFile(filepath.Join(repo, ".gitattributes"), []byte("*.txt diff=upper\n"), 0o644); err != nil {
+		t.Fatalf("write .gitattributes: %v", err)
+	}
+	mustGit(t, repo, "config", "diff.upper.textconv", "tr a-z A-Z")
+	if err := os.WriteFile(filepath.Join(repo, "lower.txt"), []byte("hello world\n"), 0o644); err != nil {
+		t.Fatalf("write lower.txt: %v", err)
+	}
+	mustGit(t, repo, "add", "-A")
+	mustGit(t, repo, "commit", "-q", "-m", "add lower.txt")
+	head := mustGit(t, repo, "rev-parse", "HEAD")
+
+	ws := filepath.Join(t.TempDir(), "review-ws")
+	if _, err := buildReviewWorkspace(context.Background(), ws, repo, base, head, "", "", ""); err != nil {
+		t.Fatalf("buildReviewWorkspace: %v", err)
+	}
+	patch, err := os.ReadFile(filepath.Join(ws, "inputs", "diff.patch"))
+	if err != nil {
+		t.Fatalf("read diff.patch: %v", err)
+	}
+	if !strings.Contains(string(patch), "hello world") {
+		t.Fatalf("diff.patch missing raw textconv-bypassed text: %q", patch)
+	}
+	if strings.Contains(string(patch), "HELLO WORLD") {
+		t.Fatalf("diff.patch contains textconv-converted text, textconv was not bypassed: %q", patch)
+	}
+}
+
+// TestReviewDiffHonorsContext confirms the diffstat/diff steps are
+// ctx-aware: an already-cancelled context fails buildReviewWorkspace at
+// the diffstat step (the clone above it isn't ctx-aware).
+func TestReviewDiffHonorsContext(t *testing.T) {
+	repo := newSourceRepo(t)
+	base := mustGit(t, repo, "rev-parse", "HEAD")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	ws := filepath.Join(t.TempDir(), "review-ws")
+	_, err := buildReviewWorkspace(ctx, ws, repo, base, "main", "", "", "")
+	if err == nil {
+		t.Fatalf("buildReviewWorkspace: want error from a cancelled context")
+	}
+	if !strings.Contains(err.Error(), "diffstat") {
+		t.Fatalf("err = %v, want mention of diffstat", err)
+	}
 }

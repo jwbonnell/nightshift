@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -14,6 +15,42 @@ import (
 	"github.com/jwbonnell/nightshift/internal/home"
 	"github.com/jwbonnell/nightshift/internal/lock"
 )
+
+// latestNote returns the path of the newest note in dir matching slug
+// exactly — a result note (<slug>-YYYY-MM-DD[-N].md) or, when review is
+// true, a review note (<slug>-YYYY-MM-DD-review[-N].md) — or "" if none
+// match. Exact matching keeps a longer slug that shares this one as a
+// prefix (e.g. "demo-extra") from matching, and keeps result and review
+// notes from matching each other.
+func latestNote(dir, slug string, review bool) string {
+	suffix := `-\d{4}-\d{2}-\d{2}(-\d+)?\.md$`
+	if review {
+		suffix = `-\d{4}-\d{2}-\d{2}-review(-\d+)?\.md$`
+	}
+	pattern := regexp.MustCompile("^" + regexp.QuoteMeta(slug) + suffix)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+
+	var newest string
+	var newestMod int64
+	for _, e := range entries {
+		if e.IsDir() || !pattern.MatchString(e.Name()) {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		fi, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		if mod := fi.ModTime().UnixNano(); newest == "" || mod > newestMod {
+			newest, newestMod = path, mod
+		}
+	}
+	return newest
+}
 
 // reviewRefFor is reviewRef's logic without a live *run, for the status
 // command (which only ever has run.json on disk).
@@ -175,48 +212,24 @@ func PrintStatusDetail(w io.Writer, homeDir, stateRoot, slug string) error {
 	fmt.Fprintf(w, "runner log: %s\n", filepath.Join(dir, "runner.log"))
 	fmt.Fprintf(w, "agent log: %s\n", filepath.Join(dir, "agent.log"))
 
+	resultsDir := home.ResultsDir(homeDir)
+
 	latest := "none"
-	if matches, err := filepath.Glob(filepath.Join(home.ResultsDir(homeDir), slug+"-*.md")); err == nil && len(matches) > 0 {
-		var newest string
-		var newestMod int64
-		for _, m := range matches {
-			fi, err := os.Stat(m)
-			if err != nil {
-				continue
-			}
-			if mod := fi.ModTime().UnixNano(); newest == "" || mod > newestMod {
-				newest, newestMod = m, mod
-			}
-		}
-		if newest != "" {
-			latest = newest
-		}
+	if newest := latestNote(resultsDir, slug, false); newest != "" {
+		latest = newest
 	}
 	fmt.Fprintf(w, "latest result: %s\n", latest)
 
 	latestReview := "none"
-	if matches, err := filepath.Glob(filepath.Join(home.ResultsDir(homeDir), slug+"-*-review.md")); err == nil && len(matches) > 0 {
-		var newest string
-		var newestMod int64
-		for _, m := range matches {
-			fi, err := os.Stat(m)
-			if err != nil {
-				continue
-			}
-			if mod := fi.ModTime().UnixNano(); newest == "" || mod > newestMod {
-				newest, newestMod = m, mod
+	if newest := latestNote(resultsDir, slug, true); newest != "" {
+		verdict := "unknown"
+		if data, err := os.ReadFile(newest); err == nil {
+			fm := home.ParseFrontmatter(data)
+			if v := home.Unquote(strings.TrimSpace(fm["verdict"])); v != "" {
+				verdict = v
 			}
 		}
-		if newest != "" {
-			verdict := "unknown"
-			if data, err := os.ReadFile(newest); err == nil {
-				fm := home.ParseFrontmatter(data)
-				if v := home.Unquote(strings.TrimSpace(fm["verdict"])); v != "" {
-					verdict = v
-				}
-			}
-			latestReview = fmt.Sprintf("%s — %s", verdict, newest)
-		}
+		latestReview = fmt.Sprintf("%s — %s", verdict, newest)
 	}
 	fmt.Fprintf(w, "latest review: %s\n", latestReview)
 

@@ -73,6 +73,7 @@ type run struct {
 	reviewVerdict string
 	reviewReason  string // set only when reviewVerdict == "skipped"
 	reviewNote    string
+	reviewNoteErr error // set only when the review note itself failed to write
 }
 
 // git runs args against the clone in the control sandbox, stripping any

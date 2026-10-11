@@ -79,6 +79,19 @@ func pick(src map[string]string, field, flagV, fmV, envV, configV, def string) s
 	}
 }
 
+// parseIterTimeout resolves iter_timeout via the frontmatter > env >
+// config > default precedence (there's no flag for it) and validates the
+// result as a positive Go duration. Shared by resolveSpecFile and
+// Review's CLI so the two can't drift.
+func parseIterTimeout(src map[string]string, fmV, envV, configV string) (time.Duration, error) {
+	s := pick(src, "iter_timeout", "", fmV, envV, configV, defaultIterTimeout.String())
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("iter_timeout %q: must be a positive Go duration (e.g. 30m)", s)
+	}
+	return d, nil
+}
+
 // parsePositiveInt parses s as a positive decimal integer with no
 // surrounding whitespace and no overflow check, matching the reference's
 // deliberately simple parser.
@@ -285,10 +298,9 @@ func resolveSpecFile(opts Options, path string) (*Spec, error) {
 		return nil, fmt.Errorf("max_iter %q: %w", maxIterStr, err)
 	}
 
-	iterTimeoutStr := pick(src, "iter_timeout", "", fmVal("iter_timeout"), os.Getenv("NIGHTSHIFT_ITER_TIMEOUT"), cfg["NIGHTSHIFT_ITER_TIMEOUT"], defaultIterTimeout.String())
-	iterTimeout, err := time.ParseDuration(iterTimeoutStr)
-	if err != nil || iterTimeout <= 0 {
-		return nil, fmt.Errorf("iter_timeout %q: must be a positive Go duration (e.g. 30m)", iterTimeoutStr)
+	iterTimeout, err := parseIterTimeout(src, fmVal("iter_timeout"), os.Getenv("NIGHTSHIFT_ITER_TIMEOUT"), cfg["NIGHTSHIFT_ITER_TIMEOUT"])
+	if err != nil {
+		return nil, err
 	}
 
 	reviewStr := pick(src, "review", "", fmVal("review"), os.Getenv("NIGHTSHIFT_REVIEW"), cfg["NIGHTSHIFT_REVIEW"], "false")

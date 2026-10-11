@@ -59,6 +59,36 @@ func TestSbxReviewerExecFailureStillRemoves(t *testing.T) {
 	}
 }
 
+func TestSbxReviewerCreateHonorsContext(t *testing.T) {
+	bin, logPath := newFakeSbx(t)
+	t.Setenv("FAKE_SBX_SLEEP", "60")
+	t.Setenv("FAKE_SBX_SLEEP_ON", "create")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	rv := sbxReviewer{bin: bin, claudeBin: "claude", slug: "demo"}
+	done := make(chan error, 1)
+	go func() {
+		_, err := rv.Review(ctx, t.TempDir(), "opus", "prompt")
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatalf("Review: want error")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Review did not return within 5s")
+	}
+
+	got := readLog(t, logPath)
+	if len(got) == 0 || got[len(got)-1] != "rm -f nightshift-demo-review" {
+		t.Fatalf("log did not end with final rm -f: %v", got)
+	}
+}
+
 func TestReviewerParsesJSONResult(t *testing.T) {
 	bin, _ := newFakeSbx(t)
 	t.Setenv("FAKE_SBX_STDOUT", `{"result":"VERDICT: concerns\nSUMMARY: fine"}`)
@@ -135,7 +165,7 @@ func TestReviewerWithOpencode(t *testing.T) {
 		model:     "opencode/openai/gpt-5",
 		now:       time.Now(),
 	}
-	verdict, notePath, err := runReview(context.Background(), rv, params)
+	verdict, notePath, _, err := runReview(context.Background(), rv, params)
 	if err != nil {
 		t.Fatalf("runReview: %v", err)
 	}
@@ -320,7 +350,7 @@ func TestReviewWorkspaceRemovedAfter(t *testing.T) {
 		model:     "opus",
 		now:       time.Now(),
 	}
-	if _, _, err := runReview(context.Background(), rv, p); err != nil {
+	if _, _, _, err := runReview(context.Background(), rv, p); err != nil {
 		t.Fatalf("runReview: %v", err)
 	}
 	if !sawWS {
@@ -332,7 +362,7 @@ func TestReviewWorkspaceRemovedAfter(t *testing.T) {
 
 	// Also removed on a reviewer error.
 	rv2 := stubReviewer{err: context.DeadlineExceeded}
-	if _, _, err := runReview(context.Background(), rv2, p); err == nil {
+	if _, _, _, err := runReview(context.Background(), rv2, p); err == nil {
 		t.Fatalf("runReview: want error")
 	}
 	if _, err := os.Stat(ws); !os.IsNotExist(err) {
@@ -356,7 +386,7 @@ func TestRunReviewWritesErrorNote(t *testing.T) {
 		model:     "opus",
 		now:       time.Now(),
 	}
-	verdict, notePath, err := runReview(context.Background(), rv, p)
+	verdict, notePath, _, err := runReview(context.Background(), rv, p)
 	if err == nil {
 		t.Fatalf("runReview: want error")
 	}
