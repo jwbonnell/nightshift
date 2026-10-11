@@ -53,6 +53,11 @@ type Spec struct {
 	DependsOn    []string // other spec slugs this one depends on, frontmatter order
 	Owns         []string // repo-relative paths this spec may change; empty means unrestricted
 
+	// depTips is set by resolveDepTips (via runLocked, or setup's fallback)
+	// once DependsOn's tips have been resolved in the source repo: one
+	// entry per DependsOn slug, same order, sha "" for a missing branch.
+	depTips []depTip
+
 	// OpencodeCfgPath/OpencodeCfg are set only when some role resolves to
 	// opencode: the expanded NIGHTSHIFT_OPENCODE_CONFIG path and its
 	// validated, compacted JSON content.
@@ -141,6 +146,29 @@ func parseDependsOn(raw string) ([]string, error) {
 		deps = append(deps, s)
 	}
 	return deps, nil
+}
+
+// depTip is one depends_on entry's resolved spec/<slug> branch tip in the
+// source repo: Sha is "" when the owner merged and deleted the branch.
+type depTip struct {
+	slug string
+	sha  string
+}
+
+// resolveDepTips resolves each of sp.DependsOn's spec/<slug> branch tip in
+// the source repo, read-only, in depends_on order. A missing branch
+// resolves to an empty sha rather than an error — the owner may have
+// merged and deleted it.
+func resolveDepTips(sp *Spec) []depTip {
+	tips := make([]depTip, len(sp.DependsOn))
+	for i, d := range sp.DependsOn {
+		sha := ""
+		if out, err := gitx.Run(sp.Repo, "rev-parse", "--verify", "--quiet", "refs/heads/spec/"+d+"^{commit}"); err == nil {
+			sha = strings.TrimSpace(out)
+		}
+		tips[i] = depTip{slug: d, sha: sha}
+	}
+	return tips
 }
 
 // ownsEntryOK reports whether e is a clean, relative, repo-local path:

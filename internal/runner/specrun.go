@@ -389,6 +389,10 @@ func runLocked(opts Options, sp *Spec, limit int, capSrc string, specLock *lock.
 	}
 	sp.BaseSHA = sha
 
+	if len(sp.DependsOn) > 0 && !opts.IgnoreDeps {
+		sp.depTips = resolveDepTips(sp)
+	}
+
 	return runSpec(opts, sp, sb)
 }
 
@@ -427,7 +431,13 @@ func runSpec(opts Options, sp *Spec, sb Sandbox) (Status, error) {
 		}
 	}()
 
-	status := r.loop()
+	var status Status
+	if r.needIntegrate {
+		status = r.integrateDeps()
+	}
+	if status == "" {
+		status = r.loop()
+	}
 	r.removeErr = sb.Remove()
 	sbRemoved = true
 	if r.removeErr != nil {

@@ -74,6 +74,25 @@ type stubSandbox struct {
 
 func newStubSandbox() *stubSandbox { return &stubSandbox{avail: true} }
 
+// stripGitIdentityEnv drops GIT_AUTHOR_NAME/EMAIL and GIT_COMMITTER_NAME/
+// EMAIL from env, leaving everything else (including GIT_CONFIG_GLOBAL/
+// GIT_CONFIG_NOSYSTEM) untouched.
+func stripGitIdentityEnv(env []string) []string {
+	drop := map[string]bool{
+		"GIT_AUTHOR_NAME": true, "GIT_AUTHOR_EMAIL": true,
+		"GIT_COMMITTER_NAME": true, "GIT_COMMITTER_EMAIL": true,
+	}
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		k, _, _ := strings.Cut(kv, "=")
+		if drop[k] {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
 func (s *stubSandbox) Available() bool { return s.avail }
 
 func (s *stubSandbox) Create(mountDir string, egress []string) error {
@@ -134,6 +153,13 @@ func (s *stubSandbox) Git(ctx context.Context, args ...string) (string, error) {
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = s.mountDir
+	// The real -ctl sandbox is a separate container with its own env, not
+	// the host nightshift process's — so a commit made through it (e.g. a
+	// dependency merge) gets its identity from the clone's own git config
+	// (set by cloneRepo), never from TestMain's hermetic GIT_AUTHOR_NAME/
+	// GIT_COMMITTER_NAME env vars. Strip just those four so this stub
+	// matches that.
+	cmd.Env = stripGitIdentityEnv(os.Environ())
 	out, err := cmd.CombinedOutput()
 	result := strings.TrimRight(string(out), " \t\r\n")
 	if s.gitHook != nil {

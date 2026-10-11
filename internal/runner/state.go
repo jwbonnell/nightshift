@@ -17,12 +17,16 @@ import (
 
 // runState is the on-disk run.json. Field order is the JSON field order.
 type runState struct {
-	Slug         string   `json:"slug"`
-	Repo         string   `json:"repo"`
-	Branch       string   `json:"branch"`
-	Base         string   `json:"base"`                // immutable base commit sha
-	BaseRef      string   `json:"base_ref"`            // requested base name at run start
-	LastGreen    string   `json:"last_green"`          // sha of the last verify-green HEAD
+	Slug      string `json:"slug"`
+	Repo      string `json:"repo"`
+	Branch    string `json:"branch"`
+	Base      string `json:"base"`       // immutable base commit sha
+	BaseRef   string `json:"base_ref"`   // requested base name at run start
+	LastGreen string `json:"last_green"` // sha of the last verify-green HEAD
+
+	DepTips      map[string]string `json:"dep_tips,omitempty"`      // Task 3: slug -> sha of each depends_on tip actually merged/fast-forwarded in
+	BaseResolved string            `json:"base_resolved,omitempty"` // Task 3: the base sha before integrating depends_on, set once integration finishes
+
 	SyncRef      string   `json:"sync_ref,omitempty"`  // refs/heads/<branch> or refs/nightshift/<slug>
 	SyncOwed     bool     `json:"sync_owed,omitempty"` // a copy-back failed and hasn't succeeded since
 	SpecHash     string   `json:"spec_hash"`           // spec content hash at last plan
@@ -69,6 +73,11 @@ type run struct {
 	prChecks  postRunReport // Task 5: computed once in finish(), reused by printSummary/resultBody/notify
 
 	deadline time.Time // the --until deadline computed by loop(), zero if unset
+
+	// needIntegrate is set by setup() when a fresh clone was just created
+	// for a spec with depends_on (and !IgnoreDeps): runSpec must run
+	// integrateDeps() before any agent iteration.
+	needIntegrate bool
 
 	// Automatic review results (Task: review), set by runAutoReview and
 	// read by resultBody/notifyText. reviewVerdict == "" means no review
@@ -258,6 +267,20 @@ func (r *run) cloneRepo() error {
 	if _, err := gitx.Run(r.clone, "cat-file", "-e", sp.BaseSHA+"^{commit}"); err != nil {
 		if out, ferr := gitx.Run(r.clone, "fetch", "origin", sp.BaseSHA); ferr != nil {
 			return fmt.Errorf("fetch base %s from %s: %v: %s", sp.BaseSHA, sp.Repo, ferr, out)
+		}
+	}
+
+	// Task 3: --no-local already clones every branch, including any
+	// depends_on tips, so this fetch is only a fallback for an object the
+	// initial clone somehow missed.
+	for _, t := range sp.depTips {
+		if t.sha == "" {
+			continue
+		}
+		if _, err := gitx.Run(r.clone, "cat-file", "-e", t.sha+"^{commit}"); err != nil {
+			if out, ferr := gitx.Run(r.clone, "fetch", "origin", t.sha); ferr != nil {
+				return fmt.Errorf("fetch dep %s tip %s from %s: %v: %s", t.slug, t.sha, sp.Repo, ferr, out)
+			}
 		}
 	}
 
@@ -477,6 +500,13 @@ func setup(opts Options, sp *Spec) (*run, error) {
 		}
 	}
 
+	// Task 3: runLocked already resolved sp.depTips before calling setup;
+	// a caller that skips runLocked (e.g. newTestRun) gets them resolved
+	// here instead.
+	if sp.depTips == nil && len(sp.DependsOn) > 0 && !opts.IgnoreDeps {
+		sp.depTips = resolveDepTips(sp)
+	}
+
 	v := opts.Version
 	if v == "" {
 		v = "dev"
@@ -536,6 +566,9 @@ func setup(opts Options, sp *Spec) (*run, error) {
 
 	if err := r.cloneRepo(); err != nil {
 		return nil, err
+	}
+	if len(sp.DependsOn) > 0 && !opts.IgnoreDeps {
+		r.needIntegrate = true
 	}
 	r.logf("start: repo=%s branch=%s base=%s version=%s agents=plan:%s,code:%s",
 		sp.Repo, r.st.Branch, short(r.st.Base), r.version, sp.PlannerSel.String(), sp.ModelSel.String())
