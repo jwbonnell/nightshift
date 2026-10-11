@@ -163,14 +163,16 @@ func (rv sbxReviewer) name() string {
 // removes the sandbox afterward — even when create or exec fails.
 func (rv sbxReviewer) Review(ctx context.Context, ws, model, prompt string) (string, error) {
 	name := rv.name()
-	_, _ = execStream(context.Background(), nil, io.Discard, rv.bin, "rm", "-f", name)
+	rctx, rcancel := context.WithTimeout(ctx, cleanupTimeout)
+	_, _ = execStream(rctx, nil, io.Discard, rv.bin, "rm", "-f", name)
+	rcancel()
 	defer func() {
 		cctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 		defer cancel()
 		_, _ = execStream(cctx, nil, io.Discard, rv.bin, "rm", "-f", name)
 	}()
 
-	if out, err := execStream(context.Background(), nil, io.Discard, rv.bin, "create", "--name", name, "claude", ws); err != nil {
+	if out, err := execStream(ctx, nil, io.Discard, rv.bin, "create", "--name", name, "claude", ws); err != nil {
 		return "", fmt.Errorf("create: %w: %s", err, out)
 	}
 

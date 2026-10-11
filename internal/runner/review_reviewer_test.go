@@ -59,6 +59,36 @@ func TestSbxReviewerExecFailureStillRemoves(t *testing.T) {
 	}
 }
 
+func TestSbxReviewerCreateHonorsContext(t *testing.T) {
+	bin, logPath := newFakeSbx(t)
+	t.Setenv("FAKE_SBX_SLEEP", "60")
+	t.Setenv("FAKE_SBX_SLEEP_ON", "create")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	rv := sbxReviewer{bin: bin, claudeBin: "claude", slug: "demo"}
+	done := make(chan error, 1)
+	go func() {
+		_, err := rv.Review(ctx, t.TempDir(), "opus", "prompt")
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatalf("Review: want error")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Review did not return within 5s")
+	}
+
+	got := readLog(t, logPath)
+	if len(got) == 0 || got[len(got)-1] != "rm -f nightshift-demo-review" {
+		t.Fatalf("log did not end with final rm -f: %v", got)
+	}
+}
+
 func TestReviewerParsesJSONResult(t *testing.T) {
 	bin, _ := newFakeSbx(t)
 	t.Setenv("FAKE_SBX_STDOUT", `{"result":"VERDICT: concerns\nSUMMARY: fine"}`)

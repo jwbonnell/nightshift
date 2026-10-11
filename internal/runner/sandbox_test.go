@@ -24,7 +24,7 @@ fi
 if [ -n "$FAKE_SBX_LOG" ]; then
   printf '%s\n' "$*" >> "$FAKE_SBX_LOG"
 fi
-if [ -n "$FAKE_SBX_SLEEP" ]; then
+if [ -n "$FAKE_SBX_SLEEP" ] && { [ -z "$FAKE_SBX_SLEEP_ON" ] || [ "$1" = "$FAKE_SBX_SLEEP_ON" ]; }; then
   # exec replaces this shell with sleep, so a context-cancel SIGKILL from
   # the Go side kills it directly instead of leaving it as an orphaned
   # grandchild still holding the output pipe open.
