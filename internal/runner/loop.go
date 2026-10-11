@@ -205,23 +205,16 @@ func (r *run) loop() Status {
 	st.StopReason = ""
 	r.deadline = deadline
 
-	// codeAg/planAg are built once per run, directly from the spec's raw
-	// model strings (resolveSpecFile doesn't parse selectors yet — that
-	// moves here in a later step). With no selector syntax in use, this
-	// is exactly agent.Selector{Agent: "claude", Model: sp.Model/Planner}.
-	codeSel, err := agent.ParseSelector(sp.Model)
+	// codeAg/planAg are built once per run from the selectors resolveSpecFile
+	// already parsed and validated.
+	settings := agent.Settings{ClaudeBin: r.opts.ClaudeBin, OpencodeBin: r.opts.OpencodeBin, OpencodeConfig: sp.OpencodeCfg}
+	codeSel := sp.ModelSel
+	codeAg, err := agent.New(codeSel, settings)
 	if err != nil {
 		return r.fail(err)
 	}
-	codeAg, err := agent.New(codeSel, agent.Settings{ClaudeBin: r.opts.ClaudeBin})
-	if err != nil {
-		return r.fail(err)
-	}
-	planSel, err := agent.ParseSelector(sp.Planner)
-	if err != nil {
-		return r.fail(err)
-	}
-	planAg, err := agent.New(planSel, agent.Settings{ClaudeBin: r.opts.ClaudeBin})
+	planSel := sp.PlannerSel
+	planAg, err := agent.New(planSel, settings)
 	if err != nil {
 		return r.fail(err)
 	}

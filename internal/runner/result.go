@@ -310,7 +310,7 @@ func (r *run) runAutoReview() {
 
 	rv := r.opts.Reviewer
 	if rv == nil {
-		rv = sbxReviewer{bin: r.opts.SbxBin, claudeBin: r.opts.ClaudeBin, slug: r.spec.Slug}
+		rv = sbxReviewer{bin: r.opts.SbxBin, claudeBin: r.opts.ClaudeBin, slug: r.spec.Slug, opencodeBin: r.opts.OpencodeBin, opencodeConfig: r.spec.OpencodeCfg}
 	}
 
 	ctx, cancel := r.iterCtx(r.deadline, clock)

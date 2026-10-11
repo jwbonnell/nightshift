@@ -153,24 +153,25 @@ type Reviewer interface {
 // agent/ctl/verify sandboxes.
 type sbxReviewer struct {
 	bin, claudeBin, slug string
+	opencodeBin          string
+	opencodeConfig       string // compacted JSON content, or "" if unset
 }
 
 func (rv sbxReviewer) name() string {
 	return "nightshift-" + rv.slug + "-review"
 }
 
-// Review creates a fresh sandbox mounting ws, runs claude in it with only
-// Read, Grep and Glob tools and no permission-bypass flag, and always
-// removes the sandbox afterward — even when create or exec fails. model
-// is a raw agent selector (see internal/agent); today it's always a bare
-// or claude/<model> selector, since review_model doesn't yet accept
-// opencode selectors.
+// Review creates a fresh sandbox mounting ws, runs the reviewer's agent
+// in it read-only (Read/Grep/Glob for claude, the read-only opencode
+// permissions for opencode), and always removes the sandbox afterward —
+// even when create or exec fails. model is a raw agent selector (see
+// internal/agent), which may now name opencode as well as claude.
 func (rv sbxReviewer) Review(ctx context.Context, ws, model, prompt string) (string, error) {
 	sel, err := agent.ParseSelector(model)
 	if err != nil {
 		return "", err
 	}
-	ag, err := agent.New(sel, agent.Settings{ClaudeBin: rv.claudeBin})
+	ag, err := agent.New(sel, agent.Settings{ClaudeBin: rv.claudeBin, OpencodeBin: rv.opencodeBin, OpencodeConfig: rv.opencodeConfig})
 	if err != nil {
 		return "", err
 	}
@@ -184,7 +185,7 @@ func (rv sbxReviewer) Review(ctx context.Context, ws, model, prompt string) (str
 		_, _ = execStream(cctx, nil, io.Discard, rv.bin, "rm", "-f", name)
 	}()
 
-	if out, err := execStream(context.Background(), nil, io.Discard, rv.bin, "create", "--name", name, "claude", ws); err != nil {
+	if out, err := execStream(context.Background(), nil, io.Discard, rv.bin, "create", "--name", name, ag.SbxAgent(), ws); err != nil {
 		return "", fmt.Errorf("create: %w: %s", err, out)
 	}
 
@@ -416,13 +417,15 @@ func Review(opts ReviewOptions) (Status, error) {
 	if err != nil {
 		return StatusError, fmt.Errorf("%s (from %s): %w", "review_model", modelSrc, err)
 	}
+	opencodeCfg := ""
 	if sel.Agent == "opencode" {
 		if cfgRaw := envConfigDefault("NIGHTSHIFT_OPENCODE_CONFIG", cfg, ""); cfgRaw != "" {
 			expanded, err := expandHome(cfgRaw)
 			if err != nil {
 				return StatusError, fmt.Errorf("NIGHTSHIFT_OPENCODE_CONFIG %q: %w", cfgRaw, err)
 			}
-			if _, err := agent.LoadOpencodeConfig(expanded); err != nil {
+			opencodeCfg, err = agent.LoadOpencodeConfig(expanded)
+			if err != nil {
 				return StatusError, err
 			}
 		}
@@ -432,7 +435,7 @@ func Review(opts ReviewOptions) (Status, error) {
 
 	rv := opts.Reviewer
 	if rv == nil {
-		rv = sbxReviewer{bin: opts.SbxBin, claudeBin: opts.ClaudeBin, slug: opts.Slug}
+		rv = sbxReviewer{bin: opts.SbxBin, claudeBin: opts.ClaudeBin, slug: opts.Slug, opencodeBin: opts.OpencodeBin, opencodeConfig: opencodeCfg}
 	}
 
 	ctx, cancel := context.WithTimeout(opts.Ctx, defaultIterTimeout)

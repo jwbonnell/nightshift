@@ -87,6 +87,70 @@ func TestReviewerBannerStripped(t *testing.T) {
 	}
 }
 
+// TestReviewerWithOpencode covers review_model: opencode/<provider>/<model>:
+// the review sandbox is created with the opencode template and run with
+// the read-only opencode permissions, and the note records the selector
+// via Display(), which for opencode is just its full String().
+func TestReviewerWithOpencode(t *testing.T) {
+	bin, logPath := newFakeSbx(t)
+	t.Setenv("FAKE_SBX_STDOUT", `{"type":"text","part":{"text":"VERDICT: approve"}}`)
+	stdinFile := filepath.Join(t.TempDir(), "stdin")
+	t.Setenv("FAKE_SBX_STDIN_FILE", stdinFile)
+
+	ws := t.TempDir()
+	rv := sbxReviewer{bin: bin, claudeBin: "claude", slug: "demo", opencodeBin: "opencode"}
+	text, err := rv.Review(context.Background(), ws, "opencode/openai/gpt-5", "the prompt")
+	if err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if text != "VERDICT: approve" {
+		t.Fatalf("text = %q", text)
+	}
+
+	const reviewPermission = `{"edit":"deny","bash":"deny","webfetch":"deny","websearch":"deny","task":"deny","external_directory":"deny"}`
+	got := readLog(t, logPath)
+	want := []string{
+		"rm -f nightshift-demo-review",
+		"create --name nightshift-demo-review opencode " + ws,
+		"exec -w " + ws + " nightshift-demo-review env OPENCODE_PERMISSION=" + reviewPermission + " opencode run --format json --auto -m openai/gpt-5",
+		"rm -f nightshift-demo-review",
+	}
+	if !equalLines(got, want) {
+		t.Fatalf("log = %v, want %v", got, want)
+	}
+
+	// Drive runReview end to end (real repo, real sbxReviewer) to confirm
+	// the review note records the opencode selector.
+	repo := newSourceRepo(t)
+	head := mustGit(t, repo, "rev-parse", "HEAD")
+	homeDir := t.TempDir()
+	params := reviewParams{
+		home:      homeDir,
+		stateRoot: t.TempDir(),
+		slug:      "demo",
+		repo:      repo,
+		base:      head,
+		ref:       "main",
+		summary:   "summary",
+		model:     "opencode/openai/gpt-5",
+		now:       time.Now(),
+	}
+	verdict, notePath, err := runReview(context.Background(), rv, params)
+	if err != nil {
+		t.Fatalf("runReview: %v", err)
+	}
+	if verdict != "approve" {
+		t.Fatalf("verdict = %q, want approve", verdict)
+	}
+	note, err := os.ReadFile(notePath)
+	if err != nil {
+		t.Fatalf("read note: %v", err)
+	}
+	if !strings.Contains(string(note), "model: opencode/openai/gpt-5\n") {
+		t.Fatalf("note missing opencode model line:\n%s", note)
+	}
+}
+
 func TestReviewerBadJSONError(t *testing.T) {
 	cases := []struct {
 		name   string

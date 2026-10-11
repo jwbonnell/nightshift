@@ -3,6 +3,10 @@ package runner
 import (
 	"context"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
 
 	"github.com/jwbonnell/nightshift/internal/agent"
 )
@@ -30,4 +34,24 @@ func goldenRunAgent(sb *sbxSandbox, planning bool, model, prompt string) error {
 // this helper isolates that change from the golden test.
 func goldenReview(rv sbxReviewer, ws, model, prompt string) (string, error) {
 	return rv.Review(context.Background(), ws, model, prompt)
+}
+
+// readGoldenSandboxLines returns just the sandbox-sequence portion of
+// the pinned claude-argv golden file — everything through the second
+// "rm -f nightshift-demo nightshift-demo-ctl nightshift-demo-verify",
+// before the review sandbox's lines. TestSameAgentOneSandbox uses it to
+// confirm newSbxSandboxAgents produces byte-identical argv to
+// newSbxSandbox when both roles resolve to the same agent.
+func readGoldenSandboxLines(t *testing.T) []string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", "golden", "claude-argv.golden"))
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	const sandboxLines = 13
+	if len(lines) < sandboxLines {
+		t.Fatalf("golden file has only %d lines, want at least %d", len(lines), sandboxLines)
+	}
+	return lines[:sandboxLines]
 }

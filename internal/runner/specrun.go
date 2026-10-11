@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jwbonnell/nightshift/internal/agent"
 	"github.com/jwbonnell/nightshift/internal/gitx"
 	"github.com/jwbonnell/nightshift/internal/home"
 	"github.com/jwbonnell/nightshift/internal/lock"
@@ -339,7 +340,16 @@ func runLocked(opts Options, sp *Spec, limit int, capSrc string, specLock *lock.
 
 	sb := opts.Sandbox
 	if sb == nil {
-		sb = newSbxSandbox(opts.SbxBin, opts.ClaudeBin, sp.Slug)
+		settings := agent.Settings{ClaudeBin: opts.ClaudeBin, OpencodeBin: opts.OpencodeBin, OpencodeConfig: sp.OpencodeCfg}
+		codeAg, err := agent.New(sp.ModelSel, settings)
+		if err != nil {
+			return StatusError, err
+		}
+		planAg, err := agent.New(sp.PlannerSel, settings)
+		if err != nil {
+			return StatusError, err
+		}
+		sb = newSbxSandboxAgents(opts.SbxBin, sp.Slug, codeAg, planAg)
 	}
 	if !sb.Available() {
 		return StatusError, fmt.Errorf("Docker Sandboxes (%s) is not available — install it and run `sbx setup`; the agent is never run on the host", opts.SbxBin)
