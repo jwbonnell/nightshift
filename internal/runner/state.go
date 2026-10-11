@@ -34,7 +34,16 @@ type runState struct {
 	Started    string   `json:"started"`               // RFC3339, first run
 	History    []string `json:"history"`               // human-readable status trail
 
+	Agents *agentsRec `json:"agents,omitempty"` // the selectors' String() form, as of the last start/resume
+
 	NightshiftVersion string `json:"nightshift_version"` // Task 4: the binary version that ran this invocation
+}
+
+// agentsRec is runState.Agents: a struct rather than a map so plan always
+// marshals before code.
+type agentsRec struct {
+	Plan string `json:"plan"`
+	Code string `json:"code"`
 }
 
 // run holds one spec's in-progress execution state.
@@ -267,6 +276,7 @@ func (r *run) cloneRepo() error {
 		LastGreen:         sp.BaseSHA,
 		SpecHash:          sp.ContentHash,
 		Started:           r.opts.Now.Format(time.RFC3339),
+		Agents:            &agentsRec{Plan: sp.PlannerSel.String(), Code: sp.ModelSel.String()},
 		NightshiftVersion: r.version,
 	}
 	return r.saveState()
@@ -445,17 +455,24 @@ func setup(opts Options, sp *Spec) (*run, error) {
 			r.logf("resume: cleared stale .spec-complete")
 			r.appendProgress("Runner: cleared a stale .spec-complete left by a previous session; re-claim completion when done.")
 		}
+		old := r.st.Agents
+		r.st.Agents = &agentsRec{Plan: sp.PlannerSel.String(), Code: sp.ModelSel.String()}
+		if old != nil && (old.Plan != r.st.Agents.Plan || old.Code != r.st.Agents.Code) {
+			r.logf("agents changed: plan %s→%s, code %s→%s", old.Plan, r.st.Agents.Plan, old.Code, r.st.Agents.Code)
+		}
 		r.st.NightshiftVersion = r.version
 		if err := r.saveState(); err != nil {
 			return nil, err
 		}
-		r.logf("resume: branch=%s base=%s last_green=%s version=%s", r.st.Branch, short(r.st.Base), short(r.st.LastGreen), r.version)
+		r.logf("resume: branch=%s base=%s last_green=%s version=%s agents=plan:%s,code:%s",
+			r.st.Branch, short(r.st.Base), short(r.st.LastGreen), r.version, r.st.Agents.Plan, r.st.Agents.Code)
 		return r, nil
 	}
 
 	if err := r.cloneRepo(); err != nil {
 		return nil, err
 	}
-	r.logf("start: repo=%s branch=%s base=%s version=%s", sp.Repo, r.st.Branch, short(r.st.Base), r.version)
+	r.logf("start: repo=%s branch=%s base=%s version=%s agents=plan:%s,code:%s",
+		sp.Repo, r.st.Branch, short(r.st.Base), r.version, sp.PlannerSel.String(), sp.ModelSel.String())
 	return r, nil
 }

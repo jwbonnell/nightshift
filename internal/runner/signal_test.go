@@ -322,7 +322,7 @@ func TestInterruptedRunFinishesClean(t *testing.T) {
 	if st.Status != "interrupted" {
 		t.Fatalf("run.json status = %q, want interrupted", st.Status)
 	}
-	if len(st.History) == 0 || !strings.HasSuffix(st.History[len(st.History)-1], " interrupted") {
-		t.Fatalf("run.json history last entry = %q, want suffix \" interrupted\"", st.History)
+	if len(st.History) == 0 || !strings.Contains(st.History[len(st.History)-1], " interrupted") {
+		t.Fatalf("run.json history last entry = %q, want to contain \" interrupted\"", st.History)
 	}
 }

@@ -35,6 +35,11 @@ type stubSandbox struct {
 	agentAlive                           bool
 	verifyRaced                          bool
 
+	// prompts captures every RunAgent call's prompt, in order, for tests
+	// that check the prompt bytes are identical regardless of which agent
+	// is running them.
+	prompts []string
+
 	// plannerNoWrite, when true, suppresses RunAgent's default behavior of
 	// appending a line to PROGRESS.md on a planning prompt — tests that
 	// need to exercise a planner that makes no progress set this.
@@ -74,6 +79,7 @@ func (s *stubSandbox) RunAgent(ctx context.Context, ag agent.Agent, inv agent.In
 	s.iter++
 	s.agentN++
 	s.models = append(s.models, inv.Model)
+	s.prompts = append(s.prompts, prompt)
 	if logw != nil {
 		if s.output != nil {
 			fmt.Fprint(logw, s.output(s.iter))

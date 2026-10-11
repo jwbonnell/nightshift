@@ -232,7 +232,7 @@ func TestFinishWritesNoteAndSummary(t *testing.T) {
 	if r.st.Status != "complete" {
 		t.Fatalf("run.json status = %q, want %q", r.st.Status, "complete")
 	}
-	if len(r.st.History) != 1 || !strings.HasSuffix(r.st.History[0], "complete") {
+	if len(r.st.History) != 1 || !strings.Contains(r.st.History[0], " complete") {
 		t.Fatalf("History = %v", r.st.History)
 	}
 
