@@ -285,6 +285,32 @@ func TestNoSandboxNoRun(t *testing.T) {
 	}
 }
 
+// TestSelectorErrorBeforeSetup checks that a bad model selector fails
+// resolution before anything is created: no sandbox Create call, and no
+// state dir for the spec.
+func TestSelectorErrorBeforeSetup(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "demo", "model: foo/bar\n", repo)
+
+	sb := newStubSandbox()
+	opts := Options{SpecArg: "demo", Home: homeDir, Sandbox: sb, Stdout: io.Discard, Stderr: io.Discard, Stdin: strings.NewReader("")}
+	status, err := Run(opts)
+	if status != StatusError || err == nil {
+		t.Fatalf("status=%v err=%v, want Error/non-nil", status, err)
+	}
+	if !strings.Contains(err.Error(), "model (from frontmatter): unknown agent") {
+		t.Fatalf("err = %q, want it to contain %q", err.Error(), "model (from frontmatter): unknown agent")
+	}
+	if sb.mountDir != "" {
+		t.Fatalf("sandbox Create was called despite the bad selector")
+	}
+	stateRoot := home.RunsDir(homeDir)
+	if dirExists(filepath.Join(stateRoot, "demo")) {
+		t.Fatalf("a state dir was created despite the bad selector")
+	}
+}
+
 func TestRerunCompleteRefuses(t *testing.T) {
 	repo := newSourceRepo(t)
 	homeDir := t.TempDir()

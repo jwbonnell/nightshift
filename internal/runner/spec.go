@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jwbonnell/nightshift/internal/agent"
 	"github.com/jwbonnell/nightshift/internal/gitx"
 	"github.com/jwbonnell/nightshift/internal/home"
 )
@@ -32,18 +33,28 @@ type Spec struct {
 	Slug        string
 	Repo        string // absolute
 	Verify      string
-	Model       string
-	Planner     string
+	Model       string // Display() of ModelSel — unchanged for a bare/claude selector
+	Planner     string // Display() of PlannerSel
+	ModelSel    agent.Selector
+	PlannerSel  agent.Selector
 	MaxIter     int
 	IterTimeout time.Duration
 	Egress      []string
 	Review      bool
-	ReviewModel string
+	ReviewModel string // raw selector string, as handed to Reviewer
+	ReviewSel   agent.Selector
 	Created     string
 	ContentHash string
 	Base        string // requested base name
 	BaseSHA     string // resolved commit sha (filled by Run via resolveBase)
-	src         map[string]string
+
+	// OpencodeCfgPath/OpencodeCfg are set only when some role resolves to
+	// opencode: the expanded NIGHTSHIFT_OPENCODE_CONFIG path and its
+	// validated, compacted JSON content.
+	OpencodeCfgPath string
+	OpencodeCfg     string
+
+	src map[string]string
 }
 
 // pick implements the five-tier precedence flag > frontmatter > env >
@@ -254,7 +265,15 @@ func resolveSpecFile(opts Options, path string) (*Spec, error) {
 	}
 
 	model := pick(src, "model", "", fmVal("model"), os.Getenv("NIGHTSHIFT_MODEL"), cfg["NIGHTSHIFT_MODEL"], defaultModel)
+	modelSel, err := agent.ParseSelector(model)
+	if err != nil {
+		return nil, fmt.Errorf("%s (from %s): %w", "model", src["model"], err)
+	}
 	planner := pick(src, "planner_model", "", fmVal("planner_model"), os.Getenv("NIGHTSHIFT_PLANNER_MODEL"), cfg["NIGHTSHIFT_PLANNER_MODEL"], defaultPlanner)
+	plannerSel, err := agent.ParseSelector(planner)
+	if err != nil {
+		return nil, fmt.Errorf("%s (from %s): %w", "planner_model", src["planner_model"], err)
+	}
 
 	flagIter := ""
 	if opts.MaxIter > 0 {
@@ -278,6 +297,10 @@ func resolveSpecFile(opts Options, path string) (*Spec, error) {
 		return nil, fmt.Errorf("review %q: want true or false", reviewStr)
 	}
 	reviewModel := pick(src, "review_model", "", fmVal("review_model"), os.Getenv("NIGHTSHIFT_REVIEW_MODEL"), cfg["NIGHTSHIFT_REVIEW_MODEL"], defaultReviewModel)
+	reviewSel, err := agent.ParseSelector(reviewModel)
+	if err != nil {
+		return nil, fmt.Errorf("%s (from %s): %w", "review_model", src["review_model"], err)
+	}
 
 	var egress []string
 	for _, item := range strings.Split(fm["egress"], ",") {
@@ -287,21 +310,43 @@ func resolveSpecFile(opts Options, path string) (*Spec, error) {
 		}
 	}
 
+	var opencodeCfgPath, opencodeCfg string
+	if modelSel.Agent == "opencode" || plannerSel.Agent == "opencode" || reviewSel.Agent == "opencode" {
+		cfgRaw := envConfigDefault("NIGHTSHIFT_OPENCODE_CONFIG", cfg, "")
+		if cfgRaw != "" {
+			expanded, err := expandHome(cfgRaw)
+			if err != nil {
+				return nil, fmt.Errorf("NIGHTSHIFT_OPENCODE_CONFIG %q: %w", cfgRaw, err)
+			}
+			compact, err := agent.LoadOpencodeConfig(expanded)
+			if err != nil {
+				return nil, err
+			}
+			opencodeCfgPath = expanded
+			opencodeCfg = compact
+		}
+	}
+
 	return &Spec{
-		Path:        path,
-		Slug:        slug,
-		Repo:        repoAbs,
-		Verify:      verifyRaw,
-		Model:       model,
-		Planner:     planner,
-		MaxIter:     maxIter,
-		IterTimeout: iterTimeout,
-		Egress:      egress,
-		Review:      review,
-		ReviewModel: reviewModel,
-		Created:     fmVal("created"),
-		ContentHash: contentHash,
-		Base:        baseName,
-		src:         src,
+		Path:            path,
+		Slug:            slug,
+		Repo:            repoAbs,
+		Verify:          verifyRaw,
+		Model:           modelSel.Display(),
+		Planner:         plannerSel.Display(),
+		ModelSel:        modelSel,
+		PlannerSel:      plannerSel,
+		MaxIter:         maxIter,
+		IterTimeout:     iterTimeout,
+		Egress:          egress,
+		Review:          review,
+		ReviewModel:     reviewModel,
+		ReviewSel:       reviewSel,
+		OpencodeCfgPath: opencodeCfgPath,
+		OpencodeCfg:     opencodeCfg,
+		Created:         fmVal("created"),
+		ContentHash:     contentHash,
+		Base:            baseName,
+		src:             src,
 	}, nil
 }

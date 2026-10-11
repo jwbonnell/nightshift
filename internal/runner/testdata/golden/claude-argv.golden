@@ -1,0 +1,17 @@
+rm -f nightshift-demo nightshift-demo-ctl nightshift-demo-verify
+create --name nightshift-demo claude /mnt/demo/repo
+policy allow network --sandbox nightshift-demo api.example.com
+create --name nightshift-demo-ctl claude /mnt/demo/repo
+policy allow network --sandbox nightshift-demo-ctl api.example.com
+exec -w /mnt/demo/repo nightshift-demo claude -p --model opus --output-format json --permission-mode bypassPermissions
+exec -w /mnt/demo/repo nightshift-demo claude -p --model sonnet --output-format json --permission-mode bypassPermissions
+stop nightshift-demo
+rm -f nightshift-demo-verify
+create --name nightshift-demo-verify claude /mnt/demo/repo
+policy allow network --sandbox nightshift-demo-verify api.example.com
+exec -w /mnt/demo/repo nightshift-demo-verify sh -c echo hi
+rm -f nightshift-demo nightshift-demo-ctl nightshift-demo-verify
+rm -f nightshift-demo-review
+create --name nightshift-demo-review claude /mnt/demo/review-ws
+exec -w /mnt/demo/review-ws nightshift-demo-review claude -p --model opus --tools Read,Grep,Glob --disallowedTools mcp__* --output-format json
+rm -f nightshift-demo-review

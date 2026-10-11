@@ -124,7 +124,7 @@ func TestLimitMarkerBlocksStart(t *testing.T) {
 	if sb.mountDir != "" {
 		t.Fatalf("sandbox Create was called: mountDir=%q", sb.mountDir)
 	}
-	wantMsg := "usage limit active until " + resetAt.Format("Mon 15:04") + " (recorded by other-spec); not starting"
+	wantMsg := "usage limit active until " + resetAt.Local().Format("Mon 15:04") + " (recorded by other-spec); not starting"
 	if !strings.Contains(stderr.String(), wantMsg) {
 		t.Fatalf("stderr = %q, want to contain %q", stderr.String(), wantMsg)
 	}
@@ -262,7 +262,7 @@ func TestDryRunShowsUsageLimit(t *testing.T) {
 		t.Fatalf("status=%v err=%v, want dry-run/nil", status, err)
 	}
 
-	want := "usage limit: active until " + resetAt.Format("Mon 15:04")
+	want := "usage limit: active until " + resetAt.Local().Format("Mon 15:04")
 	if !strings.Contains(stdout.String(), want) {
 		t.Fatalf("dry-run output missing %q:\n%s", want, stdout.String())
 	}

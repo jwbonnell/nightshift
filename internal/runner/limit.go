@@ -252,11 +252,11 @@ func checkActiveLimit(opts Options) (status Status, handled bool, err error) {
 	wake := limitWake(resetAt, now, cfg.Fallback)
 
 	if limitWaitExceedsWindow(wake, now, deadline, cfg.MaxWait) {
-		fmt.Fprintf(opts.Stderr, "usage limit active until %s (recorded by %s); not starting\n", resetAt.Format("Mon 15:04"), active.By)
+		fmt.Fprintf(opts.Stderr, "usage limit active until %s (recorded by %s); not starting\n", resetAt.Local().Format("Mon 15:04"), active.By)
 		return StatusRateLimited, true, nil
 	}
 
-	fmt.Fprintf(opts.Stdout, "usage limit active; waiting until %s\n", wake.Format("15:04 Mon"))
+	fmt.Fprintf(opts.Stdout, "usage limit active; waiting until %s\n", wake.Local().Format("15:04 Mon"))
 	if serr := sleepFor(opts, wake.Sub(now)); serr != nil || opts.interrupted() {
 		return StatusInterrupted, true, nil
 	}

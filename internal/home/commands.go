@@ -49,6 +49,10 @@ const commentedConfig = `# nightshift config file.
 # NIGHTSHIFT_LIMIT_MAX_WAIT=6h
 # stop after this many limit hits in a row with no green iteration between them
 # NIGHTSHIFT_LIMIT_MAX_HITS=3
+# opencode binary inside an opencode sandbox
+# NIGHTSHIFT_OPENCODE_BIN=opencode
+# opencode JSON config for non-Claude providers (no inline secrets)
+# NIGHTSHIFT_OPENCODE_CONFIG=
 `
 
 func fileExists(path string) bool {

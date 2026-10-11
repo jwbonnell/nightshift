@@ -15,6 +15,11 @@ import (
 	"github.com/jwbonnell/nightshift/internal/home"
 )
 
+// rateLimitLine is the real --output-format json shape of a rate-limited
+// claude result, used across this file's tests to script what the stub
+// agent's final iteration prints.
+const rateLimitLine = `{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"terminal_reason":"api_error","result":"You've hit your session limit · resets 7am (UTC)","num_turns":8}`
+
 // readRunState reads and parses <stateRoot>/<slug>/run.json, for tests
 // that need to inspect state fields after a full Run().
 func readRunState(t *testing.T, stateRoot, slug string) runState {

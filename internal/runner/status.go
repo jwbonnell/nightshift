@@ -127,7 +127,7 @@ func PrintStatusTable(w io.Writer, homeDir, stateRoot string) error {
 
 	if active := readActiveLimit(stateRoot, time.Now(), false); active != nil {
 		resetAt, _ := time.Parse(time.RFC3339, active.ResetAt)
-		fmt.Fprintf(w, "usage limit: until %s\n", resetAt.Format("Mon 15:04"))
+		fmt.Fprintf(w, "usage limit: until %s\n", resetAt.Local().Format("Mon 15:04"))
 	}
 
 	if len(readyNotStarted) > 0 {

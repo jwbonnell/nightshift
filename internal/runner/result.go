@@ -103,6 +103,9 @@ func (r *run) resultBody(status Status) string {
 		fmt.Fprintf(&b, "limit_reset: %s\n", limitReset)
 	}
 	fmt.Fprintf(&b, "nightshift: %s\n", r.version)
+	if a := st.Agents; a != nil {
+		fmt.Fprintf(&b, "agents: plan=%s, code=%s\n", a.Plan, a.Code)
+	}
 	if r.reviewVerdict != "" {
 		fmt.Fprintf(&b, "review: %s\n", r.reviewVerdict)
 	}
@@ -283,7 +286,11 @@ func (r *run) notify(status Status) {
 func (r *run) finish(status Status) (Status, error) {
 	status = r.finalizeSync(status)
 	r.st.Status = string(status)
-	r.st.History = append(r.st.History, r.opts.clockFn()().Format("2006-01-02 15:04")+" "+string(status))
+	entry := r.opts.clockFn()().Format("2006-01-02 15:04") + " " + string(status)
+	if r.st.Agents != nil {
+		entry += " agent=" + r.st.Agents.Code
+	}
+	r.st.History = append(r.st.History, entry)
 	_ = r.saveState()
 
 	r.prChecks = r.postRunChecks()
@@ -325,7 +332,7 @@ func (r *run) runAutoReview() {
 
 	rv := r.opts.Reviewer
 	if rv == nil {
-		rv = sbxReviewer{bin: r.opts.SbxBin, claudeBin: r.opts.ClaudeBin, slug: r.spec.Slug}
+		rv = sbxReviewer{bin: r.opts.SbxBin, claudeBin: r.opts.ClaudeBin, slug: r.spec.Slug, opencodeBin: r.opts.OpencodeBin, opencodeConfig: r.spec.OpencodeCfg}
 	}
 
 	ctx, cancel := r.iterCtx(r.deadline, clock)

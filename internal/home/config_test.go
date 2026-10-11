@@ -175,3 +175,29 @@ func TestConfigAcceptsLimitKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestOpencodeKeysInConfigAllowList(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config")
+	content := "NIGHTSHIFT_OPENCODE_BIN=/usr/local/bin/opencode\nNIGHTSHIFT_OPENCODE_CONFIG=~/opencode.json\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := ParseConfig(path)
+	if err != nil {
+		t.Fatalf("ParseConfig: %v", err)
+	}
+	if cfg["NIGHTSHIFT_OPENCODE_BIN"] != "/usr/local/bin/opencode" {
+		t.Fatalf("NIGHTSHIFT_OPENCODE_BIN = %q", cfg["NIGHTSHIFT_OPENCODE_BIN"])
+	}
+	if cfg["NIGHTSHIFT_OPENCODE_CONFIG"] != "~/opencode.json" {
+		t.Fatalf("NIGHTSHIFT_OPENCODE_CONFIG = %q", cfg["NIGHTSHIFT_OPENCODE_CONFIG"])
+	}
+
+	if !strings.Contains(commentedConfig, "# NIGHTSHIFT_OPENCODE_BIN=opencode") {
+		t.Fatalf("commentedConfig missing NIGHTSHIFT_OPENCODE_BIN line:\n%s", commentedConfig)
+	}
+	if !strings.Contains(commentedConfig, "# NIGHTSHIFT_OPENCODE_CONFIG=") {
+		t.Fatalf("commentedConfig missing NIGHTSHIFT_OPENCODE_CONFIG line:\n%s", commentedConfig)
+	}
+}

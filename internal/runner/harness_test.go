@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jwbonnell/nightshift/internal/agent"
 	"github.com/jwbonnell/nightshift/internal/home"
 )
 
@@ -33,6 +34,11 @@ type stubSandbox struct {
 	removeErr                            error
 	agentAlive                           bool
 	verifyRaced                          bool
+
+	// prompts captures every RunAgent call's prompt, in order, for tests
+	// that check the prompt bytes are identical regardless of which agent
+	// is running them.
+	prompts []string
 
 	// plannerNoWrite, when true, suppresses RunAgent's default behavior of
 	// appending a line to PROGRESS.md on a planning prompt — tests that
@@ -69,15 +75,16 @@ func (s *stubSandbox) Create(mountDir string, egress []string) error {
 	return nil
 }
 
-func (s *stubSandbox) RunAgent(ctx context.Context, model, prompt string, logw io.Writer) error {
+func (s *stubSandbox) RunAgent(ctx context.Context, ag agent.Agent, inv agent.Invocation, prompt string, logw io.Writer) error {
 	s.iter++
 	s.agentN++
-	s.models = append(s.models, model)
+	s.models = append(s.models, inv.Model)
+	s.prompts = append(s.prompts, prompt)
 	if logw != nil {
 		if s.output != nil {
 			fmt.Fprint(logw, s.output(s.iter))
 		} else {
-			fmt.Fprintf(logw, "AGENT RAW OUTPUT iter=%d model=%s\n", s.iter, model)
+			fmt.Fprintf(logw, "AGENT RAW OUTPUT iter=%d model=%s\n", s.iter, inv.Model)
 		}
 	}
 

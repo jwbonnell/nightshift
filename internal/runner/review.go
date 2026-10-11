@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jwbonnell/nightshift/internal/agent"
 	"github.com/jwbonnell/nightshift/internal/gitx"
 	"github.com/jwbonnell/nightshift/internal/home"
 	"github.com/jwbonnell/nightshift/internal/lock"
@@ -152,16 +153,30 @@ type Reviewer interface {
 // agent/ctl/verify sandboxes.
 type sbxReviewer struct {
 	bin, claudeBin, slug string
+	opencodeBin          string
+	opencodeConfig       string // compacted JSON content, or "" if unset
 }
 
 func (rv sbxReviewer) name() string {
 	return "nightshift-" + rv.slug + "-review"
 }
 
-// Review creates a fresh sandbox mounting ws, runs claude in it with only
-// Read, Grep and Glob tools and no permission-bypass flag, and always
-// removes the sandbox afterward — even when create or exec fails.
+// Review creates a fresh sandbox mounting ws, runs the reviewer's agent
+// in it read-only (Read/Grep/Glob for claude, the read-only opencode
+// permissions for opencode), and always removes the sandbox afterward —
+// even when create or exec fails. model is a raw agent selector (see
+// internal/agent), which may now name opencode as well as claude.
 func (rv sbxReviewer) Review(ctx context.Context, ws, model, prompt string) (string, error) {
+	sel, err := agent.ParseSelector(model)
+	if err != nil {
+		return "", err
+	}
+	ag, err := agent.New(sel, agent.Settings{ClaudeBin: rv.claudeBin, OpencodeBin: rv.opencodeBin, OpencodeConfig: rv.opencodeConfig})
+	if err != nil {
+		return "", err
+	}
+	inv := agent.Invocation{Role: agent.RoleReview, Model: sel.Model, ReadOnly: true}
+
 	name := rv.name()
 	_, _ = execStream(context.Background(), nil, io.Discard, rv.bin, "rm", "-f", name)
 	defer func() {
@@ -170,33 +185,26 @@ func (rv sbxReviewer) Review(ctx context.Context, ws, model, prompt string) (str
 		_, _ = execStream(cctx, nil, io.Discard, rv.bin, "rm", "-f", name)
 	}()
 
-	if out, err := execStream(context.Background(), nil, io.Discard, rv.bin, "create", "--name", name, "claude", ws); err != nil {
+	if out, err := execStream(context.Background(), nil, io.Discard, rv.bin, "create", "--name", name, ag.SbxAgent(), ws); err != nil {
 		return "", fmt.Errorf("create: %w: %s", err, out)
 	}
 
 	var stdout, stderr bytes.Buffer
-	err := execSplit(ctx, strings.NewReader(prompt), &stdout, &stderr, rv.bin,
-		"exec", "-w", ws, name, rv.claudeBin,
-		"-p", "--model", model, "--tools", "Read,Grep,Glob", "--disallowedTools", "mcp__*", "--output-format", "json")
+	args := append([]string{"exec", "-w", ws, name}, ag.Argv(inv)...)
+	err = execSplit(ctx, strings.NewReader(prompt), &stdout, &stderr, rv.bin, args...)
 	out := stripSbxBanner(stdout.String())
 	if err != nil {
 		return "", fmt.Errorf("exec: %w: %s", err, firstBytes(out, 500))
 	}
 
-	var resp struct {
-		Result  *string `json:"result"`
-		IsError bool    `json:"is_error"`
-	}
-	if jerr := json.Unmarshal([]byte(out), &resp); jerr != nil {
-		return "", fmt.Errorf("parse review output: %v: %s", jerr, firstBytes(out, 500))
-	}
-	if resp.Result == nil {
+	res := ag.Parse(out)
+	if !res.Found {
 		return "", fmt.Errorf("review output missing result: %s", firstBytes(out, 500))
 	}
-	if resp.IsError {
+	if res.IsError {
 		return "", fmt.Errorf("review reported an error: %s", firstBytes(out, 500))
 	}
-	return *resp.Result, nil
+	return res.Text, nil
 }
 
 // firstBytes returns the first n bytes of s, unchanged if shorter.
@@ -300,17 +308,18 @@ func runReview(ctx context.Context, rv Reviewer, p reviewParams) (verdict, noteP
 // headless review of a prior (or in-progress) run's work, independent of
 // that run's own status.
 type ReviewOptions struct {
-	Home      string
-	StateRoot string // default: <Home>/runs
-	Slug      string
-	Model     string   // --model flag; "" falls through to spec frontmatter/env/config/default
-	Reviewer  Reviewer // nil = sbxReviewer
-	SbxBin    string   // default "sbx"
-	ClaudeBin string   // default "claude"
-	Now       time.Time
-	Ctx       context.Context
-	Stdout    io.Writer
-	Stderr    io.Writer
+	Home        string
+	StateRoot   string // default: <Home>/runs
+	Slug        string
+	Model       string   // --model flag; "" falls through to spec frontmatter/env/config/default
+	Reviewer    Reviewer // nil = sbxReviewer
+	SbxBin      string   // default "sbx"
+	ClaudeBin   string   // default "claude"
+	OpencodeBin string   // default "opencode"
+	Now         time.Time
+	Ctx         context.Context
+	Stdout      io.Writer
+	Stderr      io.Writer
 }
 
 func (o *ReviewOptions) fill() {
@@ -336,6 +345,9 @@ func (o *ReviewOptions) fill() {
 	}
 	if o.ClaudeBin == "" {
 		o.ClaudeBin = envConfigDefault("NIGHTSHIFT_CLAUDE_BIN", cfg, "claude")
+	}
+	if o.OpencodeBin == "" {
+		o.OpencodeBin = envConfigDefault("NIGHTSHIFT_OPENCODE_BIN", cfg, "opencode")
 	}
 }
 
@@ -391,18 +403,39 @@ func Review(opts ReviewOptions) (Status, error) {
 		}
 	}
 
+	cfg, _ := home.ParseConfig(home.ConfigPath(opts.Home))
+
 	model := opts.Model
+	modelSrc := "flag"
 	if model == "" {
-		cfg, _ := home.ParseConfig(home.ConfigPath(opts.Home))
+		msrc := map[string]string{}
 		fmModel := home.Unquote(strings.TrimSpace(fm["review_model"]))
-		model = pick(map[string]string{}, "review_model", "", fmModel, os.Getenv("NIGHTSHIFT_REVIEW_MODEL"), cfg["NIGHTSHIFT_REVIEW_MODEL"], defaultReviewModel)
+		model = pick(msrc, "review_model", "", fmModel, os.Getenv("NIGHTSHIFT_REVIEW_MODEL"), cfg["NIGHTSHIFT_REVIEW_MODEL"], defaultReviewModel)
+		modelSrc = msrc["review_model"]
+	}
+	sel, err := agent.ParseSelector(model)
+	if err != nil {
+		return StatusError, fmt.Errorf("%s (from %s): %w", "review_model", modelSrc, err)
+	}
+	opencodeCfg := ""
+	if sel.Agent == "opencode" {
+		if cfgRaw := envConfigDefault("NIGHTSHIFT_OPENCODE_CONFIG", cfg, ""); cfgRaw != "" {
+			expanded, err := expandHome(cfgRaw)
+			if err != nil {
+				return StatusError, fmt.Errorf("NIGHTSHIFT_OPENCODE_CONFIG %q: %w", cfgRaw, err)
+			}
+			opencodeCfg, err = agent.LoadOpencodeConfig(expanded)
+			if err != nil {
+				return StatusError, err
+			}
+		}
 	}
 
 	progress, _ := ReadScaffold(filepath.Join(opts.StateRoot, opts.Slug, "repo", "PROGRESS.md"))
 
 	rv := opts.Reviewer
 	if rv == nil {
-		rv = sbxReviewer{bin: opts.SbxBin, claudeBin: opts.ClaudeBin, slug: opts.Slug}
+		rv = sbxReviewer{bin: opts.SbxBin, claudeBin: opts.ClaudeBin, slug: opts.Slug, opencodeBin: opts.OpencodeBin, opencodeConfig: opencodeCfg}
 	}
 
 	ctx, cancel := context.WithTimeout(opts.Ctx, defaultIterTimeout)

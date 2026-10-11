@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/jwbonnell/nightshift/internal/agent"
 )
 
 // iterPreamble and planPreamble are byte-identical to reference §3.8.1 /
@@ -83,9 +85,49 @@ func stateDirFor(opts Options, sp *Spec) string {
 	return joinPath(opts.StateRoot, sp.Slug)
 }
 
+// claudeExecPreview is the literal claude exec argv shown in --dry-run,
+// unchanged since before this spec: <model> stays a placeholder because
+// one claude sandbox serves both the planner and the coder, each with its
+// own real model, and this line is generic to either.
+func claudeExecPreview(claudeBin string) string {
+	return fmt.Sprintf("%s -p --model <model> --output-format json --permission-mode bypassPermissions", claudeBin)
+}
+
+// opencodeExecPreview renders ag's real argv for inv, with the config
+// content (if any) replaced by a placeholder: the acceptance criteria
+// forbid printing opencode config contents anywhere, so this never calls
+// Argv() on an Agent built with the real OpencodeConfig — ag here is
+// always built with an empty config, and hasCfg says whether to splice in
+// the placeholder where the real content would have gone.
+func opencodeExecPreview(ag agent.Agent, inv agent.Invocation, hasCfg bool) string {
+	argv := ag.Argv(inv)
+	parts := make([]string, 0, len(argv)+1)
+	for _, a := range argv {
+		parts = append(parts, a)
+		if hasCfg && strings.HasPrefix(a, "OPENCODE_PERMISSION=") {
+			parts = append(parts, "OPENCODE_CONFIG_CONTENT=<from opencode cfg>")
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+// execPreview is the per-iteration exec line shown for ag's role: claude's
+// is always the fixed placeholder line, opencode's reflects the real
+// permission JSON with the config content redacted.
+func execPreview(ag agent.Agent, claudeBin string, inv agent.Invocation, hasCfg bool) string {
+	if ag.Name() == "claude" {
+		return claudeExecPreview(claudeBin)
+	}
+	return opencodeExecPreview(ag, inv, hasCfg)
+}
+
 // printPlan is the --dry-run output: reference §3.1.10's format strings,
 // verbatim, with D2's "home:" line inserted first and the D1 sandbox-name
-// rename applied.
+// rename applied. The default (all-claude) output is byte-identical to
+// before this spec, apart from the added "plan agent:"/"code agent:"
+// lines — every sandbox name, template and exec line it prints for that
+// case matches exactly, since codeAg and planAg are both claude and
+// sbx.planName stays "".
 func printPlan(w io.Writer, opts Options, sp *Spec, maxConcurrent int, capSrc string) {
 	fmt.Fprintf(w, "home:        %s\n", opts.Home)
 	fmt.Fprintf(w, "spec:        %s\n", sp.Path)
@@ -95,11 +137,16 @@ func printPlan(w io.Writer, opts Options, sp *Spec, maxConcurrent int, capSrc st
 	fmt.Fprintf(w, "base:        %s (%s) @ %s\n", sp.Base, sp.src["base"], short(sp.BaseSHA))
 	fmt.Fprintf(w, "model:       %s (%s)\n", sp.Model, sp.src["model"])
 	fmt.Fprintf(w, "planner:     %s (%s)\n", sp.Planner, sp.src["planner_model"])
+	fmt.Fprintf(w, "plan agent:  %s\n", sp.PlannerSel.String())
+	fmt.Fprintf(w, "code agent:  %s\n", sp.ModelSel.String())
+	if sp.OpencodeCfgPath != "" {
+		fmt.Fprintf(w, "opencode cfg: %s\n", sp.OpencodeCfgPath)
+	}
 	fmt.Fprintf(w, "max_iter:    %d (%s)\n", sp.MaxIter, sp.src["max_iter"])
 	fmt.Fprintf(w, "iter_timeout:%s (%s)\n", sp.IterTimeout, sp.src["iter_timeout"]) // NB: no space after the colon
 	if active := readActiveLimit(opts.StateRoot, opts.clockFn()(), false); active != nil {
 		resetAt, _ := time.Parse(time.RFC3339, active.ResetAt)
-		fmt.Fprintf(w, "usage limit: active until %s\n", resetAt.Format("Mon 15:04"))
+		fmt.Fprintf(w, "usage limit: active until %s\n", resetAt.Local().Format("Mon 15:04"))
 	} else {
 		fmt.Fprint(w, "usage limit: none\n")
 	}
@@ -113,21 +160,41 @@ func printPlan(w io.Writer, opts Options, sp *Spec, maxConcurrent int, capSrc st
 	fmt.Fprintf(w, "state dir:   %s\n", stateDir)
 	fmt.Fprintf(w, "clone:       %s\n", stateDir+"/repo")
 	fmt.Fprintf(w, "branch:      spec/%s\n", sp.Slug)
-	agent := "nightshift-" + sp.Slug
-	ctl := agent + "-ctl"
-	verify := agent + "-verify"
+
+	// codeAg/planAg are built without OpencodeConfig even when sp.OpencodeCfg
+	// is set, so nothing derived from them below (sandbox templates, the
+	// exec-line permission JSON) can ever carry real config content; the
+	// "opencode cfg:" line above is the only place its path appears, and its
+	// content never appears at all.
+	settings := agent.Settings{ClaudeBin: opts.ClaudeBin, OpencodeBin: opts.OpencodeBin}
+	codeAg, _ := agent.New(sp.ModelSel, settings)
+	planAg, _ := agent.New(sp.PlannerSel, settings)
+	sbx := newSbxSandboxAgents(opts.SbxBin, sp.Slug, codeAg, planAg)
+	hasCfg := sp.OpencodeCfgPath != ""
+
 	fmt.Fprintf(w, "\nsandboxes (agent=claude, ctl=git ops, verify=recreated fresh each verify):\n")
-	for _, name := range []string{agent, ctl} {
-		fmt.Fprintf(w, "  %s create --name %s claude %s/repo\n", opts.SbxBin, name, stateDir)
+	previews := []struct{ name, template string }{{sbx.agentName, sbx.codeTemplate}}
+	if sbx.planName != "" {
+		previews = append(previews, struct{ name, template string }{sbx.planName, sbx.planTemplate})
+	}
+	previews = append(previews, struct{ name, template string }{sbx.ctlName, "claude"})
+	for _, p := range previews {
+		fmt.Fprintf(w, "  %s create --name %s %s %s/repo\n", opts.SbxBin, p.name, p.template, stateDir)
 		for _, h := range sp.Egress {
-			fmt.Fprintf(w, "  %s policy allow network --sandbox %s %s\n", opts.SbxBin, name, h)
+			fmt.Fprintf(w, "  %s policy allow network --sandbox %s %s\n", opts.SbxBin, p.name, h)
 		}
 	}
-	fmt.Fprintf(w, "agent (per iteration, prompt on stdin):\n  %s exec -w %s/repo %s %s -p --model <model> --output-format json --permission-mode bypassPermissions\n", opts.SbxBin, stateDir, agent, opts.ClaudeBin)
-	fmt.Fprintf(w, "  %s stop %s   # kill the agent before verify\n", opts.SbxBin, agent)
-	fmt.Fprintf(w, "git ops (per iteration, in the ctl sandbox):\n  %s exec -w %s/repo %s git ...\n", opts.SbxBin, stateDir, ctl)
+	fmt.Fprintf(w, "agent (per iteration, prompt on stdin):\n  %s exec -w %s/repo %s %s\n",
+		opts.SbxBin, stateDir, sbx.agentName, execPreview(codeAg, opts.ClaudeBin, agent.Invocation{Role: agent.RoleCode, Model: sp.ModelSel.Model}, hasCfg))
+	fmt.Fprintf(w, "  %s stop %s   # kill the agent before verify\n", opts.SbxBin, sbx.agentName)
+	if sbx.planName != "" {
+		fmt.Fprintf(w, "plan agent (per iteration, prompt on stdin):\n  %s exec -w %s/repo %s %s\n",
+			opts.SbxBin, stateDir, sbx.planName, execPreview(planAg, opts.ClaudeBin, agent.Invocation{Role: agent.RolePlan, Model: sp.PlannerSel.Model}, hasCfg))
+		fmt.Fprintf(w, "  %s stop %s   # kill the plan agent before verify\n", opts.SbxBin, sbx.planName)
+	}
+	fmt.Fprintf(w, "git ops (per iteration, in the ctl sandbox):\n  %s exec -w %s/repo %s git ...\n", opts.SbxBin, stateDir, sbx.ctlName)
 	fmt.Fprintf(w, "verify (per iteration, in a freshly recreated sandbox):\n  %s rm -f %s && %s create --name %s claude %s/repo\n  %s exec -w %s/repo %s sh -c %q\n",
-		opts.SbxBin, verify, opts.SbxBin, verify, stateDir, opts.SbxBin, stateDir, verify, sp.Verify)
+		opts.SbxBin, sbx.verifyName, opts.SbxBin, sbx.verifyName, stateDir, opts.SbxBin, stateDir, sbx.verifyName, sp.Verify)
 	fmt.Fprintf(w, "\n--- planning prompt ---\n%s\n", buildPrompt(sp, true))
 	fmt.Fprintf(w, "\n--- iteration prompt ---\n%s\n", buildPrompt(sp, false))
 }

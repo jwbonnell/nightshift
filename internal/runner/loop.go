@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jwbonnell/nightshift/internal/agent"
 )
 
 var fullSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -215,6 +217,20 @@ func (r *run) loop() Status {
 	st.LimitReset = ""
 	r.deadline = deadline
 
+	// codeAg/planAg are built once per run from the selectors resolveSpecFile
+	// already parsed and validated.
+	settings := agent.Settings{ClaudeBin: r.opts.ClaudeBin, OpencodeBin: r.opts.OpencodeBin, OpencodeConfig: sp.OpencodeCfg}
+	codeSel := sp.ModelSel
+	codeAg, err := agent.New(codeSel, settings)
+	if err != nil {
+		return r.fail(err)
+	}
+	planSel := sp.PlannerSel
+	planAg, err := agent.New(planSel, settings)
+	if err != nil {
+		return r.fail(err)
+	}
+
 	redStreak, noProgress, session, charged, limitHits := 0, 0, 0, 0, 0
 
 	for charged < sp.MaxIter {
@@ -230,8 +246,10 @@ func (r *run) loop() Status {
 		st.Iterations++
 		planning := needPlan
 		model := sp.Model
+		ag, sel, role := codeAg, codeSel, agent.RoleCode
 		if planning {
 			model = sp.Planner
+			ag, sel, role = planAg, planSel, agent.RolePlan
 		}
 
 		progressBefore := r.scaffoldRead(r.progressPath())
@@ -243,7 +261,7 @@ func (r *run) loop() Status {
 		r.logf("iter %d (session %d) model=%s planning=%v", st.Iterations, session, model, planning)
 
 		var agentErr error
-		var res agentResult
+		var res agent.Result
 		transientRetries := 0
 		for {
 			ctx, cancel := r.iterCtx(deadline, clock)
@@ -253,9 +271,10 @@ func (r *run) loop() Status {
 			if r.agentLog != nil {
 				w = io.MultiWriter(r.agentLog, tail)
 			}
-			agentErr = r.sb.RunAgent(ctx, model, buildPrompt(sp, planning), w)
+			inv := agent.Invocation{Role: role, Model: sel.Model}
+			agentErr = r.sb.RunAgent(ctx, ag, inv, buildPrompt(sp, planning), w)
 			cancel()
-			res = parseAgentResult(tail.String())
+			res = ag.Parse(tail.String())
 			switch {
 			case agentErr == context.DeadlineExceeded:
 				r.logf("iter %d timed out after %s", st.Iterations, sp.IterTimeout)
@@ -279,7 +298,7 @@ func (r *run) loop() Status {
 				_ = r.saveState()
 				return StatusWindowClosed
 			}
-			if res.rateLimited() || !res.transient() || transientRetries >= 3 {
+			if ag.RateLimited(res) || !ag.Transient(res) || transientRetries >= 3 {
 				break
 			}
 
@@ -300,7 +319,7 @@ func (r *run) loop() Status {
 			}
 		}
 
-		if res.rateLimited() {
+		if ag.RateLimited(res) {
 			r.logf("iter %d rate-limited: %s", st.Iterations, res.Message)
 			r.captureDirty(st.Iterations)
 			charged-- // this iteration doesn't count toward max_iter
@@ -336,7 +355,7 @@ func (r *run) loop() Status {
 				return StatusRateLimited
 			}
 
-			r.logf("iter %d rate-limited; waiting until %s", st.Iterations, wake.Format("15:04 Mon"))
+			r.logf("iter %d rate-limited; waiting until %s", st.Iterations, wake.Local().Format("15:04 Mon"))
 			st.WaitingUntil = wake.Format(time.RFC3339)
 			_ = r.saveState()
 			if err := r.sleep(wake.Sub(now)); err != nil || r.interrupted() {

@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/jwbonnell/nightshift/internal/agent"
 )
 
 // childWaitDelay bounds how long execStream/execSplit wait for a child's
@@ -41,7 +43,7 @@ const cleanupTimeout = 60 * time.Second
 type Sandbox interface {
 	Available() bool
 	Create(mountDir string, egress []string) error
-	RunAgent(ctx context.Context, model, prompt string, logw io.Writer) error
+	RunAgent(ctx context.Context, ag agent.Agent, inv agent.Invocation, prompt string, logw io.Writer) error
 	StopAgent() error
 	Git(ctx context.Context, args ...string) (string, error)
 	ResetVerify() error
@@ -53,22 +55,42 @@ type Sandbox interface {
 // sandboxes (agent/ctl/verify) use the sbx template named "claude" and
 // mount the same clone dir, at the same absolute path, as the working dir.
 type sbxSandbox struct {
-	bin, claudeBin, agentName, ctlName, verifyName, mountDir string
-	egress                                                   []string
-	created                                                  bool
+	bin, claudeBin, agentName, planName, ctlName, verifyName, mountDir string
+	codeTemplate, planTemplate                                         string
+	egress                                                             []string
+	created                                                            bool
+}
+
+// newSbxSandboxAgents names the agent sandbox nightshift-<slug> per D1,
+// created with code's SbxAgent() template. When plan names a different
+// agent than code, a second agent sandbox nightshift-<slug>-plan is
+// added, created with plan's SbxAgent() template; with the same agent for
+// both roles, planName stays "" and there is exactly one agent sandbox,
+// as today.
+func newSbxSandboxAgents(bin, slug string, code, plan agent.Agent) *sbxSandbox {
+	name := "nightshift-" + slug
+	sb := &sbxSandbox{
+		bin:          bin,
+		agentName:    name,
+		ctlName:      name + "-ctl",
+		verifyName:   name + "-verify",
+		codeTemplate: code.SbxAgent(),
+	}
+	if plan.Name() != code.Name() {
+		sb.planName = name + "-plan"
+		sb.planTemplate = plan.SbxAgent()
+	}
+	return sb
 }
 
 // newSbxSandbox names the three sandboxes per D1: nightshift-<slug>
-// (agent), -ctl (control), -verify (verify).
+// (agent), -ctl (control), -verify (verify). It means claude for both the
+// code and plan roles, so there is never a -plan sandbox.
 func newSbxSandbox(bin, claudeBin, slug string) *sbxSandbox {
-	agent := "nightshift-" + slug
-	return &sbxSandbox{
-		bin:        bin,
-		claudeBin:  claudeBin,
-		agentName:  agent,
-		ctlName:    agent + "-ctl",
-		verifyName: agent + "-verify",
-	}
+	claude, _ := agent.New(agent.Selector{Agent: "claude"}, agent.Settings{ClaudeBin: claudeBin})
+	sb := newSbxSandboxAgents(bin, slug, claude, claude)
+	sb.claudeBin = claudeBin
+	return sb
 }
 
 func (s *sbxSandbox) Available() bool {
@@ -76,10 +98,10 @@ func (s *sbxSandbox) Available() bool {
 	return err == nil
 }
 
-// mk creates sandbox name from the claude template mounting s.mountDir,
-// then allows egress to each of s.egress, one host per call.
-func (s *sbxSandbox) mk(name string) error {
-	out, err := execStream(context.Background(), nil, io.Discard, s.bin, "create", "--name", name, "claude", s.mountDir)
+// mk creates sandbox name from template mounting s.mountDir, then allows
+// egress to each of s.egress, one host per call.
+func (s *sbxSandbox) mk(name, template string) error {
+	out, err := execStream(context.Background(), nil, io.Discard, s.bin, "create", "--name", name, template, s.mountDir)
 	if err != nil {
 		return fmt.Errorf("sbx create %s: %v: %s", name, err, out)
 	}
@@ -92,43 +114,80 @@ func (s *sbxSandbox) mk(name string) error {
 	return nil
 }
 
-// Create provisions the agent and control sandboxes; the verify sandbox
-// is created lazily by ResetVerify. The three names are runner-owned and
-// all run state lives in the mounted clone, so Create always removes any
-// leftover sandboxes under these names first (one best-effort "rm -f") —
-// idempotent recovery from an unclean prior exit, and safer too: a
-// leftover agent sandbox may have been modified by its previous agent.
-// D11.8: if creating the control sandbox fails after the agent sandbox
-// was already created, the agent sandbox is removed before returning the
-// error (the reference leaked it).
+// rmNames lists the agent sandbox(es) plus ctl and verify, in the fixed
+// order every rm -f and Remove call uses: agent, plan (if any), ctl,
+// verify.
+func (s *sbxSandbox) rmNames() []string {
+	names := []string{s.agentName}
+	if s.planName != "" {
+		names = append(names, s.planName)
+	}
+	return append(names, s.ctlName, s.verifyName)
+}
+
+// Create provisions the agent sandbox(es) and the control sandbox; the
+// verify sandbox is created lazily by ResetVerify. The names are
+// runner-owned and all run state lives in the mounted clone, so Create
+// always removes any leftover sandboxes under these names first (one
+// best-effort "rm -f") — idempotent recovery from an unclean prior exit,
+// and safer too: a leftover agent sandbox may have been modified by its
+// previous agent.
+// D11.8: if creating the plan or control sandbox fails after an earlier
+// sandbox was already created, that earlier sandbox is removed before
+// returning the error (the reference leaked it).
 func (s *sbxSandbox) Create(mountDir string, egress []string) error {
 	s.mountDir = mountDir
 	s.egress = egress
 
-	_, _ = execStream(context.Background(), nil, io.Discard, s.bin, "rm", "-f", s.agentName, s.ctlName, s.verifyName)
+	_, _ = execStream(context.Background(), nil, io.Discard, s.bin, append([]string{"rm", "-f"}, s.rmNames()...)...)
 
-	if err := s.mk(s.agentName); err != nil {
+	if err := s.mk(s.agentName, s.codeTemplate); err != nil {
 		return err
 	}
-	if err := s.mk(s.ctlName); err != nil {
-		_, _ = execStream(context.Background(), nil, io.Discard, s.bin, "rm", "-f", s.agentName)
+	if s.planName != "" {
+		if err := s.mk(s.planName, s.planTemplate); err != nil {
+			_, _ = execStream(context.Background(), nil, io.Discard, s.bin, "rm", "-f", s.agentName)
+			return err
+		}
+	}
+	if err := s.mk(s.ctlName, "claude"); err != nil {
+		rm := []string{"rm", "-f", s.agentName}
+		if s.planName != "" {
+			rm = append(rm, s.planName)
+		}
+		_, _ = execStream(context.Background(), nil, io.Discard, s.bin, rm...)
 		return err
 	}
 	s.created = true
 	return nil
 }
 
-func (s *sbxSandbox) RunAgent(ctx context.Context, model, prompt string, logw io.Writer) error {
-	_, err := execStream(ctx, strings.NewReader(prompt), logw, s.bin,
-		"exec", "-w", s.mountDir, s.agentName, s.claudeBin,
-		"-p", "--model", model, "--output-format", "json", "--permission-mode", "bypassPermissions")
+// RunAgent execs in the agent sandbox, unless inv is a planning
+// invocation and a distinct -plan sandbox exists, in which case it execs
+// there instead.
+func (s *sbxSandbox) RunAgent(ctx context.Context, ag agent.Agent, inv agent.Invocation, prompt string, logw io.Writer) error {
+	name := s.agentName
+	if inv.Role == agent.RolePlan && s.planName != "" {
+		name = s.planName
+	}
+	args := append([]string{"exec", "-w", s.mountDir, name}, ag.Argv(inv)...)
+	_, err := execStream(ctx, strings.NewReader(prompt), logw, s.bin, args...)
 	return err
 }
 
+// StopAgent stops the agent sandbox and, when a distinct -plan sandbox
+// exists, stops it too — always both, so cleanup isn't short-circuited
+// by the first failing — returning the first error seen.
 func (s *sbxSandbox) StopAgent() error {
 	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
 	_, err := execStream(ctx, nil, io.Discard, s.bin, "stop", s.agentName)
+	if s.planName != "" {
+		_, err2 := execStream(ctx, nil, io.Discard, s.bin, "stop", s.planName)
+		if err == nil {
+			err = err2
+		}
+	}
 	return err
 }
 
@@ -149,7 +208,7 @@ func (s *sbxSandbox) Git(ctx context.Context, args ...string) (string, error) {
 
 func (s *sbxSandbox) ResetVerify() error {
 	_, _ = execStream(context.Background(), nil, io.Discard, s.bin, "rm", "-f", s.verifyName)
-	return s.mk(s.verifyName)
+	return s.mk(s.verifyName, "claude")
 }
 
 func (s *sbxSandbox) RunVerify(ctx context.Context, verifyCmd string) (string, error) {
@@ -162,7 +221,7 @@ func (s *sbxSandbox) Remove() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
-	_, err := execStream(ctx, nil, io.Discard, s.bin, "rm", "-f", s.agentName, s.ctlName, s.verifyName)
+	_, err := execStream(ctx, nil, io.Discard, s.bin, append([]string{"rm", "-f"}, s.rmNames()...)...)
 	return err
 }
 

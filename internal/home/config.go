@@ -26,6 +26,8 @@ var configKeys = map[string]bool{
 	"NIGHTSHIFT_LIMIT_FALLBACK":  true,
 	"NIGHTSHIFT_LIMIT_MAX_WAIT":  true,
 	"NIGHTSHIFT_LIMIT_MAX_HITS":  true,
+	"NIGHTSHIFT_OPENCODE_BIN":    true,
+	"NIGHTSHIFT_OPENCODE_CONFIG": true,
 }
 
 // ParseConfig reads KEY=value pairs from path. A missing file is not an
