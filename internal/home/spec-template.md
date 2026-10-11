@@ -30,6 +30,9 @@ OPTIONAL frontmatter:
   egress:        comma-separated extra hosts the sandbox may reach, on top of the
                  default allowlist (Anthropic API + Go/npm/pypi/etc. registries),
                  e.g. "api.example.com,cdn.example.com"
+  review:        run a sandboxed, read-only Claude review of the work when the run
+                 ends complete, and record its verdict              (default: false)
+  review_model:  model for that review                              (default: opus)
 
 Precedence for the optional keys: CLI flag > this frontmatter > NIGHTSHIFT_* env
 > ~/.nightshift/config > default.

@@ -176,3 +176,52 @@ func TestStatusDetail(t *testing.T) {
 		t.Fatalf("err = %v, want %q", err, wantErr)
 	}
 }
+
+func TestStatusShowsLatestReview(t *testing.T) {
+	homeDir := t.TempDir()
+	stateRoot := home.RunsDir(homeDir)
+	writeRunState(t, stateRoot, "demo", &runState{
+		Slug: "demo", Repo: "/path/to/repo", Branch: "spec/demo",
+		Base: strings.Repeat("a", 40), BaseRef: "main", LastGreen: strings.Repeat("b", 40),
+		Iterations: 1, Commits: 1, Status: "complete",
+		Started: "2026-01-01T00:00:00Z",
+	})
+
+	t.Run("none when no review note exists", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := PrintStatusDetail(&buf, homeDir, stateRoot, "demo"); err != nil {
+			t.Fatalf("PrintStatusDetail: %v", err)
+		}
+		if !strings.Contains(buf.String(), "latest review: none\n") {
+			t.Fatalf("output missing latest review: none:\n%s", buf.String())
+		}
+	})
+
+	resultsDir := home.ResultsDir(homeDir)
+	if err := os.MkdirAll(resultsDir, 0o755); err != nil {
+		t.Fatalf("mkdir results: %v", err)
+	}
+	oldPath := filepath.Join(resultsDir, "demo-2026-01-01-review.md")
+	if err := os.WriteFile(oldPath, []byte("---\nverdict: concerns\n---\n\nold\n"), 0o644); err != nil {
+		t.Fatalf("write old review note: %v", err)
+	}
+	oldTime := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(oldPath, oldTime, oldTime); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	newPath := filepath.Join(resultsDir, "demo-2026-01-02-review.md")
+	if err := os.WriteFile(newPath, []byte("---\nverdict: approve\n---\n\nnew\n"), 0o644); err != nil {
+		t.Fatalf("write new review note: %v", err)
+	}
+
+	t.Run("newest by mtime, with its verdict", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := PrintStatusDetail(&buf, homeDir, stateRoot, "demo"); err != nil {
+			t.Fatalf("PrintStatusDetail: %v", err)
+		}
+		want := "latest review: approve — " + newPath
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, buf.String())
+		}
+	})
+}

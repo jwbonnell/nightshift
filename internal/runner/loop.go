@@ -201,6 +201,7 @@ func (r *run) loop() Status {
 	needPlan := st.SpecHash != sp.ContentHash || !st.Planned
 	deadline := parseUntil(r.opts.Until, clock())
 	st.StopReason = ""
+	r.deadline = deadline
 
 	redStreak, noProgress, session := 0, 0, 0
 

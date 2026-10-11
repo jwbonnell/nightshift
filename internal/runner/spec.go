@@ -23,6 +23,7 @@ const (
 	defaultIterTimeout = 30 * time.Minute
 	defaultModel       = "sonnet"
 	defaultPlanner     = "opus"
+	defaultReviewModel = "opus"
 )
 
 // Spec is one resolved, ready-to-run spec.
@@ -36,6 +37,8 @@ type Spec struct {
 	MaxIter     int
 	IterTimeout time.Duration
 	Egress      []string
+	Review      bool
+	ReviewModel string
 	Created     string
 	ContentHash string
 	Base        string // requested base name
@@ -201,7 +204,7 @@ func resolveSpec(opts Options) (*Spec, error) {
 // calls this directly on a draft or ready path). Validation order
 // matches the reference: repo, base NAME (not yet resolved to a sha —
 // that's resolveBase, called later by the caller), verify, model,
-// planner, max_iter, iter_timeout, egress.
+// planner, max_iter, iter_timeout, review, review_model, egress.
 func resolveSpecFile(opts Options, path string) (*Spec, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -269,6 +272,13 @@ func resolveSpecFile(opts Options, path string) (*Spec, error) {
 		return nil, fmt.Errorf("iter_timeout %q: must be a positive Go duration (e.g. 30m)", iterTimeoutStr)
 	}
 
+	reviewStr := pick(src, "review", "", fmVal("review"), os.Getenv("NIGHTSHIFT_REVIEW"), cfg["NIGHTSHIFT_REVIEW"], "false")
+	review, err := strconv.ParseBool(reviewStr)
+	if err != nil {
+		return nil, fmt.Errorf("review %q: want true or false", reviewStr)
+	}
+	reviewModel := pick(src, "review_model", "", fmVal("review_model"), os.Getenv("NIGHTSHIFT_REVIEW_MODEL"), cfg["NIGHTSHIFT_REVIEW_MODEL"], defaultReviewModel)
+
 	var egress []string
 	for _, item := range strings.Split(fm["egress"], ",") {
 		item = home.Unquote(strings.TrimSpace(item))
@@ -287,6 +297,8 @@ func resolveSpecFile(opts Options, path string) (*Spec, error) {
 		MaxIter:     maxIter,
 		IterTimeout: iterTimeout,
 		Egress:      egress,
+		Review:      review,
+		ReviewModel: reviewModel,
 		Created:     fmVal("created"),
 		ContentHash: contentHash,
 		Base:        baseName,

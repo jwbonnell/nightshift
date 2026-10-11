@@ -87,6 +87,7 @@ type Options struct {
 	Stdin         io.Reader // not in the reference's Options (which reads os.Stdin directly); added for testability
 	IsTTY         bool
 	Notifier      notify.Notifier  // nil = resolve from NIGHTSHIFT_NOTIFY/config
+	Reviewer      Reviewer         // nil = sbxReviewer
 	Ctx           context.Context  // D8: cancellation source; nil = context.Background()
 	Version       string           // the running binary's version; "" is recorded as "dev"
 	clock         func() time.Time // unexported: wall clock for --until and log stamps; nil = time.Now

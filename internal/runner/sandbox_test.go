@@ -15,7 +15,11 @@ import (
 
 const fakeSbxScript = `#!/bin/sh
 if [ -n "$FAKE_SBX_STDIN_FILE" ]; then
-  cat > "$FAKE_SBX_STDIN_FILE"
+  # Appended, not overwritten: a caller that issues several sbx
+  # invocations per method call (e.g. sbxReviewer's rm/create/exec/rm)
+  # would otherwise have its one real stdin (on the exec step) clobbered
+  # by the surrounding steps' empty (nil) stdin.
+  cat >> "$FAKE_SBX_STDIN_FILE"
 fi
 if [ -n "$FAKE_SBX_LOG" ]; then
   printf '%s\n' "$*" >> "$FAKE_SBX_LOG"

@@ -1,0 +1,434 @@
+package runner
+
+import (
+	"bytes"
+	"context"
+	_ "embed"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/jwbonnell/nightshift/internal/gitx"
+	"github.com/jwbonnell/nightshift/internal/home"
+	"github.com/jwbonnell/nightshift/internal/lock"
+)
+
+// reviewDiffMax caps the diff.patch written into a review workspace;
+// longer diffs are truncated with a pointer to read repo/ directly.
+const reviewDiffMax = 200 << 10
+
+// reviewPrompt is the headless review prompt, embedded verbatim and sent
+// on stdin to the reviewing claude. See review-prompt.md.
+//
+//go:embed review-prompt.md
+var reviewPrompt string
+
+// reviewWSDir is where a review's workspace lives: rebuilt from scratch
+// for every review and removed afterwards, whatever the outcome.
+func reviewWSDir(stateRoot, slug string) string {
+	return filepath.Join(stateRoot, slug, "review-ws")
+}
+
+// buildReviewWorkspace rebuilds ws as a review sandbox mount: a
+// --no-local clone of the source repo, checked out detached with no
+// remotes at ref's resolved commit, plus the review prompt's inputs/. It
+// never touches the agent's clone — repo is always the source repo,
+// cloned with --no-local so the review sandbox never shares object-file
+// inodes with it. Returns the resolved head commit.
+func buildReviewWorkspace(ws, repo, base, ref, specPath, progress, summary string) (string, error) {
+	if err := os.RemoveAll(ws); err != nil {
+		return "", err
+	}
+	inputs := filepath.Join(ws, "inputs")
+	if err := os.MkdirAll(inputs, 0o755); err != nil {
+		return "", err
+	}
+
+	head, err := gitx.Run(repo, "rev-parse", "--verify", ref+"^{commit}")
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %v: %s", ref, err, head)
+	}
+	if err := validSHA("git rev-parse --verify "+ref+"^{commit}", head); err != nil {
+		return "", err
+	}
+
+	repoDir := filepath.Join(ws, "repo")
+	if out, err := gitx.Run(ws, "clone", "--no-local", repo, "repo"); err != nil {
+		return "", fmt.Errorf("clone %s: %v: %s", repo, err, out)
+	}
+	// git clone --no-local only copies refs/heads and tags: when ref is
+	// the pending refs/nightshift/<slug> ref, head isn't reachable from
+	// any branch and needs an explicit fetch, same as cloneRepo's base.
+	if _, err := gitx.Run(repoDir, "cat-file", "-e", head+"^{commit}"); err != nil {
+		if out, ferr := gitx.Run(repoDir, "fetch", "origin", head); ferr != nil {
+			return "", fmt.Errorf("fetch %s from %s: %v: %s", head, repo, ferr, out)
+		}
+	}
+	if out, err := gitx.Run(repoDir, "checkout", "--detach", head); err != nil {
+		return "", fmt.Errorf("checkout %s: %v: %s", head, err, out)
+	}
+	if out, err := gitx.Run(repoDir, "remote", "remove", "origin"); err != nil {
+		return "", fmt.Errorf("remove remote: %v: %s", err, out)
+	}
+
+	specText := "(spec file not found)"
+	if specPath != "" {
+		if data, err := os.ReadFile(specPath); err == nil {
+			specText = string(data)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(inputs, "spec.md"), []byte(specText), 0o644); err != nil {
+		return "", err
+	}
+
+	progressText := progress
+	if progressText == "" {
+		progressText = "(no PROGRESS.md)"
+	}
+	if err := os.WriteFile(filepath.Join(inputs, "progress.md"), []byte(progressText), 0o644); err != nil {
+		return "", err
+	}
+
+	if err := os.WriteFile(filepath.Join(inputs, "summary.md"), []byte(summary), 0o644); err != nil {
+		return "", err
+	}
+
+	// gitx.Run trims its output, which would strip diffstat's leading
+	// space and the patch's trailing newline — shell out directly so
+	// stdout reaches disk untouched.
+	diffstat, err := exec.Command("git", "-C", repo, "diff", "--stat", base+".."+head).Output()
+	if err != nil {
+		return "", fmt.Errorf("diffstat %s..%s: %w", base, head, err)
+	}
+	if err := os.WriteFile(filepath.Join(inputs, "diffstat.txt"), diffstat, 0o644); err != nil {
+		return "", err
+	}
+
+	patch, err := exec.Command("git", "-C", repo, "diff", base+".."+head).Output()
+	if err != nil {
+		return "", fmt.Errorf("diff %s..%s: %w", base, head, err)
+	}
+	if len(patch) > reviewDiffMax {
+		truncated := patch[:reviewDiffMax]
+		if len(truncated) == 0 || truncated[len(truncated)-1] != '\n' {
+			truncated = append(truncated, '\n')
+		}
+		truncated = append(truncated, []byte("[diff truncated at 200 KiB — read the changed files under repo/ directly]\n")...)
+		patch = truncated
+	}
+	if err := os.WriteFile(filepath.Join(inputs, "diff.patch"), patch, 0o644); err != nil {
+		return "", err
+	}
+
+	return head, nil
+}
+
+// reviewSummary formats the run-summary text written to inputs/summary.md.
+func reviewSummary(status, iterations, commits, baseShort, headShort, branch string) string {
+	return fmt.Sprintf(
+		"- status: %s\n- iterations: %s\n- commits: %s\n- base: %s\n- head: %s\n- branch: %s\n",
+		status, iterations, commits, baseShort, headShort, branch,
+	)
+}
+
+// Reviewer runs one headless review with ws mounted and returns the
+// model's final text. The real implementation (sbxReviewer) runs it in
+// its own sbx sandbox, read-only, with no permission-bypass flag; tests
+// substitute a stub.
+type Reviewer interface {
+	Review(ctx context.Context, ws, model, prompt string) (string, error)
+}
+
+// sbxReviewer is the real Reviewer, driving the sbx CLI in a dedicated
+// "nightshift-<slug>-review" sandbox, distinct from that spec's own
+// agent/ctl/verify sandboxes.
+type sbxReviewer struct {
+	bin, claudeBin, slug string
+}
+
+func (rv sbxReviewer) name() string {
+	return "nightshift-" + rv.slug + "-review"
+}
+
+// Review creates a fresh sandbox mounting ws, runs claude in it with only
+// Read, Grep and Glob tools and no permission-bypass flag, and always
+// removes the sandbox afterward — even when create or exec fails.
+func (rv sbxReviewer) Review(ctx context.Context, ws, model, prompt string) (string, error) {
+	name := rv.name()
+	_, _ = execStream(context.Background(), nil, io.Discard, rv.bin, "rm", "-f", name)
+	defer func() {
+		cctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		defer cancel()
+		_, _ = execStream(cctx, nil, io.Discard, rv.bin, "rm", "-f", name)
+	}()
+
+	if out, err := execStream(context.Background(), nil, io.Discard, rv.bin, "create", "--name", name, "claude", ws); err != nil {
+		return "", fmt.Errorf("create: %w: %s", err, out)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := execSplit(ctx, strings.NewReader(prompt), &stdout, &stderr, rv.bin,
+		"exec", "-w", ws, name, rv.claudeBin,
+		"-p", "--model", model, "--tools", "Read,Grep,Glob", "--disallowedTools", "mcp__*", "--output-format", "json")
+	out := stripSbxBanner(stdout.String())
+	if err != nil {
+		return "", fmt.Errorf("exec: %w: %s", err, firstBytes(out, 500))
+	}
+
+	var resp struct {
+		Result  *string `json:"result"`
+		IsError bool    `json:"is_error"`
+	}
+	if jerr := json.Unmarshal([]byte(out), &resp); jerr != nil {
+		return "", fmt.Errorf("parse review output: %v: %s", jerr, firstBytes(out, 500))
+	}
+	if resp.Result == nil {
+		return "", fmt.Errorf("review output missing result: %s", firstBytes(out, 500))
+	}
+	if resp.IsError {
+		return "", fmt.Errorf("review reported an error: %s", firstBytes(out, 500))
+	}
+	return *resp.Result, nil
+}
+
+// firstBytes returns the first n bytes of s, unchanged if shorter.
+func firstBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
+// verdictPattern matches the verdict line the review prompt mandates.
+var verdictPattern = regexp.MustCompile(`(?im)^VERDICT:\s*(approve|concerns|reject)\b`)
+
+// parseVerdict extracts the verdict from a reviewer's reply, lowercased,
+// or "unknown" if no VERDICT line matches.
+func parseVerdict(text string) string {
+	m := verdictPattern.FindStringSubmatch(text)
+	if m == nil {
+		return "unknown"
+	}
+	return strings.ToLower(m[1])
+}
+
+// writeReviewNote writes the review note to <homeDir>/results/ and,
+// when homeDir is itself a git repo, commits it there (best-effort, like
+// writeResultNote). headShort/baseShort may be empty when the workspace
+// never got far enough to resolve a head.
+func writeReviewNote(homeDir, slug, verdict, headShort, baseShort, model, body string, now time.Time) (string, error) {
+	dir := home.ResultsDir(homeDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	name := slug + "-" + now.Format("2006-01-02") + "-review.md"
+	path := uniqueResultPath(dir, name)
+
+	content := fmt.Sprintf(
+		"---\ntype: nightshift-review\nspec: %s\nverdict: %s\nreviewed: %s\nbase: %s\nmodel: %s\ncreated: %s\n---\n\n# Review: %s — %s\n\n%s\n",
+		slug, verdict, headShort, baseShort, model, now.Format(time.RFC3339), slug, verdict, body,
+	)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return "", err
+	}
+
+	if gitx.IsRepo(homeDir) {
+		rel, err := filepath.Rel(homeDir, path)
+		if err != nil {
+			rel = path
+		}
+		_ = gitx.Commit(homeDir, fmt.Sprintf("nightshift: review %s (%s)", slug, verdict), rel)
+	}
+
+	return path, nil
+}
+
+// reviewParams carries everything runReview needs to build a workspace,
+// run the reviewer and write its note. Shared by finish's automatic
+// review (Task 4) and the `nightshift review` CLI (Task 5).
+type reviewParams struct {
+	home, stateRoot, slug string
+	repo, base, ref       string
+	specPath, progress    string
+	summary               string
+	model                 string
+	now                   time.Time
+}
+
+// runReview builds the review workspace, runs rv over it, writes the
+// review note (even on failure, with verdict "error"), and always
+// removes the workspace afterward, whatever the outcome.
+func runReview(ctx context.Context, rv Reviewer, p reviewParams) (verdict, notePath string, err error) {
+	ws := reviewWSDir(p.stateRoot, p.slug)
+	defer os.RemoveAll(ws)
+
+	head, err := buildReviewWorkspace(ws, p.repo, p.base, p.ref, p.specPath, p.progress, p.summary)
+	if err != nil {
+		notePath, nerr := writeReviewNote(p.home, p.slug, "error", short(head), short(p.base), p.model, "Review failed: "+err.Error(), p.now)
+		if nerr != nil {
+			return "error", "", err
+		}
+		return "error", notePath, err
+	}
+
+	text, err := rv.Review(ctx, ws, p.model, reviewPrompt)
+	if err != nil {
+		notePath, nerr := writeReviewNote(p.home, p.slug, "error", short(head), short(p.base), p.model, "Review failed: "+err.Error(), p.now)
+		if nerr != nil {
+			return "error", "", err
+		}
+		return "error", notePath, err
+	}
+
+	verdict = parseVerdict(text)
+	notePath, err = writeReviewNote(p.home, p.slug, verdict, short(head), short(p.base), p.model, text, p.now)
+	if err != nil {
+		return verdict, "", err
+	}
+	return verdict, notePath, nil
+}
+
+// ReviewOptions configures `nightshift review <slug>`: a one-shot,
+// headless review of a prior (or in-progress) run's work, independent of
+// that run's own status.
+type ReviewOptions struct {
+	Home      string
+	StateRoot string // default: <Home>/runs
+	Slug      string
+	Model     string   // --model flag; "" falls through to spec frontmatter/env/config/default
+	Reviewer  Reviewer // nil = sbxReviewer
+	SbxBin    string   // default "sbx"
+	ClaudeBin string   // default "claude"
+	Now       time.Time
+	Ctx       context.Context
+	Stdout    io.Writer
+	Stderr    io.Writer
+}
+
+func (o *ReviewOptions) fill() {
+	if o.Now.IsZero() {
+		o.Now = time.Now()
+	}
+	if o.StateRoot == "" {
+		o.StateRoot = home.RunsDir(o.Home)
+	}
+	if o.Ctx == nil {
+		o.Ctx = context.Background()
+	}
+	if o.Stdout == nil {
+		o.Stdout = io.Discard
+	}
+	if o.Stderr == nil {
+		o.Stderr = io.Discard
+	}
+
+	cfg, _ := home.ParseConfig(home.ConfigPath(o.Home))
+	if o.SbxBin == "" {
+		o.SbxBin = envConfigDefault("NIGHTSHIFT_SBX_BIN", cfg, "sbx")
+	}
+	if o.ClaudeBin == "" {
+		o.ClaudeBin = envConfigDefault("NIGHTSHIFT_CLAUDE_BIN", cfg, "claude")
+	}
+}
+
+// Review runs `nightshift review <slug>`: it loads the run's state,
+// builds a review workspace at the reviewed ref, runs the reviewer, and
+// writes a review note — exactly like an automatic review in finish,
+// except there's no live *run and the outcome never touches anything but
+// the note and this function's own return. A busy spec lock mirrors
+// Run's own busy handling (same message, StatusBusy); any other failure
+// before a note could be attempted (no run state, no commits, a lock
+// error) is StatusError with a descriptive err. Once runReview is
+// reached, the "review: <verdict> — <note path>" line is printed to
+// Stdout whatever the outcome — including a failed review, which still
+// returns StatusError (exit 1) alongside the written "error" note.
+func Review(opts ReviewOptions) (Status, error) {
+	opts.fill()
+
+	data, err := os.ReadFile(filepath.Join(opts.StateRoot, opts.Slug, "run.json"))
+	if err != nil {
+		return StatusError, fmt.Errorf("no run state for %s", opts.Slug)
+	}
+	var st runState
+	if err := json.Unmarshal(data, &st); err != nil {
+		return StatusError, fmt.Errorf("no run state for %s", opts.Slug)
+	}
+	if st.Commits < 1 {
+		return StatusError, fmt.Errorf("nothing to review: %s has no commits since base", opts.Slug)
+	}
+
+	specLock, err := lock.TryAcquire(specLockPath(opts.StateRoot, opts.Slug), opts.Slug)
+	if err != nil {
+		var held *lock.HeldError
+		if errors.As(err, &held) {
+			fmt.Fprintf(opts.Stderr, "spec %s is already running (pid %d, since %s). Wait for it to finish. (%s)\n",
+				opts.Slug, held.Holder.PID, held.Holder.Start.Format("15:04"), held.Path)
+			return StatusBusy, nil
+		}
+		return StatusError, err
+	}
+	defer specLock.Release()
+
+	specPath := ""
+	if p, ok := findCaseInsensitive(home.ReadyDir(opts.Home), opts.Slug+".md"); ok {
+		specPath = p
+	} else if p, ok := findCaseInsensitive(home.DoneDir(opts.Home), opts.Slug+".md"); ok {
+		specPath = p
+	}
+
+	var fm map[string]string
+	if specPath != "" {
+		if raw, rerr := os.ReadFile(specPath); rerr == nil {
+			fm = home.ParseFrontmatter(raw)
+		}
+	}
+
+	model := opts.Model
+	if model == "" {
+		cfg, _ := home.ParseConfig(home.ConfigPath(opts.Home))
+		fmModel := home.Unquote(strings.TrimSpace(fm["review_model"]))
+		model = pick(map[string]string{}, "review_model", "", fmModel, os.Getenv("NIGHTSHIFT_REVIEW_MODEL"), cfg["NIGHTSHIFT_REVIEW_MODEL"], defaultReviewModel)
+	}
+
+	progress, _ := ReadScaffold(filepath.Join(opts.StateRoot, opts.Slug, "repo", "PROGRESS.md"))
+
+	rv := opts.Reviewer
+	if rv == nil {
+		rv = sbxReviewer{bin: opts.SbxBin, claudeBin: opts.ClaudeBin, slug: opts.Slug}
+	}
+
+	ctx, cancel := context.WithTimeout(opts.Ctx, defaultIterTimeout)
+	defer cancel()
+
+	params := reviewParams{
+		home:      opts.Home,
+		stateRoot: opts.StateRoot,
+		slug:      opts.Slug,
+		repo:      st.Repo,
+		base:      st.Base,
+		ref:       reviewRefFor(&st, opts.Slug),
+		specPath:  specPath,
+		progress:  progress,
+		summary: reviewSummary(st.Status, strconv.Itoa(st.Iterations), strconv.Itoa(st.Commits),
+			short(st.Base), short(st.LastGreen), st.Branch),
+		model: model,
+		now:   opts.Now,
+	}
+
+	verdict, notePath, err := runReview(ctx, rv, params)
+	if notePath != "" {
+		fmt.Fprintf(opts.Stdout, "review: %s — %s\n", verdict, notePath)
+	}
+	if err != nil {
+		return StatusError, err
+	}
+	return StatusComplete, nil
+}

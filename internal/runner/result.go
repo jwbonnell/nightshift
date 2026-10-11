@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/jwbonnell/nightshift/internal/gitx"
@@ -87,6 +88,10 @@ func (r *run) resultBody(status Status) string {
 	ended := r.opts.clockFn()().Format("2006-01-02T15:04:05Z07:00")
 	fmt.Fprintf(&b, "---\ntype: nightshift-result\nspec: %s\nstatus: %s\nstarted: %s\nended: %s\niterations: %d\ncommits: %d\nbranch: %s\nrepo: %s\nbase_ref: %s\nbase: %s\nnightshift: %s\n---\n\n",
 		sp.Slug, status, st.Started, ended, st.Iterations, st.Commits, st.Branch, sp.Repo, st.BaseRef, short(st.Base), r.version)
+	if r.reviewVerdict != "" {
+		fmt.Fprintf(&b, "review: %s\n", r.reviewVerdict)
+	}
+	b.WriteString("---\n\n")
 
 	switch {
 	case st.SyncOwed:
@@ -128,6 +133,17 @@ func (r *run) resultBody(status Status) string {
 	}
 
 	fmt.Fprintf(&b, "## Review\n\n")
+
+	if r.reviewVerdict != "" {
+		fmt.Fprintf(&b, "## Review\n\n")
+		if r.reviewVerdict == "skipped" {
+			fmt.Fprintf(&b, "skipped (%s)\n\n", r.reviewReason)
+		} else {
+			fmt.Fprintf(&b, "%s — %s\n\n", r.reviewVerdict, r.reviewNote)
+		}
+	}
+
+	fmt.Fprintf(&b, "## Review commands\n\n")
 	fmt.Fprintf(&b, "- `git -C %s log --oneline %s..%s`%s\n", sp.Repo, short(st.Base), r.reviewRef(), baseSuffix(st))
 	fmt.Fprintf(&b, "- `git -C %s diff %s..%s`%s\n", sp.Repo, short(st.Base), r.reviewRef(), baseSuffix(st))
 	fmt.Fprintf(&b, "- runner log: `%s`\n", filepath.Join(r.dir, "runner.log"))
@@ -198,6 +214,9 @@ func (r *run) notifyText(status Status) (title, msg string) {
 	if r.prChecks.fails > 0 {
 		title += " (checks failed)"
 	}
+	if r.reviewVerdict != "" {
+		msg += fmt.Sprintf(" · review: %s", r.reviewVerdict)
+	}
 	return title, summaryLine(status, r.st)
 }
 
@@ -238,7 +257,8 @@ func (r *run) notify(status Status) {
 		return
 	}
 	title, msg := r.notifyText(status)
-	urgent := status == StatusError || status == StatusRed || status == StatusStalled || r.prChecks.fails > 0
+	urgent := status == StatusError || status == StatusRed || status == StatusStalled || r.prChecks.fails > 0 ||
+		r.reviewVerdict == "reject" || r.reviewVerdict == "error"
 	n.Notify(title, msg, urgent)
 }
 
@@ -256,6 +276,10 @@ func (r *run) finish(status Status) (Status, error) {
 
 	r.printSummary(status)
 
+	if r.spec.Review && status == StatusComplete {
+		r.runAutoReview()
+	}
+
 	notePath, err := r.writeResultNote(status)
 	if err != nil {
 		return status, err
@@ -263,4 +287,58 @@ func (r *run) finish(status Status) (Status, error) {
 	r.notify(status)
 	fmt.Fprintf(r.opts.Stdout, "result note: %s\n", notePath)
 	return status, nil
+}
+
+// runAutoReview runs the spec's automatic review (review: true, status
+// complete) and records the outcome on r for resultBody/notifyText to
+// report. A review failure, timeout or skip never touches r.err or the
+// run's status — only r.reviewVerdict/r.reviewReason/r.reviewNote.
+func (r *run) runAutoReview() {
+	clock := r.opts.clockFn()
+
+	if r.interrupted() {
+		r.reviewVerdict, r.reviewReason = "skipped", "interrupted"
+		r.logf("review: skipped (interrupted)")
+		return
+	}
+	if !r.deadline.IsZero() && !clock().Before(r.deadline) {
+		r.reviewVerdict, r.reviewReason = "skipped", "window closed"
+		r.logf("review: skipped (window closed)")
+		return
+	}
+
+	r.logf("review: start model=%s", r.spec.ReviewModel)
+
+	rv := r.opts.Reviewer
+	if rv == nil {
+		rv = sbxReviewer{bin: r.opts.SbxBin, claudeBin: r.opts.ClaudeBin, slug: r.spec.Slug}
+	}
+
+	ctx, cancel := r.iterCtx(r.deadline, clock)
+	defer cancel()
+
+	st := r.st
+	params := reviewParams{
+		home:      r.opts.Home,
+		stateRoot: r.opts.StateRoot,
+		slug:      r.spec.Slug,
+		repo:      r.spec.Repo,
+		base:      st.Base,
+		ref:       r.reviewRef(),
+		specPath:  r.spec.Path,
+		progress:  r.scaffoldRead(r.progressPath()),
+		summary: reviewSummary(string(StatusComplete), strconv.Itoa(st.Iterations),
+			strconv.Itoa(st.Commits), short(st.Base), short(st.LastGreen), st.Branch),
+		model: r.spec.ReviewModel,
+		now:   r.opts.Now,
+	}
+
+	verdict, notePath, err := runReview(ctx, rv, params)
+	r.reviewVerdict = verdict
+	r.reviewNote = notePath
+	if err != nil {
+		r.logf("review: error: %v", err)
+		return
+	}
+	r.logf("review: %s (%s)", verdict, notePath)
 }

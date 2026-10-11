@@ -42,6 +42,11 @@ var execFn = syscall.Exec
 // without sending a real signal.
 var newInterruptContext = runner.NewInterruptContext
 
+// newReviewer is a test seam: when set, `review` uses its return value as
+// the Reviewer instead of letting runner.Review construct the real
+// sbxReviewer itself. Production leaves it nil.
+var newReviewer func() runner.Reviewer
+
 // isTerminal reports whether both stdin and stdout are a TTY, the gate
 // `new`/`refine` use to decide whether an interactive interview is
 // possible at all. A test seam, forced false in TestMain.
@@ -68,6 +73,7 @@ usage:
   nightshift run <spec> [flags]         run one ready spec (nightshift run -h for flags)
   nightshift run --next [flags]         run the oldest eligible ready spec
   nightshift status [<slug>]            list runs, or show one run in detail
+  nightshift review <slug> [--model M]  sandboxed Claude review of a run's work
   nightshift version                    print the version
 `
 
@@ -106,6 +112,8 @@ func dispatch(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 		return cmdRun(args[1:], stdout, stderr, stdin)
 	case "status":
 		return cmdStatus(args[1:], stdout, stderr)
+	case "review":
+		return cmdReview(args[1:], stdout, stderr)
 	default:
 		fmt.Fprint(stderr, usage)
 		return 2
@@ -518,6 +526,51 @@ func cmdStatus(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// cmdReview implements `nightshift review <slug> [--model M]`: a headless,
+// read-only Claude review of a run's work, in its own sbx sandbox. It
+// never changes the run's own status or exit code.
+func cmdReview(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("nightshift review", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	model := fs.String("model", "", "")
+	fs.Usage = func() {
+		fmt.Fprintln(stderr, "usage: nightshift review <slug> [--model M]")
+	}
+
+	positional, err := parseLintFlags(fs, args)
+	if err != nil {
+		return 2
+	}
+	if len(positional) != 1 {
+		fs.Usage()
+		return 2
+	}
+	slug := positional[0]
+
+	h, ok := resolveHome(stderr)
+	if !ok {
+		return 1
+	}
+
+	opts := runner.ReviewOptions{
+		Home:   h,
+		Slug:   slug,
+		Model:  *model,
+		Now:    time.Now(),
+		Stdout: stdout,
+		Stderr: stderr,
+	}
+	if newReviewer != nil {
+		opts.Reviewer = newReviewer()
+	}
+
+	status, err := runner.Review(opts)
+	if err != nil {
+		fmt.Fprintf(stderr, "nightshift: %v\n", err)
+	}
+	return runner.ExitCode(status)
 }
 
 // isTTY reports whether stdin is a terminal.
