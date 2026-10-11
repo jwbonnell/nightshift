@@ -42,6 +42,11 @@ const commentedConfig = `# nightshift config file.
 # NIGHTSHIFT_REVIEW=false
 # model for that review
 # NIGHTSHIFT_REVIEW_MODEL=opus
+
+# opencode binary inside an opencode sandbox
+# NIGHTSHIFT_OPENCODE_BIN=opencode
+# opencode JSON config for non-Claude providers (no inline secrets)
+# NIGHTSHIFT_OPENCODE_CONFIG=
 `
 
 func fileExists(path string) bool {

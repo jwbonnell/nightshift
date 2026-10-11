@@ -23,6 +23,8 @@ var configKeys = map[string]bool{
 	"NIGHTSHIFT_INTERVIEW_MODEL": true,
 	"NIGHTSHIFT_REVIEW":          true,
 	"NIGHTSHIFT_REVIEW_MODEL":    true,
+	"NIGHTSHIFT_OPENCODE_BIN":    true,
+	"NIGHTSHIFT_OPENCODE_CONFIG": true,
 }
 
 // ParseConfig reads KEY=value pairs from path. A missing file is not an

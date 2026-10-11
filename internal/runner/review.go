@@ -307,17 +307,18 @@ func runReview(ctx context.Context, rv Reviewer, p reviewParams) (verdict, noteP
 // headless review of a prior (or in-progress) run's work, independent of
 // that run's own status.
 type ReviewOptions struct {
-	Home      string
-	StateRoot string // default: <Home>/runs
-	Slug      string
-	Model     string   // --model flag; "" falls through to spec frontmatter/env/config/default
-	Reviewer  Reviewer // nil = sbxReviewer
-	SbxBin    string   // default "sbx"
-	ClaudeBin string   // default "claude"
-	Now       time.Time
-	Ctx       context.Context
-	Stdout    io.Writer
-	Stderr    io.Writer
+	Home        string
+	StateRoot   string // default: <Home>/runs
+	Slug        string
+	Model       string   // --model flag; "" falls through to spec frontmatter/env/config/default
+	Reviewer    Reviewer // nil = sbxReviewer
+	SbxBin      string   // default "sbx"
+	ClaudeBin   string   // default "claude"
+	OpencodeBin string   // default "opencode"
+	Now         time.Time
+	Ctx         context.Context
+	Stdout      io.Writer
+	Stderr      io.Writer
 }
 
 func (o *ReviewOptions) fill() {
@@ -343,6 +344,9 @@ func (o *ReviewOptions) fill() {
 	}
 	if o.ClaudeBin == "" {
 		o.ClaudeBin = envConfigDefault("NIGHTSHIFT_CLAUDE_BIN", cfg, "claude")
+	}
+	if o.OpencodeBin == "" {
+		o.OpencodeBin = envConfigDefault("NIGHTSHIFT_OPENCODE_BIN", cfg, "opencode")
 	}
 }
 
@@ -398,11 +402,30 @@ func Review(opts ReviewOptions) (Status, error) {
 		}
 	}
 
+	cfg, _ := home.ParseConfig(home.ConfigPath(opts.Home))
+
 	model := opts.Model
+	modelSrc := "flag"
 	if model == "" {
-		cfg, _ := home.ParseConfig(home.ConfigPath(opts.Home))
+		msrc := map[string]string{}
 		fmModel := home.Unquote(strings.TrimSpace(fm["review_model"]))
-		model = pick(map[string]string{}, "review_model", "", fmModel, os.Getenv("NIGHTSHIFT_REVIEW_MODEL"), cfg["NIGHTSHIFT_REVIEW_MODEL"], defaultReviewModel)
+		model = pick(msrc, "review_model", "", fmModel, os.Getenv("NIGHTSHIFT_REVIEW_MODEL"), cfg["NIGHTSHIFT_REVIEW_MODEL"], defaultReviewModel)
+		modelSrc = msrc["review_model"]
+	}
+	sel, err := agent.ParseSelector(model)
+	if err != nil {
+		return StatusError, fmt.Errorf("%s (from %s): %w", "review_model", modelSrc, err)
+	}
+	if sel.Agent == "opencode" {
+		if cfgRaw := envConfigDefault("NIGHTSHIFT_OPENCODE_CONFIG", cfg, ""); cfgRaw != "" {
+			expanded, err := expandHome(cfgRaw)
+			if err != nil {
+				return StatusError, fmt.Errorf("NIGHTSHIFT_OPENCODE_CONFIG %q: %w", cfgRaw, err)
+			}
+			if _, err := agent.LoadOpencodeConfig(expanded); err != nil {
+				return StatusError, err
+			}
+		}
 	}
 
 	progress, _ := ReadScaffold(filepath.Join(opts.StateRoot, opts.Slug, "repo", "PROGRESS.md"))

@@ -82,6 +82,7 @@ type Options struct {
 	Sandbox       Sandbox   // nil = real sbx sandbox
 	SbxBin        string    // default "sbx"
 	ClaudeBin     string    // default "claude"
+	OpencodeBin   string    // default "opencode"
 	Stdout        io.Writer
 	Stderr        io.Writer
 	Stdin         io.Reader // not in the reference's Options (which reads os.Stdin directly); added for testability
@@ -121,6 +122,9 @@ func (o *Options) fill() {
 	}
 	if o.ClaudeBin == "" {
 		o.ClaudeBin = envConfigDefault("NIGHTSHIFT_CLAUDE_BIN", cfg, "claude")
+	}
+	if o.OpencodeBin == "" {
+		o.OpencodeBin = envConfigDefault("NIGHTSHIFT_OPENCODE_BIN", cfg, "opencode")
 	}
 
 	if o.Stdout == nil {
