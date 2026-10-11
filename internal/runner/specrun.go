@@ -29,6 +29,7 @@ const (
 	StatusWindowClosed Status = "window-closed"
 	StatusBusy         Status = "busy"
 	StatusInterrupted  Status = "interrupted"      // D8
+	StatusRateLimited  Status = "rate-limited"     // Task 1: agent hit the Claude usage limit
 	statusDryRun       Status = "dry-run"          // internal
 	statusNothing      Status = "nothing-eligible" // internal: --next found nothing
 )
@@ -56,6 +57,8 @@ func ExitCode(s Status) int {
 		return 7
 	case StatusInterrupted:
 		return 8
+	case StatusRateLimited:
+		return 9
 	default:
 		return 1
 	}
@@ -85,6 +88,7 @@ type Options struct {
 	IsTTY         bool
 	Notifier      notify.Notifier  // nil = resolve from NIGHTSHIFT_NOTIFY/config
 	Ctx           context.Context  // D8: cancellation source; nil = context.Background()
+	Version       string           // the running binary's version; "" is recorded as "dev"
 	clock         func() time.Time // unexported: wall clock for --until and log stamps; nil = time.Now
 }
 
@@ -378,9 +382,20 @@ func runSpec(opts Options, sp *Spec, sb Sandbox) (Status, error) {
 		return StatusError, fmt.Errorf("create sandbox: %w", err)
 	}
 	r.sb = sb
-	defer sb.Remove()
+	sbRemoved := false
+	defer func() {
+		if !sbRemoved {
+			_ = sb.Remove()
+		}
+	}()
 
 	status := r.loop()
+	r.removeErr = sb.Remove()
+	sbRemoved = true
+	if r.removeErr != nil {
+		r.logf("remove sandboxes: %v", r.removeErr)
+	}
+
 	status, err = r.finish(status)
 	if err != nil {
 		r.logf("hand-back error: %v", err)

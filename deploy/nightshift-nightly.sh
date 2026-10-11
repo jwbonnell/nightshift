@@ -16,6 +16,6 @@ case $rc in
   7) echo "$(date '+%F %T') nothing started (busy)" >>"$log" ;;
   *) echo "$(date '+%F %T') exit $rc" >>"$log" ;;
 esac
-# Only a runner error (1) marks the unit failed; blocked/red/stalled/capped are outcomes.
+# Only a runner error (1) marks the unit failed; blocked/red/stalled/capped/rate-limited are outcomes.
 [ "$rc" -eq 1 ] && exit 1
 exit 0

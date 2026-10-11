@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -120,6 +121,23 @@ func (r *run) commitCount() (int, error) {
 	return n, nil
 }
 
+// nonScaffoldDirty reports whether a `git status --porcelain` listing has
+// any entry other than the scaffold files, which the agent is expected to
+// write and which don't count as "the agent changed something."
+func nonScaffoldDirty(status string) bool {
+	for _, line := range strings.Split(status, "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		switch strings.TrimSpace(line[3:]) {
+		case "PROGRESS.md", "QUESTION.md", ".spec-complete":
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // captureDirty saves any uncommitted changes as attempts/iter-<iter>.dirty.patch,
 // then always resets the tree hard (clean -fd preserves excluded scaffold
 // files).
@@ -182,6 +200,7 @@ func (r *run) loop() Status {
 
 	needPlan := st.SpecHash != sp.ContentHash || !st.Planned
 	deadline := parseUntil(r.opts.Until, clock())
+	st.StopReason = ""
 
 	redStreak, noProgress, session := 0, 0, 0
 
@@ -195,7 +214,7 @@ func (r *run) loop() Status {
 		}
 		session++
 		st.Iterations++
-		planning := needPlan && session == 1
+		planning := needPlan
 		model := sp.Model
 		if planning {
 			model = sp.Planner
@@ -210,13 +229,22 @@ func (r *run) loop() Status {
 		ctx, cancel := r.iterCtx(deadline, clock)
 		r.logf("iter %d (session %d) model=%s planning=%v", st.Iterations, session, model, planning)
 		r.writeAgentHeader(st.Iterations, session, model, planning, clock)
-		agentErr := r.sb.RunAgent(ctx, model, buildPrompt(sp, planning), r.agentLog)
+		tail := &tailBuffer{max: 64 << 10}
+		var w io.Writer = tail
+		if r.agentLog != nil {
+			w = io.MultiWriter(r.agentLog, tail)
+		}
+		agentErr := r.sb.RunAgent(ctx, model, buildPrompt(sp, planning), w)
 		cancel()
+		res := parseAgentResult(tail.String())
 		switch {
 		case agentErr == context.DeadlineExceeded:
 			r.logf("iter %d timed out after %s", st.Iterations, sp.IterTimeout)
 		case agentErr != nil:
 			r.logf("iter %d agent exited: %v", st.Iterations, agentErr)
+		}
+		if res.IsError {
+			r.logf("iter %d agent error: %s", st.Iterations, res.Message)
 		}
 		if stopErr := r.sb.StopAgent(); stopErr != nil {
 			r.logf("iter %d stop agent: %v", st.Iterations, stopErr)
@@ -232,6 +260,24 @@ func (r *run) loop() Status {
 			_ = r.saveState()
 			return StatusWindowClosed
 		}
+		if res.rateLimited() {
+			r.logf("iter %d rate-limited: %s", st.Iterations, res.Message)
+			r.captureDirty(st.Iterations)
+			st.StopReason = res.Message
+			commits, err := r.commitCount()
+			if err != nil {
+				return r.fail(err)
+			}
+			st.Commits = commits
+			_ = r.saveState()
+			return StatusRateLimited
+		}
+		statusBeforeCapture, _ := r.git("status", "--porcelain")
+		commitsAfterAgent, err := r.commitCount()
+		if err != nil {
+			return r.fail(err)
+		}
+		changed := commitsAfterAgent != commitsBefore || nonScaffoldDirty(statusBeforeCapture)
 		r.captureDirty(st.Iterations)
 
 		if planning {
@@ -246,45 +292,71 @@ func (r *run) loop() Status {
 				}
 				r.appendProgress("Runner: planning iteration committed code; reset to last green. The planner must only write PROGRESS.md.")
 			}
-			st.Planned = true
+
+			progressAfter := r.scaffoldRead(r.progressPath())
+			planSucceeded := agentErr == nil && !res.IsError && progressAfter != progressBefore
+			if planSucceeded {
+				st.Planned = true
+				needPlan = false
+				noProgress = 0
+			} else {
+				reason := res.Message
+				if reason == "" && agentErr != nil {
+					reason = agentErr.Error()
+				}
+				if reason == "" {
+					reason = "no PROGRESS.md change"
+				}
+				r.logf("planning iteration failed (%s) — will plan again", reason)
+				noProgress++
+			}
 			_ = r.saveState()
 			if r.scaffoldExists(r.questionPath()) {
 				return StatusBlocked
 			}
+			if !planSucceeded && noProgress >= 2 {
+				return StatusStalled
+			}
 			continue
 		}
 
-		if err := r.sb.ResetVerify(); err != nil {
-			r.logf("iter %d reset verify sandbox: %v", st.Iterations, err)
-		}
-		vctx, vcancel := r.iterCtx(deadline, clock)
-		vout, verr := r.sb.RunVerify(vctx, sp.Verify)
-		vcancel()
-		green := verr == nil
-
-		if green {
-			sha, err := r.headSHA()
-			if err != nil {
-				return r.fail(err)
-			}
-			st.LastGreen = sha
-			r.logf("iter %d verify GREEN at %s", st.Iterations, short(st.LastGreen))
-			if err := r.syncBranchBack(); err != nil {
-				r.logf("iter %d sync to %s failed (will retry after the next green iteration): %v", st.Iterations, sp.Repo, err)
-				st.SyncOwed = true
-			} else {
-				st.SyncOwed = false
-			}
-			redStreak = 0
+		agentFailed := agentErr != nil || res.IsError
+		var green bool
+		if agentFailed && !changed {
+			r.logf("iter %d verify skipped (agent failed, no changes)", st.Iterations)
 		} else {
-			r.logf("iter %d verify RED (streak %d)", st.Iterations, redStreak+1)
-			r.saveRed(st.Iterations, vout)
-			if err := r.resetTo(st.LastGreen); err != nil {
-				return r.fail(err)
+			if err := r.sb.ResetVerify(); err != nil {
+				r.logf("iter %d reset verify sandbox: %v", st.Iterations, err)
 			}
-			r.appendProgress(fmt.Sprintf("Runner: iteration %d verify FAILED and was reset to last green %s. See attempts/iter-%d.patch and attempts/iter-%d.log.",
-				st.Iterations, short(st.LastGreen), st.Iterations, st.Iterations))
-			redStreak++
+			vctx, vcancel := r.iterCtx(deadline, clock)
+			vout, verr := r.sb.RunVerify(vctx, sp.Verify)
+			vcancel()
+			green = verr == nil
+
+			if green {
+				sha, err := r.headSHA()
+				if err != nil {
+					return r.fail(err)
+				}
+				st.LastGreen = sha
+				r.logf("iter %d verify GREEN at %s", st.Iterations, short(st.LastGreen))
+				if err := r.syncBranchBack(); err != nil {
+					r.logf("iter %d sync to %s failed (will retry after the next green iteration): %v", st.Iterations, sp.Repo, err)
+					st.SyncOwed = true
+				} else {
+					st.SyncOwed = false
+				}
+				redStreak = 0
+			} else {
+				r.logf("iter %d verify RED (streak %d)", st.Iterations, redStreak+1)
+				r.saveRed(st.Iterations, vout)
+				if err := r.resetTo(st.LastGreen); err != nil {
+					return r.fail(err)
+				}
+				r.appendProgress(fmt.Sprintf("Runner: iteration %d verify FAILED and was reset to last green %s. See attempts/iter-%d.patch and attempts/iter-%d.log.",
+					st.Iterations, short(st.LastGreen), st.Iterations, st.Iterations))
+				redStreak++
+			}
 		}
 
 		if r.scaffoldExists(r.completePath()) {

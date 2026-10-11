@@ -28,6 +28,10 @@ var version = "dev"
 // sbxBaseVerifier itself. Production leaves it nil.
 var newBaseVerifier func(bin string) runner.BaseVerifier
 
+// runFn is a test seam over runner.Run: tests overwrite this to capture the
+// Options a run was invoked with (e.g. Version) without driving a real run.
+var runFn = runner.Run
+
 // execFn replaces the current process with argv0, the way a successful
 // interview launch hands off to claude. A test seam: tests overwrite this
 // so nothing ever execs a real binary.
@@ -599,12 +603,13 @@ func cmdRun(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 		Stdin:         stdin,
 		IsTTY:         isTTY(),
 		Ctx:           ctx,
+		Version:       version,
 	}
 	if !*next {
 		opts.SpecArg = positional[0]
 	}
 
-	status, err := runner.Run(opts)
+	status, err := runFn(opts)
 	if err != nil {
 		fmt.Fprintf(stderr, "nightshift: %v\n", err)
 		return runner.ExitCode(runner.StatusError)

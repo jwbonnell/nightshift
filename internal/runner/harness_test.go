@@ -29,11 +29,23 @@ type stubSandbox struct {
 
 	agentN, verifyN, stopN, resetVerifyN int
 	removed                              bool
+	removeN                              int
+	removeErr                            error
 	agentAlive                           bool
 	verifyRaced                          bool
 
+	// plannerNoWrite, when true, suppresses RunAgent's default behavior of
+	// appending a line to PROGRESS.md on a planning prompt — tests that
+	// need to exercise a planner that makes no progress set this.
+	plannerNoWrite bool
+
 	agent  func(ctx context.Context, iter int, dir string) error
 	verify func(iter int, dir string) error
+
+	// output, if set, replaces the fixed "AGENT RAW OUTPUT" line written to
+	// logw — tests use it to script the agent's raw stdout, e.g. a
+	// --output-format json result line.
+	output func(iter int) string
 
 	// gitHook, if set, rewrites Git's real output (e.g. to simulate a
 	// corrupted sha); banner, if set, is prefixed to every Git result
@@ -62,7 +74,15 @@ func (s *stubSandbox) RunAgent(ctx context.Context, model, prompt string, logw i
 	s.agentN++
 	s.models = append(s.models, model)
 	if logw != nil {
-		fmt.Fprintf(logw, "AGENT RAW OUTPUT iter=%d model=%s\n", s.iter, model)
+		if s.output != nil {
+			fmt.Fprint(logw, s.output(s.iter))
+		} else {
+			fmt.Fprintf(logw, "AGENT RAW OUTPUT iter=%d model=%s\n", s.iter, model)
+		}
+	}
+
+	if strings.HasPrefix(prompt, planPreamble) && !s.plannerNoWrite {
+		appendStubPlanLine(s.mountDir)
 	}
 
 	var err error
@@ -126,7 +146,8 @@ func (s *stubSandbox) RunVerify(ctx context.Context, verifyCmd string) (string, 
 
 func (s *stubSandbox) Remove() error {
 	s.removed = true
-	return nil
+	s.removeN++
+	return s.removeErr
 }
 
 // newTestRun resolves a fresh "demo" spec against repo and runs setup(),
@@ -182,11 +203,40 @@ func commitFile(t *testing.T, dir, name, content, msg string) {
 	mustGit(t, dir, "commit", "-q", "-m", msg)
 }
 
+// commitFileForced is commitFile for a file excluded via
+// .git/info/exclude (PROGRESS.md, QUESTION.md, .spec-complete) — `git add
+// -A` alone would silently skip it, so tests simulating a misbehaving
+// agent that commits scaffold files anyway need `-f`.
+func commitFileForced(t *testing.T, dir, name, content, msg string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+	mustGit(t, dir, "add", "-f", name)
+	mustGit(t, dir, "commit", "-q", "-m", msg)
+}
+
 func writeUncommitted(t *testing.T, dir, name, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", name, err)
 	}
+}
+
+// appendStubPlanLine simulates a well-behaved planner writing to
+// PROGRESS.md; it has no *testing.T since it's called from RunAgent, not
+// a test body directly, and a stub agent that fails to write here isn't a
+// test failure in itself — it's exactly what plannerNoWrite tests want.
+func appendStubPlanLine(dir string) {
+	f, err := os.OpenFile(filepath.Join(dir, "PROGRESS.md"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	// Dated like a real appendProgress line (D11.9) so tests that scan
+	// PROGRESS.md for "- <timestamp> ..." lines don't choke on a shorter
+	// stub-only line.
+	fmt.Fprintln(f, "- 0000-00-00 00:00 stub plan")
 }
 
 func appendProgressRaw(t *testing.T, dir, text string) {

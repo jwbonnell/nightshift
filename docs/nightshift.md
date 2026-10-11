@@ -228,11 +228,32 @@ sync ref from your source repo too) and starts clean.
 | `window-closed` | 6 | the `--until` deadline arrived mid-run |
 | `busy` | 7 | another process already holds this spec, or every concurrency slot is full |
 | `interrupted` | 8 | SIGINT/SIGTERM arrived; resumable |
+| `rate-limited` | 9 | the agent hit the Claude usage limit; resumable |
 
-`blocked`, `red`, `stalled`, `capped`, `window-closed`, and `interrupted` are
-all resumable — just run the same spec again (or let `--next` pick it up;
-`--next` only skips a spec whose *last* status was `blocked` or `complete`
-with an unchanged content hash).
+`blocked`, `red`, `stalled`, `capped`, `window-closed`, `interrupted`, and
+`rate-limited` are all resumable — just run the same spec again (or let
+`--next` pick it up; `--next` only skips a spec whose *last* status was
+`blocked` or `complete` with an unchanged content hash).
+
+A `rate-limited` run stops at the first iteration (worker or planning) whose
+agent result reports a 429 or a message matching `hit your ... limit` —
+no verify runs that iteration, and the limit message is saved as
+`stop_reason` in `run.json` and shown in runner.log and the result note's
+summary. Nothing is lost: re-run the spec after the limit resets and it
+resumes exactly like any other resumable status. `--next` treats it the
+same as `stalled`.
+
+Two refinements to "two iterations made no progress": a session only
+counts as having planned once the planner's agent call exits cleanly *and*
+PROGRESS.md actually changed — a planner that errors out or leaves
+PROGRESS.md untouched counts as no-progress like any other failed
+iteration, and the *next* session plans again rather than skipping
+straight to work with no plan. And a worker iteration whose agent call
+failed (error, timeout, or an `is_error` result) and left no commit and no
+uncommitted change (other than to `PROGRESS.md`/`QUESTION.md`/
+`.spec-complete`) skips verify entirely rather than re-verifying an
+unchanged tree — it still counts toward the no-progress total, just
+without the wasted verify run.
 
 ### `status`
 
@@ -250,7 +271,11 @@ log`/`diff` command to review the work. An unknown slug exits `1`.
 
 ### `version`
 
-Prints `nightshift <version>`.
+Prints `nightshift <version>`. `run` stamps that same version into
+`run.json` (`nightshift_version`), the runner.log `start:`/`resume:` lines,
+and the result note's `nightshift:` frontmatter field — so a note or state
+dir from months ago still says which binary produced it. An empty version
+(a `go build` with no `-ldflags`) is recorded as `dev`.
 
 ## Interview
 
@@ -378,7 +403,7 @@ written via `logx.NewText`. A `SECURITY:`-prefixed message logs at `WARN`;
 `INFO`. For example:
 
 ```
-2026-10-05 21:52:05 INFO  start: repo=~/dev/myapp branch=spec/demo base=1a2b3c4d
+2026-10-05 21:52:05 INFO  start: repo=~/dev/myapp branch=spec/demo base=1a2b3c4d version=v1.2.3
 2026-10-05 21:52:05 INFO  iter 2 verify GREEN at cb9eef57
 ```
 
@@ -448,6 +473,28 @@ the host, but only via `Lstat` + `O_NOFOLLOW` — an agent that replaces one
 with a symlink gets the link itself removed/ignored, never the symlink's
 target followed.
 
+## Post-run checks
+
+Every result note ends with a `## Post-run checks` section — six checks,
+in this order, each printed with lint's own `ok`/`warn`/`FAIL`/`skip`
+line format. They run once, after the sandboxes are removed and the final
+sync attempt has happened, and they never change the run's status or exit
+code — they exist to catch the kind of thing a human used to check by hand
+after reviewing a run.
+
+| check | ok when | FAIL / warn / skip |
+|---|---|---|
+| `sync` | the source repo's branch ref (or pending ref, if a checkout elsewhere means sync is pending) matches `last_green`; or nothing was ever green and the ref is simply missing | FAIL naming both short SHAs; skipped if the final sync attempt itself failed |
+| `scaffold` | no commit between the base and `last_green` touches `PROGRESS.md`, `QUESTION.md`, or `.spec-complete` | FAIL listing the offending commits and files |
+| `clone-remotes` | the clone has no git remotes | FAIL listing them |
+| `clone-objects` | every object file under the clone's `.git/objects` has a link count of 1 (a real copy, not hardlinked into the source repo) | FAIL with the hardlinked count; skipped on non-Linux |
+| `sandboxes` | the explicit post-loop `sb.Remove()` returned no error | FAIL with that error |
+| `version` | always ok | warns when the version is `dev` or ends in `-dirty` |
+
+A FAIL in any check makes the desktop notification urgent and appends
+`(checks failed)` to its title, but the run's status, exit code, and
+`run.json` are exactly as they'd be without this section.
+
 ## Concurrency
 
 Two independent lock layers, both under `~/.nightshift/runs/.locks/`:
@@ -500,9 +547,9 @@ Two things that are easy to miss:
 The wrapper logs to `~/.nightshift/logs/nightly.log` and treats exit `7`
 (busy — nothing started) as a non-failure; only exit `1` (a genuine runner
 error) marks the systemd unit failed. `blocked`/`red`/`stalled`/`capped`/
-`window-closed`/`interrupted` are all outcomes, not failures — they're
-resumable, and the next night's run picks the same spec back up via
-`--next`.
+`window-closed`/`interrupted`/`rate-limited` are all outcomes, not
+failures — they're resumable, and the next night's run picks the same
+spec back up via `--next`.
 
 ## Recovery
 
@@ -522,6 +569,10 @@ resumable, and the next night's run picks the same spec back up via
   the sync automatically on its next green iteration.
 - **Stale lock files**: don't delete them by hand — they're reclaimed
   automatically once their holder process is confirmed gone.
+- **Which binary produced a run**: `run.json`'s `nightshift_version`, the
+  runner.log `start:`/`resume:` lines, and the result note's `nightshift:`
+  frontmatter field all record the version that ran — useful when a result
+  looks off and you want to rule out a stale install.
 
 ### Interrupts
 

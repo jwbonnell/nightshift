@@ -190,6 +190,35 @@ func TestCLIUsageAndExitCodes(t *testing.T) {
 	})
 }
 
+// TestCLIRunPassesVersion verifies cmdRun stamps Options.Version from the
+// package-level version var (set via -ldflags in a real build) rather than
+// leaving the runner to default it itself.
+func TestCLIRunPassesVersion(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("NIGHTSHIFT_HOME", homeDir)
+
+	oldRunFn, oldVersion := runFn, version
+	t.Cleanup(func() {
+		runFn = oldRunFn
+		version = oldVersion
+	})
+	version = "v1.2.3"
+	var captured runner.Options
+	runFn = func(opts runner.Options) (runner.Status, error) {
+		captured = opts
+		return runner.StatusComplete, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	got := dispatch([]string{"run", "demo"}, &stdout, &stderr, strings.NewReader(""))
+	if got != 0 {
+		t.Fatalf("exit = %d, want 0; stderr=%s", got, stderr.String())
+	}
+	if captured.Version != "v1.2.3" {
+		t.Fatalf("Options.Version = %q, want v1.2.3", captured.Version)
+	}
+}
+
 func TestSmokeInitNewReadyDryRunStatus(t *testing.T) {
 	homeDir := t.TempDir()
 	t.Setenv("NIGHTSHIFT_HOME", homeDir)

@@ -30,8 +30,11 @@ type runState struct {
 	Iterations int      `json:"iterations"`          // cumulative across resumes
 	Commits    int      `json:"commits"`             // base..HEAD at last write
 	Status     string   `json:"status"`
-	Started    string   `json:"started"` // RFC3339, first run
-	History    []string `json:"history"` // human-readable status trail
+	StopReason string   `json:"stop_reason,omitempty"` // Task 1: the rate-limit message that ended the run, if any
+	Started    string   `json:"started"`               // RFC3339, first run
+	History    []string `json:"history"`               // human-readable status trail
+
+	NightshiftVersion string `json:"nightshift_version"` // Task 4: the binary version that ran this invocation
 }
 
 // run holds one spec's in-progress execution state.
@@ -45,7 +48,11 @@ type run struct {
 	logFile  *os.File
 	logger   *logx.Logger
 	agentLog *os.File
-	err      error // set by fail()/finalizeSync; returned alongside StatusError
+	version  string // Task 4: opts.Version, defaulted to "dev" if empty
+	err      error  // set by fail()/finalizeSync; returned alongside StatusError
+
+	removeErr error         // Task 5: the explicit, pre-finish sb.Remove() result
+	prChecks  postRunReport // Task 5: computed once in finish(), reused by printSummary/resultBody/notify
 }
 
 // git runs args against the clone in the control sandbox, stripping any
@@ -243,14 +250,15 @@ func (r *run) cloneRepo() error {
 	r.seedProgress()
 
 	r.st = &runState{
-		Slug:      sp.Slug,
-		Repo:      sp.Repo,
-		Branch:    branch,
-		Base:      sp.BaseSHA,
-		BaseRef:   sp.Base,
-		LastGreen: sp.BaseSHA,
-		SpecHash:  sp.ContentHash,
-		Started:   r.opts.Now.Format(time.RFC3339),
+		Slug:              sp.Slug,
+		Repo:              sp.Repo,
+		Branch:            branch,
+		Base:              sp.BaseSHA,
+		BaseRef:           sp.Base,
+		LastGreen:         sp.BaseSHA,
+		SpecHash:          sp.ContentHash,
+		Started:           r.opts.Now.Format(time.RFC3339),
+		NightshiftVersion: r.version,
 	}
 	return r.saveState()
 }
@@ -385,7 +393,11 @@ func setup(opts Options, sp *Spec) (*run, error) {
 		}
 	}
 
-	r := &run{opts: opts, spec: sp, dir: dir, clone: filepath.Join(dir, "repo")}
+	v := opts.Version
+	if v == "" {
+		v = "dev"
+	}
+	r := &run{opts: opts, spec: sp, dir: dir, clone: filepath.Join(dir, "repo"), version: v}
 	resuming := dirExists(r.clone)
 
 	if err := os.MkdirAll(r.attemptsDir(), 0o755); err != nil {
@@ -424,13 +436,17 @@ func setup(opts Options, sp *Spec) (*run, error) {
 			r.logf("resume: cleared stale .spec-complete")
 			r.appendProgress("Runner: cleared a stale .spec-complete left by a previous session; re-claim completion when done.")
 		}
-		r.logf("resume: branch=%s base=%s last_green=%s", r.st.Branch, short(r.st.Base), short(r.st.LastGreen))
+		r.st.NightshiftVersion = r.version
+		if err := r.saveState(); err != nil {
+			return nil, err
+		}
+		r.logf("resume: branch=%s base=%s last_green=%s version=%s", r.st.Branch, short(r.st.Base), short(r.st.LastGreen), r.version)
 		return r, nil
 	}
 
 	if err := r.cloneRepo(); err != nil {
 		return nil, err
 	}
-	r.logf("start: repo=%s branch=%s base=%s", sp.Repo, r.st.Branch, short(r.st.Base))
+	r.logf("start: repo=%s branch=%s base=%s version=%s", sp.Repo, r.st.Branch, short(r.st.Base), r.version)
 	return r, nil
 }
