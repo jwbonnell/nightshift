@@ -147,8 +147,7 @@ func Run(opts Options) int {
 	if opts.Settings.Selector.Agent == "claude" {
 		now := opts.Now()
 		if active := usagelimit.ReadActive(home.RunsDir(opts.Settings.Home), now, true); active != nil {
-			resetAt, _ := time.Parse(time.RFC3339, active.ResetAt)
-			fmt.Fprintf(opts.Stderr, "nightshift pr: usage limit active until %s — skipping\n", resetAt.Local().Format("Mon 15:04"))
+			fmt.Fprintf(opts.Stderr, "nightshift pr: usage limit active until %s — skipping\n", formatReset(active.ResetAt))
 			return 0
 		}
 	}
@@ -331,6 +330,7 @@ func (r *runner) runPending(ctx context.Context) runTally {
 	}
 
 	if !anyListOK {
+		r.printSummary(tally)
 		return tally
 	}
 
@@ -393,11 +393,11 @@ func (r *runner) processPendingItem(ctx context.Context, q pendingItem, remainin
 
 	change, err := q.client.Get(ctx, q.listed.RepoRef, q.listed.Number)
 	if err != nil {
-		return r.pendingAPIFailure(ctx, label, slug, remaining, err, tally)
+		return r.pendingAPIFailure(ctx, label, slug, remaining, fmt.Errorf("get %s: %w", q.client.Kind().Noun(), err), tally)
 	}
 	repo, err := q.client.GetRepo(ctx, q.listed.RepoRef)
 	if err != nil {
-		return r.pendingAPIFailure(ctx, label, slug, remaining, err, tally)
+		return r.pendingAPIFailure(ctx, label, slug, remaining, fmt.Errorf("get %s: %w", q.client.Kind().RepoNoun(), err), tally)
 	}
 
 	canonical := repo.Path

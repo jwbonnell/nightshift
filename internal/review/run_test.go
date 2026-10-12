@@ -603,14 +603,76 @@ func TestPendingGetFailureLogged(t *testing.T) {
 	if rc != 1 {
 		t.Fatalf("Run() = %d, want 1", rc)
 	}
-	if !strings.Contains(stdout.String(), "team/app!1  FAILED: network error") {
-		t.Fatalf("stdout = %q, want a raw FAILED line", stdout.String())
+	if !strings.Contains(stdout.String(), "team/app!1  FAILED: get MR: network error") {
+		t.Fatalf("stdout = %q, want the get-MR-prefixed FAILED line", stdout.String())
 	}
 
 	logPath := filepath.Join(home.PRDir(homeDir), "logs", "failures.log")
 	data := readFile(t, logPath)
-	if !strings.Contains(data, "team-app-mr1") || !strings.Contains(data, "network error") {
+	if !strings.Contains(data, "team-app-mr1") || !strings.Contains(data, "get MR: network error") {
 		t.Fatalf("failures.log = %q, missing the expected entry", data)
+	}
+}
+
+// TestPendingGetRepoFailureLogged covers the GetRepo half of the same
+// prefix: "get project: …" for GitLab, matching reviewTarget's explicit-
+// target wording.
+func TestPendingGetRepoFailureLogged(t *testing.T) {
+	homeDir := t.TempDir()
+	client := &fakeClient{
+		kind:          forge.KindGitLab,
+		currentUserFn: func(ctx context.Context) (string, error) { return "alice", nil },
+		listFn: func(ctx context.Context, user string) ([]forge.Listed, error) {
+			return []forge.Listed{{RepoRef: "1", Label: "team/app", Number: 1, Title: "One", State: "open"}}, nil
+		},
+		getFn: func(ctx context.Context, r string, n int) (forge.Change, error) {
+			return testChange("One", "a", "main", "deadbeef", "cafebabe"), nil
+		},
+		getRepoFn: func(ctx context.Context, r string) (forge.Repo, error) {
+			return forge.Repo{}, fmt.Errorf("network error")
+		},
+	}
+	sb := &stubSandbox{available: true}
+	opts := pendingOptions(t, homeDir, client, sb)
+	var stdout strings.Builder
+	opts.Stdout = &stdout
+
+	rc := Run(opts)
+	if rc != 1 {
+		t.Fatalf("Run() = %d, want 1", rc)
+	}
+	if !strings.Contains(stdout.String(), "team/app!1  FAILED: get project: network error") {
+		t.Fatalf("stdout = %q, want the get-project-prefixed FAILED line", stdout.String())
+	}
+}
+
+// TestPendingAllForgesFailPrintsSummary asserts that --pending still
+// prints its one summary line when every configured forge's listing
+// fails (task 4: "the summary is printed even when every listing
+// failed").
+func TestPendingAllForgesFailPrintsSummary(t *testing.T) {
+	homeDir := t.TempDir()
+	client := &fakeClient{
+		kind: forge.KindGitLab,
+		currentUserFn: func(ctx context.Context) (string, error) {
+			return "", fmt.Errorf("401 unauthorized")
+		},
+	}
+	sb := &stubSandbox{available: true}
+	opts := pendingOptions(t, homeDir, client, sb)
+	var stdout, stderr strings.Builder
+	opts.Stdout = &stdout
+	opts.Stderr = &stderr
+
+	rc := Run(opts)
+	if rc != 1 {
+		t.Fatalf("Run() = %d, want 1", rc)
+	}
+	if !strings.Contains(stderr.String(), "gitlab: resolve current user:") {
+		t.Fatalf("stderr = %q, missing the gitlab failure message", stderr.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "reviewed: 0 · skipped: 0 · failed: 1" {
+		t.Fatalf("stdout = %q, want the summary line printed even with no successful listing", stdout.String())
 	}
 }
 

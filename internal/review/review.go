@@ -72,6 +72,17 @@ func (o reviewOutcome) line() string {
 	}
 }
 
+// formatReset renders an RFC3339 reset-at string as local "Mon 15:04", or
+// "unknown" if it doesn't parse — defensive, since usagelimit.ReadActive
+// already filters out a marker whose reset_at fails to parse.
+func formatReset(resetAt string) string {
+	t, err := time.Parse(time.RFC3339, resetAt)
+	if err != nil {
+		return "unknown"
+	}
+	return t.Local().Format("Mon 15:04")
+}
+
 // egressError marks ensureSandbox's AllowNetwork failure (P12.3): fatal to
 // the whole run, not just the change being reviewed.
 type egressError struct {
@@ -218,15 +229,15 @@ func (r *runner) rateLimitedOutcome(label string, res agent.Result) reviewOutcom
 	now := r.opts.Now()
 	runsDir := home.RunsDir(r.opts.Settings.Home)
 	hit := usagelimit.Parse(res.Message, now)
-	_ = usagelimit.Write(runsDir, hit, now, "pr", r.opts.Settings.LimitFallback)
-
-	until := now.Add(r.opts.Settings.LimitFallback)
-	if active := usagelimit.ReadActive(runsDir, now, false); active != nil {
-		if t, err := time.Parse(time.RFC3339, active.ResetAt); err == nil {
-			until = t
-		}
+	if err := usagelimit.Write(runsDir, hit, now, "pr", r.opts.Settings.LimitFallback); err != nil {
+		fmt.Fprintf(r.opts.Stderr, "nightshift pr: write usage-limit marker: %v\n", err)
 	}
-	return reviewOutcome{label: label, status: statusRateLimited, until: until.Local().Format("Mon 15:04"), execStarted: true}
+
+	until := now.Add(r.opts.Settings.LimitFallback).Local().Format("Mon 15:04")
+	if active := usagelimit.ReadActive(runsDir, now, false); active != nil {
+		until = formatReset(active.ResetAt)
+	}
+	return reviewOutcome{label: label, status: statusRateLimited, until: until, execStarted: true}
 }
 
 // reviewTarget resolves an explicit Target through its forge client (Get

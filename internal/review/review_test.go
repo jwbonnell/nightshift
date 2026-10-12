@@ -559,6 +559,24 @@ func TestPRTransientRetryGetsFreshTimeout(t *testing.T) {
 	}
 }
 
+// TestFormatReset covers formatReset directly: a bad reset_at falls back
+// to "unknown" rather than the zero time, and a good RFC3339 one formats
+// as local "Mon 15:04".
+func TestFormatReset(t *testing.T) {
+	if got := formatReset("not-a-time"); got != "unknown" {
+		t.Errorf("formatReset(bad) = %q, want %q", got, "unknown")
+	}
+	if got := formatReset(""); got != "unknown" {
+		t.Errorf("formatReset(empty) = %q, want %q", got, "unknown")
+	}
+
+	reset := time.Date(2024, 6, 2, 7, 0, 0, 0, time.UTC)
+	want := reset.Local().Format("Mon 15:04")
+	if got := formatReset(reset.Format(time.RFC3339)); got != want {
+		t.Errorf("formatReset(good) = %q, want %q", got, want)
+	}
+}
+
 // TestPRRateLimitStopsPass covers both entry points: a rate limit on the
 // first review stops the rest of the pass, writes the shared usage-limit
 // marker, and exits 0 — never a failure.
@@ -688,6 +706,51 @@ func TestPRRateLimitStopsPass(t *testing.T) {
 			t.Fatalf("stat failures.log: %v", err)
 		}
 	})
+}
+
+// TestPRMarkerWriteFailure asserts that a failed usagelimit.Write (here,
+// forced by making home.RunsDir a regular file so its MkdirAll fails)
+// prints "nightshift pr: write usage-limit marker: <err>" rather than
+// silently dropping the error — the review itself still completes as a
+// rate limit.
+func TestPRMarkerWriteFailure(t *testing.T) {
+	homeDir := t.TempDir()
+	remote, head, base := makeRemote(t, "refs/merge-requests/%d/head", 1)
+
+	if err := os.MkdirAll(home.PRDir(homeDir), 0o700); err != nil {
+		t.Fatalf("MkdirAll PRDir: %v", err)
+	}
+	if err := os.WriteFile(home.RunsDir(homeDir), []byte("not a dir"), 0o600); err != nil {
+		t.Fatalf("seed runs-dir-as-file: %v", err)
+	}
+
+	client := &fakeClient{
+		kind: forge.KindGitLab,
+		getFn: func(ctx context.Context, repo string, n int) (forge.Change, error) {
+			return testChange("One", "a", "main", head, base), nil
+		},
+		getRepoFn: func(ctx context.Context, repo string) (forge.Repo, error) {
+			return forge.Repo{ID: 1, Path: "team/app", CloneURL: remote}, nil
+		},
+	}
+	sb := &stubSandbox{available: true}
+	sb.execFn = func(ctx context.Context, call int, dir string, argv []string, stdin string) (string, error) {
+		return claudeRateLimitJSON(), nil
+	}
+
+	opts := baseOptions(t, homeDir, client, sb)
+	opts.Targets = []Target{{Forge: forge.KindGitLab, Repo: "team/app", Number: 1}}
+	opts.Agent = mustAgent(t, opts.Settings.Selector)
+	var stderr strings.Builder
+	opts.Stderr = &stderr
+
+	rc := Run(opts)
+	if rc != 0 {
+		t.Fatalf("Run() = %d, want 0", rc)
+	}
+	if !strings.Contains(stderr.String(), "nightshift pr: write usage-limit marker: ") {
+		t.Fatalf("stderr = %q, want the write-failure message", stderr.String())
+	}
 }
 
 // TestPRLimitMarker covers the claude-only usage-limit marker's effect on
