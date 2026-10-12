@@ -413,3 +413,31 @@ func TestDryRunPR(t *testing.T) {
 		t.Errorf("sandbox create called %d times, want 0", len(sb.createCalls))
 	}
 }
+
+// TestDryRunPendingMakesNoAPICallsMarker is the P1-renamed reference
+// TestDryRunPendingMakesNoAPICallsMarker: --pending --dry-run exits 0,
+// mentions "pending" in the plan, and never calls the forge (DryRun returns
+// before Run ever reaches the pending-listing code path).
+func TestDryRunPendingMakesNoAPICallsMarker(t *testing.T) {
+	homeDir := t.TempDir()
+	client := &fakeClient{kind: forge.KindGitLab}
+	sb := &stubSandbox{available: true}
+
+	opts := pendingOptions(t, homeDir, client, sb)
+	opts.DryRun = true
+	var stdout strings.Builder
+	opts.Stdout = &stdout
+
+	if rc := Run(opts); rc != 0 {
+		t.Fatalf("Run() = %d, want 0 (stdout: %s)", rc, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "pending") {
+		t.Errorf("stdout = %q, want it to mention pending", stdout.String())
+	}
+	if client.listCalls != 0 {
+		t.Errorf("list calls = %d, want 0 (--dry-run makes no API calls)", client.listCalls)
+	}
+	if _, err := os.Stat(home.PRDir(homeDir)); !os.IsNotExist(err) {
+		t.Errorf("state dir exists after --dry-run, want it never created: %v", err)
+	}
+}

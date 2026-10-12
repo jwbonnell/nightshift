@@ -109,6 +109,50 @@ func TestPendingSkipsDrafts(t *testing.T) {
 	}
 }
 
+func TestLimitValidation(t *testing.T) {
+	t.Run("negative limit", func(t *testing.T) {
+		homeDir := t.TempDir()
+		client := &fakeClient{kind: forge.KindGitLab}
+		sb := &stubSandbox{available: true}
+		opts := baseOptions(t, homeDir, client, sb)
+		opts.Pending = true
+		opts.Limit = -1
+		var stderr strings.Builder
+		opts.Stderr = &stderr
+
+		if rc := Run(opts); rc != 2 {
+			t.Fatalf("Run() = %d, want 2 (stderr: %s)", rc, stderr.String())
+		}
+		if want := "nightshift pr: --limit must be 0 (no limit) or a positive number of reviews\n"; stderr.String() != want {
+			t.Errorf("stderr = %q, want %q", stderr.String(), want)
+		}
+		if _, err := os.Stat(home.PRDir(homeDir)); !os.IsNotExist(err) {
+			t.Errorf("state dir exists after a --limit validation error, want it never created: %v", err)
+		}
+	})
+
+	t.Run("limit with an explicit target", func(t *testing.T) {
+		homeDir := t.TempDir()
+		client := &fakeClient{kind: forge.KindGitLab}
+		sb := &stubSandbox{available: true}
+		opts := baseOptions(t, homeDir, client, sb)
+		opts.Targets = []Target{{Forge: forge.KindGitLab, Repo: "team/app", Number: 1}}
+		opts.Limit = 3
+		var stderr strings.Builder
+		opts.Stderr = &stderr
+
+		if rc := Run(opts); rc != 2 {
+			t.Fatalf("Run() = %d, want 2 (stderr: %s)", rc, stderr.String())
+		}
+		if want := "nightshift pr: --limit only applies to --pending\n"; stderr.String() != want {
+			t.Errorf("stderr = %q, want %q", stderr.String(), want)
+		}
+		if _, err := os.Stat(home.PRDir(homeDir)); !os.IsNotExist(err) {
+			t.Errorf("state dir exists after a --limit validation error, want it never created: %v", err)
+		}
+	})
+}
+
 func TestPendingLabelsUsePath(t *testing.T) {
 	homeDir := t.TempDir()
 	client := &fakeClient{
