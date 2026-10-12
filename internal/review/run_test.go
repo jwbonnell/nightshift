@@ -534,6 +534,43 @@ func TestCancelStopsPending(t *testing.T) {
 	}
 }
 
+// TestPendingInterruptDuringListing checks that a context cancelled while
+// still listing (CurrentUser/ListReviewRequests, before any change is
+// queued) counts as an interrupt, not a failure — P8.3's exit 130, not the
+// tally.failed++ a real API error gets.
+func TestPendingInterruptDuringListing(t *testing.T) {
+	homeDir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	client := &fakeClient{
+		kind:          forge.KindGitLab,
+		currentUserFn: func(ctx context.Context) (string, error) { return "alice", nil },
+		listFn: func(ctx context.Context, user string) ([]forge.Listed, error) {
+			cancel()
+			return nil, ctx.Err()
+		},
+	}
+
+	sb := &stubSandbox{available: true}
+	opts := pendingOptions(t, homeDir, client, sb)
+	opts.Ctx = ctx
+
+	var stdout, stderr strings.Builder
+	opts.Stdout = &stdout
+	opts.Stderr = &stderr
+
+	rc := Run(opts)
+	if rc != 130 {
+		t.Fatalf("Run() = %d, want 130", rc)
+	}
+	if !strings.Contains(stdout.String(), "reviewed: 0 · skipped: 0 · failed: 0 · interrupted: 1") {
+		t.Fatalf("stdout = %q, want failed: 0 and interrupted: 1, not a counted failure", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "nightshift pr: interrupted —") {
+		t.Fatalf("stderr = %q, missing the interrupted message", stderr.String())
+	}
+}
+
 // TestLimitCountsOnlyExecAndFailedExec checks P12.4/4.4.8's --limit
 // counting rule: only an outcome that actually reached Sandbox.Exec
 // consumes a limit slot (a failed exec counts; a draft skip or a

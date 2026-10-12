@@ -297,12 +297,22 @@ func (r *runner) runPending(ctx context.Context) runTally {
 
 		user, err := client.CurrentUser(ctx)
 		if err != nil {
+			if ctx.Err() != nil {
+				tally.interrupted = true
+				r.printSummary(tally)
+				return tally
+			}
 			fmt.Fprintf(r.opts.Stderr, "nightshift pr: %s: resolve current user: %v — check the token/VPN\n", kind, err)
 			tally.failed++
 			continue
 		}
 		listed, err := client.ListReviewRequests(ctx, user)
 		if err != nil {
+			if ctx.Err() != nil {
+				tally.interrupted = true
+				r.printSummary(tally)
+				return tally
+			}
 			fmt.Fprintf(r.opts.Stderr, "nightshift pr: %s: list pending: %v — check the token/VPN\n", kind, err)
 			tally.failed++
 			continue
