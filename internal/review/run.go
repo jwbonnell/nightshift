@@ -68,9 +68,13 @@ func (o *Options) fill() {
 		o.Sandbox = newSbxSandbox(o.Settings.SbxBin, o.RunID)
 	}
 	if o.Clients == nil {
+		gl := gitlab.New(o.Settings.GitLabURL, o.Settings.GitLabToken)
+		gl.Warn = o.Stderr
+		gh := github.New(o.Settings.GitHubURL, o.Settings.GitHubToken)
+		gh.Warn = o.Stderr
 		o.Clients = map[forge.Kind]forge.Client{
-			forge.KindGitLab: gitlab.New(o.Settings.GitLabURL, o.Settings.GitLabToken),
-			forge.KindGitHub: github.New(o.Settings.GitHubURL, o.Settings.GitHubToken),
+			forge.KindGitLab: gl,
+			forge.KindGitHub: gh,
 		}
 	}
 	if o.Agent == nil {

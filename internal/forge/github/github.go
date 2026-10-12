@@ -6,9 +6,9 @@ package github
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 
 	"github.com/jwbonnell/nightshift/internal/forge"
@@ -28,6 +28,10 @@ type Client struct {
 	apiBase string // https://api.github.com, or <web URL>/api/v3 for Enterprise
 	token   string
 	http    *http.Client
+
+	// Warn receives non-fatal warnings (e.g. the page-cap notice). nil
+	// means io.Discard, never os.Stderr directly.
+	Warn io.Writer
 }
 
 var _ forge.Client = (*Client)(nil)
@@ -93,6 +97,13 @@ func (c *Client) header() map[string]string {
 
 func (c *Client) apiURL(path string) string {
 	return c.apiBase + path
+}
+
+func (c *Client) warn() io.Writer {
+	if c.Warn == nil {
+		return io.Discard
+	}
+	return c.Warn
 }
 
 // splitOwnerRepo validates repo is exactly "owner/name", both parts
@@ -253,7 +264,7 @@ func (c *Client) ListReviewRequests(ctx context.Context, user string) ([]forge.L
 			return all, nil
 		}
 		if page == maxPages {
-			fmt.Fprintf(os.Stderr, "nightshift pr: %s: listing stopped at %d items (page cap) — some requests not shown\n", forge.KindGitHub, len(all))
+			fmt.Fprintf(c.warn(), "nightshift pr: %s: listing stopped at %d items (page cap) — some requests not shown\n", forge.KindGitHub, len(all))
 		}
 	}
 	return all, nil

@@ -6,9 +6,9 @@ package gitlab
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 
@@ -27,6 +27,10 @@ type Client struct {
 	token   string
 	host    string
 	http    *http.Client
+
+	// Warn receives non-fatal warnings (e.g. the page-cap notice). nil
+	// means io.Discard, never os.Stderr directly.
+	Warn io.Writer
 }
 
 var _ forge.Client = (*Client)(nil)
@@ -73,6 +77,13 @@ func (c *Client) header() map[string]string {
 
 func (c *Client) apiURL(path string) string {
 	return c.baseURL + "/api/v4" + path
+}
+
+func (c *Client) warn() io.Writer {
+	if c.Warn == nil {
+		return io.Discard
+	}
+	return c.Warn
 }
 
 type user struct {
@@ -210,7 +221,7 @@ func (c *Client) ListReviewRequests(ctx context.Context, username string) ([]for
 			return all, nil
 		}
 		if page == maxPages {
-			fmt.Fprintf(os.Stderr, "nightshift pr: %s: listing stopped at %d items (page cap) — some requests not shown\n", forge.KindGitLab, len(all))
+			fmt.Fprintf(c.warn(), "nightshift pr: %s: listing stopped at %d items (page cap) — some requests not shown\n", forge.KindGitLab, len(all))
 		}
 	}
 	return all, nil

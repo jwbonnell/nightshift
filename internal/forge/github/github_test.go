@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
@@ -254,18 +253,10 @@ func TestGitHubListReviewRequestsPageCapWarns(t *testing.T) {
 	})
 
 	c := github.New(srv.URL, "tok")
-
-	origStderr := os.Stderr
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("Pipe: %v", err)
-	}
-	os.Stderr = w
-	listed, listErr := c.ListReviewRequests(context.Background(), "alice")
-	w.Close()
-	os.Stderr = origStderr
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	c.Warn = &buf
+
+	listed, listErr := c.ListReviewRequests(context.Background(), "alice")
 
 	if listErr != nil {
 		t.Fatalf("ListReviewRequests: %v", listErr)

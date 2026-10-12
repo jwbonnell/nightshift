@@ -123,8 +123,9 @@ of stopping `rate-limited` — see the `run` subcommand section there.
   flag — and its verdict can never change a run's status, exit code, or
   history. See `docs/nightshift.md`'s Review section.)
 - `nightshift pr` is entirely outside this trust model — it has no agent
-  sandbox, no `-ctl` sandbox, and the clone it works from has no remotes
-  and never gets a git op run inside the agent's reach. Its one sandbox
+  sandbox, no `-ctl` sandbox, and the bare clones it works from have no
+  credentials in the remote URL or git config, and never get a git op run
+  inside the agent's reach. Its one sandbox
   (`nightshift-pr-<RunID>`) runs a read-only reviewer (claude with
   `--tools Read,Grep,Glob`, or opencode's read-only invocation) against an
   exported tree with no `.git`, and every forge API call from the host is a

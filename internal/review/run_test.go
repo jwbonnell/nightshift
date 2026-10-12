@@ -12,6 +12,8 @@ import (
 
 	"github.com/jwbonnell/nightshift/internal/agent"
 	"github.com/jwbonnell/nightshift/internal/forge"
+	"github.com/jwbonnell/nightshift/internal/forge/github"
+	"github.com/jwbonnell/nightshift/internal/forge/gitlab"
 	"github.com/jwbonnell/nightshift/internal/home"
 )
 
@@ -939,5 +941,26 @@ func TestPendingEgressFailureAbortsBeforeSizeCapNote(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "reviewed:") {
 		t.Fatalf("stdout = %q, want no summary line for a fatal egress failure", stdout.String())
+	}
+}
+
+func TestDefaultClientsGetWarnFromStderr(t *testing.T) {
+	var stderr strings.Builder
+	opts := &Options{Stderr: &stderr}
+	opts.fill()
+
+	gl, ok := opts.Clients[forge.KindGitLab].(*gitlab.Client)
+	if !ok {
+		t.Fatalf("Clients[gitlab] = %T, want *gitlab.Client", opts.Clients[forge.KindGitLab])
+	}
+	if gl.Warn != opts.Stderr {
+		t.Errorf("gitlab client Warn = %v, want opts.Stderr", gl.Warn)
+	}
+	gh, ok := opts.Clients[forge.KindGitHub].(*github.Client)
+	if !ok {
+		t.Fatalf("Clients[github] = %T, want *github.Client", opts.Clients[forge.KindGitHub])
+	}
+	if gh.Warn != opts.Stderr {
+		t.Errorf("github client Warn = %v, want opts.Stderr", gh.Warn)
 	}
 }

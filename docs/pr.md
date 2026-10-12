@@ -332,11 +332,12 @@ touch each other's state.
   that sends `POST`/`PUT`/`PATCH`/`DELETE`, and no `--post` flag exists to
   add one.
 - **The persistent bare clone under `~/.nightshift/pr/repos/` has no
-  remotes.** Fetching the change's head and target branch happens once, into
-  `refs/cr/<n>`, using a per-request HTTP auth header
-  (`http.<scheme://host>/.extraHeader`) rather than a credential embedded in
-  the remote URL or written to the clone's on-disk config — so a token never
-  appears in a log, a note, `--dry-run` output, or the clone itself.
+  credentials in the remote URL or git config.** Fetching the change's head
+  and target branch happens once, into `refs/cr/<n>`, using a per-request
+  HTTP auth header (`http.<scheme://host>/.extraHeader`) rather than a
+  credential embedded in the remote URL or written to the clone's on-disk
+  config — so a token never appears in a log, a note, `--dry-run` output, or
+  the clone itself.
 - **The review sandbox never sees `.git`.** The reviewed commit's tree is
   exported into a scratch directory under `~/.nightshift/pr/work/<slug>/tree/`
   with no `.git` at all, alongside a separately-written `changes.diff` and
