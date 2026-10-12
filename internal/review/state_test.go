@@ -3,12 +3,14 @@ package review
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jwbonnell/nightshift/internal/forge"
 	"github.com/jwbonnell/nightshift/internal/home"
 	"github.com/jwbonnell/nightshift/internal/lock"
 )
@@ -181,27 +183,71 @@ func TestAgentLogWriterFallsBackOnOpenError(t *testing.T) {
 }
 
 func TestPRLockHeld(t *testing.T) {
-	homeDir := t.TempDir()
+	t.Run("acquirePRLock", func(t *testing.T) {
+		homeDir := t.TempDir()
 
-	l, err := acquirePRLock(homeDir)
-	if err != nil {
-		t.Fatalf("acquirePRLock (first): %v", err)
-	}
-	defer l.Release()
+		l, err := acquirePRLock(homeDir)
+		if err != nil {
+			t.Fatalf("acquirePRLock (first): %v", err)
+		}
+		defer l.Release()
 
-	_, err = acquirePRLock(homeDir)
-	if err == nil {
-		t.Fatal("acquirePRLock (second, while held) succeeded, want an error")
-	}
-	wantPrefix := "another nightshift pr run is in progress (pid "
-	if !strings.HasPrefix(err.Error(), wantPrefix) || !strings.HasSuffix(err.Error(), ") — wait for it to finish") {
-		t.Errorf("error = %q, want prefix %q and the P5 suffix", err.Error(), wantPrefix)
-	}
+		_, err = acquirePRLock(homeDir)
+		if err == nil {
+			t.Fatal("acquirePRLock (second, while held) succeeded, want an error")
+		}
+		wantPrefix := "another nightshift pr run is in progress (pid "
+		if !strings.HasPrefix(err.Error(), wantPrefix) || !strings.HasSuffix(err.Error(), ") — wait for it to finish") {
+			t.Errorf("error = %q, want prefix %q and the P5 suffix", err.Error(), wantPrefix)
+		}
 
-	var held *lock.HeldError
-	if errors.As(err, &held) {
-		t.Errorf("acquirePRLock must translate *lock.HeldError into its own message, not leak it: %v", err)
-	}
+		var held *lock.HeldError
+		if errors.As(err, &held) {
+			t.Errorf("acquirePRLock must translate *lock.HeldError into its own message, not leak it: %v", err)
+		}
+	})
+
+	t.Run("Run-level", func(t *testing.T) {
+		homeDir := t.TempDir()
+
+		l, err := acquirePRLock(homeDir)
+		if err != nil {
+			t.Fatalf("acquirePRLock: %v", err)
+		}
+		defer l.Release()
+
+		leftover := filepath.Join(home.PRDir(homeDir), "work", "leftover")
+		if err := os.MkdirAll(filepath.Dir(leftover), 0o700); err != nil {
+			t.Fatalf("mkdir work: %v", err)
+		}
+		if err := os.WriteFile(leftover, []byte("stale"), 0o600); err != nil {
+			t.Fatalf("seed leftover: %v", err)
+		}
+
+		client := &fakeClient{kind: forge.KindGitLab}
+		sb := &stubSandbox{available: true}
+		opts := baseOptions(t, homeDir, client, sb)
+		opts.Targets = []Target{{Forge: forge.KindGitLab, Repo: "team/app", Number: 1}}
+		var stderr strings.Builder
+		opts.Stderr = &stderr
+
+		if rc := Run(opts); rc != 2 {
+			t.Fatalf("Run() = %d, want 2 (stderr: %s)", rc, stderr.String())
+		}
+		wantPid := fmt.Sprintf("(pid %d)", os.Getpid())
+		if !strings.Contains(stderr.String(), wantPid) {
+			t.Errorf("stderr = %q, want to contain %q", stderr.String(), wantPid)
+		}
+		if _, err := os.Stat(leftover); err != nil {
+			t.Errorf("leftover = %v, want it to still exist (clearWork must never run while the lock is held)", err)
+		}
+		if client.getCalls != 0 || client.getRepoCalls != 0 || client.currentCalls != 0 {
+			t.Errorf("client calls = get:%d getRepo:%d current:%d, want all 0", client.getCalls, client.getRepoCalls, client.currentCalls)
+		}
+		if len(sb.createCalls) != 0 {
+			t.Errorf("sandbox created %d time(s), want 0", len(sb.createCalls))
+		}
+	})
 }
 
 func TestPRLockReleasedAndReacquirable(t *testing.T) {

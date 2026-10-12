@@ -416,68 +416,170 @@ func TestNoForgeConfigured(t *testing.T) {
 	})
 }
 
+// TestPendingNotifies is a table over every row of the P7 desktop
+// notification rule: a --pending run notifies iff it reviewed or failed at
+// least one change, urgent iff any of those was BLOCKING or a failure —
+// and --list, --dry-run, explicit targets, and a pending pass that neither
+// reviewed nor failed anything (e.g. an all-drafts queue) never notify.
 func TestPendingNotifies(t *testing.T) {
-	homeDir := t.TempDir()
-	remote, head, base := makeRemote(t, "refs/merge-requests/%d/head", 1)
-	change := testChange("One", "a", "main", head, base)
-	repo := forge.Repo{ID: 1, Path: "team/app", CloneURL: remote}
-
-	client := &fakeClient{
-		kind:          forge.KindGitLab,
-		currentUserFn: func(ctx context.Context) (string, error) { return "alice", nil },
-		listFn: func(ctx context.Context, user string) ([]forge.Listed, error) {
-			return []forge.Listed{{RepoRef: "1", Label: "team/app", Number: 1, Title: "One", State: "open"}}, nil
-		},
-		getFn:     func(ctx context.Context, r string, n int) (forge.Change, error) { return change, nil },
-		getRepoFn: func(ctx context.Context, r string) (forge.Repo, error) { return repo, nil },
-	}
-	sb := &stubSandbox{available: true}
-	sb.execFn = func(ctx context.Context, call int, dir string, argv []string, stdin string) (string, error) {
-		return claudeResultJSON("BLOCKING", 0.1, false), nil
-	}
-
-	opts := pendingOptions(t, homeDir, client, sb)
-	notifier := &fakeNotifier{}
-	opts.Notifier = notifier
-
-	if rc := Run(opts); rc != 0 {
-		t.Fatalf("Run() = %d, want 0", rc)
-	}
-	if len(notifier.calls) != 1 {
-		t.Fatalf("notify calls = %d, want 1", len(notifier.calls))
-	}
-	call := notifier.calls[0]
-	if call.title != "nightshift pr" {
-		t.Fatalf("title = %q, want nightshift pr", call.title)
-	}
-	if !strings.Contains(call.msg, "blocking: 1") {
-		t.Fatalf("msg = %q, want a blocking: 1 suffix", call.msg)
-	}
-	if !call.urgent {
-		t.Fatalf("urgent = false, want true for a BLOCKING verdict")
-	}
-}
-
-func TestPendingNotifiesSkippedForExplicitTargets(t *testing.T) {
-	homeDir := t.TempDir()
-	client, _, _, _ := gitlabChangeClient(t, 1, "T", "a")
-	sb := &stubSandbox{available: true}
-	sb.execFn = func(ctx context.Context, call int, dir string, argv []string, stdin string) (string, error) {
-		return claudeResultJSON("LGTM", 0.1, false), nil
+	onePending := func(execJSON string) (client *fakeClient, sb *stubSandbox) {
+		remote, head, base := makeRemote(t, "refs/merge-requests/%d/head", 1)
+		change := testChange("One", "a", "main", head, base)
+		repo := forge.Repo{ID: 1, Path: "team/app", CloneURL: remote}
+		client = &fakeClient{
+			kind:          forge.KindGitLab,
+			currentUserFn: func(ctx context.Context) (string, error) { return "alice", nil },
+			listFn: func(ctx context.Context, user string) ([]forge.Listed, error) {
+				return []forge.Listed{{RepoRef: "1", Label: "team/app", Number: 1, Title: "One", State: "open"}}, nil
+			},
+			getFn:     func(ctx context.Context, r string, n int) (forge.Change, error) { return change, nil },
+			getRepoFn: func(ctx context.Context, r string) (forge.Repo, error) { return repo, nil },
+		}
+		sb = &stubSandbox{available: true}
+		sb.execFn = func(ctx context.Context, call int, dir string, argv []string, stdin string) (string, error) {
+			return execJSON, nil
+		}
+		return client, sb
 	}
 
-	opts := baseOptions(t, homeDir, client, sb)
-	opts.Targets = []Target{{Forge: forge.KindGitLab, Repo: "team/app", Number: 1}}
-	opts.Agent = mustAgent(t, opts.Settings.Selector)
-	notifier := &fakeNotifier{}
-	opts.Notifier = notifier
+	t.Run("BLOCKING verdict notifies urgently", func(t *testing.T) {
+		homeDir := t.TempDir()
+		client, sb := onePending(claudeResultJSON("BLOCKING", 0.1, false))
+		opts := pendingOptions(t, homeDir, client, sb)
+		notifier := &fakeNotifier{}
+		opts.Notifier = notifier
 
-	if rc := Run(opts); rc != 0 {
-		t.Fatalf("Run() = %d, want 0", rc)
-	}
-	if len(notifier.calls) != 0 {
-		t.Fatalf("notify calls = %d, want 0 for explicit targets", len(notifier.calls))
-	}
+		if rc := Run(opts); rc != 0 {
+			t.Fatalf("Run() = %d, want 0", rc)
+		}
+		if len(notifier.calls) != 1 {
+			t.Fatalf("notify calls = %d, want 1", len(notifier.calls))
+		}
+		call := notifier.calls[0]
+		if call.title != "nightshift pr" {
+			t.Fatalf("title = %q, want nightshift pr", call.title)
+		}
+		if !strings.Contains(call.msg, "blocking: 1") {
+			t.Fatalf("msg = %q, want a blocking: 1 suffix", call.msg)
+		}
+		if !call.urgent {
+			t.Fatalf("urgent = false, want true for a BLOCKING verdict")
+		}
+	})
+
+	t.Run("a failure notifies urgently", func(t *testing.T) {
+		homeDir := t.TempDir()
+		client, sb := onePending(claudeResultJSON("LGTM", 0, true))
+		opts := pendingOptions(t, homeDir, client, sb)
+		notifier := &fakeNotifier{}
+		opts.Notifier = notifier
+
+		if rc := Run(opts); rc != 1 {
+			t.Fatalf("Run() = %d, want 1", rc)
+		}
+		if len(notifier.calls) != 1 {
+			t.Fatalf("notify calls = %d, want 1", len(notifier.calls))
+		}
+		if !notifier.calls[0].urgent {
+			t.Fatalf("urgent = false, want true for a failure")
+		}
+	})
+
+	t.Run("LGTM notifies, not urgently", func(t *testing.T) {
+		homeDir := t.TempDir()
+		client, sb := onePending(claudeResultJSON("LGTM", 0.1, false))
+		opts := pendingOptions(t, homeDir, client, sb)
+		notifier := &fakeNotifier{}
+		opts.Notifier = notifier
+
+		if rc := Run(opts); rc != 0 {
+			t.Fatalf("Run() = %d, want 0", rc)
+		}
+		if len(notifier.calls) != 1 {
+			t.Fatalf("notify calls = %d, want 1", len(notifier.calls))
+		}
+		if notifier.calls[0].urgent {
+			t.Fatalf("urgent = true, want false for an LGTM verdict")
+		}
+	})
+
+	t.Run("--list makes no notification", func(t *testing.T) {
+		homeDir := t.TempDir()
+		client, sb := onePending(claudeResultJSON("LGTM", 0.1, false))
+		opts := pendingOptions(t, homeDir, client, sb)
+		opts.List = true
+		notifier := &fakeNotifier{}
+		opts.Notifier = notifier
+
+		if rc := Run(opts); rc != 0 {
+			t.Fatalf("Run() = %d, want 0", rc)
+		}
+		if len(notifier.calls) != 0 {
+			t.Fatalf("notify calls = %d, want 0 for --list", len(notifier.calls))
+		}
+	})
+
+	t.Run("--dry-run makes no notification", func(t *testing.T) {
+		homeDir := t.TempDir()
+		client, sb := onePending(claudeResultJSON("LGTM", 0.1, false))
+		opts := pendingOptions(t, homeDir, client, sb)
+		opts.DryRun = true
+		notifier := &fakeNotifier{}
+		opts.Notifier = notifier
+
+		if rc := Run(opts); rc != 0 {
+			t.Fatalf("Run() = %d, want 0", rc)
+		}
+		if len(notifier.calls) != 0 {
+			t.Fatalf("notify calls = %d, want 0 for --dry-run", len(notifier.calls))
+		}
+	})
+
+	t.Run("explicit targets make no notification", func(t *testing.T) {
+		homeDir := t.TempDir()
+		client, _, _, _ := gitlabChangeClient(t, 1, "T", "a")
+		sb := &stubSandbox{available: true}
+		sb.execFn = func(ctx context.Context, call int, dir string, argv []string, stdin string) (string, error) {
+			return claudeResultJSON("LGTM", 0.1, false), nil
+		}
+
+		opts := baseOptions(t, homeDir, client, sb)
+		opts.Targets = []Target{{Forge: forge.KindGitLab, Repo: "team/app", Number: 1}}
+		opts.Agent = mustAgent(t, opts.Settings.Selector)
+		notifier := &fakeNotifier{}
+		opts.Notifier = notifier
+
+		if rc := Run(opts); rc != 0 {
+			t.Fatalf("Run() = %d, want 0", rc)
+		}
+		if len(notifier.calls) != 0 {
+			t.Fatalf("notify calls = %d, want 0 for explicit targets", len(notifier.calls))
+		}
+	})
+
+	t.Run("nothing reviewed or failed makes no notification", func(t *testing.T) {
+		homeDir := t.TempDir()
+		client := &fakeClient{
+			kind:          forge.KindGitLab,
+			currentUserFn: func(ctx context.Context) (string, error) { return "alice", nil },
+			listFn: func(ctx context.Context, user string) ([]forge.Listed, error) {
+				return []forge.Listed{
+					{RepoRef: "42", Label: "team/app", Number: 9, Title: "Draft", Draft: true, State: "open"},
+				}, nil
+			},
+		}
+		sb := &stubSandbox{available: true}
+		opts := pendingOptions(t, homeDir, client, sb)
+		notifier := &fakeNotifier{}
+		opts.Notifier = notifier
+
+		if rc := Run(opts); rc != 0 {
+			t.Fatalf("Run() = %d, want 0", rc)
+		}
+		if len(notifier.calls) != 0 {
+			t.Fatalf("notify calls = %d, want 0 when nothing was reviewed or failed", len(notifier.calls))
+		}
+	})
 }
 
 func TestPendingGetFailureLogged(t *testing.T) {

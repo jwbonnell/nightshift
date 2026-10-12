@@ -436,6 +436,62 @@ func TestReviewCommandLensFlag(t *testing.T) {
 	})
 }
 
+// TestPRNoteTypeDistinct asserts that nightshift pr's notes under reviews/
+// and nightshift review's own result/review notes under results/ are two
+// entirely separate directories (home.ReviewsDir vs home.ResultsDir), so a
+// reviews/ decoy — named and dated to collide with the review note
+// uniqueResultPath would otherwise write, and carrying the same
+// nightshift-pr-review type and a BLOCKING verdict — never causes a
+// uniqueness-suffixed path and never leaks into `status`'s "latest review:"
+// line.
+func TestPRNoteTypeDistinct(t *testing.T) {
+	slug := "demo"
+	homeDir, _, _, _ := newReviewFixture(t, slug)
+	t.Setenv("NIGHTSHIFT_HOME", homeDir)
+
+	today := time.Now().Format("2006-01-02")
+	reviewsDir := home.ReviewsDir(homeDir)
+	if err := os.MkdirAll(reviewsDir, 0o755); err != nil {
+		t.Fatalf("mkdir reviews dir: %v", err)
+	}
+	decoy := "---\ntype: nightshift-pr-review\nverdict: BLOCKING\n---\ndecoy\n"
+	for _, name := range []string{slug + "-" + today + "-review.md", slug + "-" + today + ".md"} {
+		if err := os.WriteFile(filepath.Join(reviewsDir, name), []byte(decoy), 0o644); err != nil {
+			t.Fatalf("write decoy %s: %v", name, err)
+		}
+	}
+
+	rv := &recordingReviewer{text: "VERDICT: approve\nSUMMARY: looks good.\n"}
+	withStubReviewer(t, rv)
+
+	var stdout, stderr bytes.Buffer
+	exit := dispatch([]string{"review", slug}, &stdout, &stderr, strings.NewReader(""))
+	if exit != 0 {
+		t.Fatalf("exit=%d stderr=%s", exit, stderr.String())
+	}
+
+	wantPath := filepath.Join(home.ResultsDir(homeDir), slug+"-"+today+"-review.md")
+	if _, err := os.Stat(wantPath); err != nil {
+		t.Fatalf("expected review note at %s, no uniqueness suffix from the reviews/ decoy: %v", wantPath, err)
+	}
+	matches, err := filepath.Glob(filepath.Join(home.ResultsDir(homeDir), slug+"-*-review*.md"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("expected exactly one review note under results/, got %v (err %v)", matches, err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if exit := dispatch([]string{"status", slug}, &stdout, &stderr, strings.NewReader("")); exit != 0 {
+		t.Fatalf("status: exit=%d stderr=%s", exit, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "latest review: approve — "+wantPath) {
+		t.Fatalf("status didn't report the real verdict (or picked up the reviews/ decoy's BLOCKING):\n%s", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "BLOCKING") {
+		t.Fatalf("status picked up the reviews/ decoy's verdict:\n%s", stdout.String())
+	}
+}
+
 func TestUsageListsReview(t *testing.T) {
 	if !strings.Contains(usage, "nightshift review <slug> [--model M]") {
 		t.Fatalf("usage missing the review line:\n%s", usage)
