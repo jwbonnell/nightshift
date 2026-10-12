@@ -1,6 +1,7 @@
 package home
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -200,4 +201,256 @@ func TestOpencodeKeysInConfigAllowList(t *testing.T) {
 	if !strings.Contains(commentedConfig, "# NIGHTSHIFT_OPENCODE_CONFIG=") {
 		t.Fatalf("commentedConfig missing NIGHTSHIFT_OPENCODE_CONFIG line:\n%s", commentedConfig)
 	}
+}
+
+func TestConfigAcceptsPRKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config")
+	content := strings.Join([]string{
+		"NIGHTSHIFT_PR_MODEL=opus",
+		"NIGHTSHIFT_PR_MAX_TURNS=10",
+		"NIGHTSHIFT_PR_TIMEOUT=5m",
+		"NIGHTSHIFT_PR_MAX_LINES=500",
+		"NIGHTSHIFT_PR_PROMPT=/tmp/prompt.md",
+		"NIGHTSHIFT_PR_MIRROR=/tmp/mirror",
+		"NIGHTSHIFT_PR_EGRESS=a.lan,b.lan:8080",
+		"NIGHTSHIFT_GITLAB_URL=https://gitlab.example.com",
+		"NIGHTSHIFT_GITLAB_TOKEN_FILE=~/.gitlab-token",
+		"NIGHTSHIFT_GITHUB_URL=https://ghe.example.com",
+		"NIGHTSHIFT_GITHUB_TOKEN_FILE=~/.github-token",
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := ParseConfig(path)
+	if err != nil {
+		t.Fatalf("ParseConfig: %v", err)
+	}
+	want := map[string]string{
+		"NIGHTSHIFT_PR_MODEL":          "opus",
+		"NIGHTSHIFT_PR_MAX_TURNS":      "10",
+		"NIGHTSHIFT_PR_TIMEOUT":        "5m",
+		"NIGHTSHIFT_PR_MAX_LINES":      "500",
+		"NIGHTSHIFT_PR_PROMPT":         "/tmp/prompt.md",
+		"NIGHTSHIFT_PR_MIRROR":         "/tmp/mirror",
+		"NIGHTSHIFT_PR_EGRESS":         "a.lan,b.lan:8080",
+		"NIGHTSHIFT_GITLAB_URL":        "https://gitlab.example.com",
+		"NIGHTSHIFT_GITLAB_TOKEN_FILE": "~/.gitlab-token",
+		"NIGHTSHIFT_GITHUB_URL":        "https://ghe.example.com",
+		"NIGHTSHIFT_GITHUB_TOKEN_FILE": "~/.github-token",
+	}
+	for k, v := range want {
+		if cfg[k] != v {
+			t.Fatalf("cfg[%s] = %q, want %q", k, cfg[k], v)
+		}
+	}
+
+	for _, line := range []string{
+		"# NIGHTSHIFT_PR_MODEL=sonnet",
+		"# free opencode reviewer: NIGHTSHIFT_PR_MODEL=opencode/opencode/longcat-2.5-preview-free",
+		"# NIGHTSHIFT_PR_MAX_TURNS=30",
+		"# NIGHTSHIFT_PR_TIMEOUT=15m",
+		"# NIGHTSHIFT_PR_MAX_LINES=3000",
+		"# NIGHTSHIFT_PR_PROMPT=",
+		"# NIGHTSHIFT_PR_MIRROR=",
+		"# NIGHTSHIFT_PR_EGRESS=",
+		"# NIGHTSHIFT_GITLAB_URL=",
+		"# NIGHTSHIFT_GITLAB_TOKEN_FILE=",
+		"# NIGHTSHIFT_GITHUB_URL=https://github.com",
+		"# NIGHTSHIFT_GITHUB_TOKEN_FILE=",
+	} {
+		if !strings.Contains(commentedConfig, line) {
+			t.Fatalf("commentedConfig missing %q line:\n%s", line, commentedConfig)
+		}
+	}
+
+	// Verify the opencode-reviewer comment sits directly under the
+	// NIGHTSHIFT_PR_MODEL default line (P3).
+	idx := strings.Index(commentedConfig, "# NIGHTSHIFT_PR_MODEL=sonnet\n")
+	if idx < 0 {
+		t.Fatalf("commentedConfig missing NIGHTSHIFT_PR_MODEL default line")
+	}
+	rest := commentedConfig[idx+len("# NIGHTSHIFT_PR_MODEL=sonnet\n"):]
+	if !strings.HasPrefix(rest, "# free opencode reviewer: NIGHTSHIFT_PR_MODEL=opencode/opencode/longcat-2.5-preview-free\n") {
+		t.Fatalf("opencode-reviewer comment doesn't directly follow NIGHTSHIFT_PR_MODEL default:\n%s", commentedConfig)
+	}
+}
+
+func TestConfigRejectsInlineTokens(t *testing.T) {
+	for _, key := range []string{"NIGHTSHIFT_GITLAB_TOKEN", "NIGHTSHIFT_GITHUB_TOKEN"} {
+		t.Run(key, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config")
+			content := "NIGHTSHIFT_MODEL=sonnet\n" + key + "=sekrit\n"
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			_, err := ParseConfig(path)
+			if err == nil {
+				t.Fatalf("expected an error")
+			}
+			want := fmt.Sprintf("config %s line 2: tokens don't belong in the config file — put it in a file and set %s_FILE", path, key)
+			if err.Error() != want {
+				t.Fatalf("err = %q, want %q", err.Error(), want)
+			}
+		})
+
+		t.Run(key+"_FILE accepted", func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config")
+			content := key + "_FILE=~/token\n"
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			cfg, err := ParseConfig(path)
+			if err != nil {
+				t.Fatalf("ParseConfig: %v", err)
+			}
+			if cfg[key+"_FILE"] != "~/token" {
+				t.Fatalf("cfg[%s_FILE] = %q", key, cfg[key+"_FILE"])
+			}
+		})
+	}
+}
+
+func TestTokenFileLoadingAndWarning(t *testing.T) {
+	t.Run("inline env wins over file", func(t *testing.T) {
+		dir := t.TempDir()
+		tokenPath := filepath.Join(dir, "token")
+		if err := os.WriteFile(tokenPath, []byte("from-file\n"), 0o600); err != nil {
+			t.Fatalf("write token file: %v", err)
+		}
+		getenv := func(k string) string {
+			switch k {
+			case "NIGHTSHIFT_GITHUB_TOKEN":
+				return "from-env"
+			case "NIGHTSHIFT_GITHUB_TOKEN_FILE":
+				return tokenPath
+			}
+			return ""
+		}
+		tok, warning, err := ResolveToken("NIGHTSHIFT_GITHUB_TOKEN", getenv, nil)
+		if err != nil {
+			t.Fatalf("ResolveToken: %v", err)
+		}
+		if tok != "from-env" || warning != "" {
+			t.Fatalf("tok=%q warning=%q, want from-env/empty", tok, warning)
+		}
+	})
+
+	t.Run("tilde expansion and trim, env file path wins over config", func(t *testing.T) {
+		hd := t.TempDir()
+		t.Setenv("HOME", hd)
+		if err := os.MkdirAll(filepath.Join(hd, "secrets"), 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		tokenPath := filepath.Join(hd, "secrets", "gh-token")
+		if err := os.WriteFile(tokenPath, []byte("  tok-value  \n"), 0o600); err != nil {
+			t.Fatalf("write token file: %v", err)
+		}
+		getenv := func(k string) string {
+			if k == "NIGHTSHIFT_GITHUB_TOKEN_FILE" {
+				return "~/secrets/gh-token"
+			}
+			return ""
+		}
+		cfg := map[string]string{"NIGHTSHIFT_GITHUB_TOKEN_FILE": "/should/not/be/used"}
+		tok, warning, err := ResolveToken("NIGHTSHIFT_GITHUB_TOKEN", getenv, cfg)
+		if err != nil {
+			t.Fatalf("ResolveToken: %v", err)
+		}
+		if tok != "tok-value" {
+			t.Fatalf("tok = %q, want %q", tok, "tok-value")
+		}
+		if warning != "" {
+			t.Fatalf("warning = %q, want empty for a 0600 file", warning)
+		}
+	})
+
+	t.Run("falls back to config when env file path unset", func(t *testing.T) {
+		dir := t.TempDir()
+		tokenPath := filepath.Join(dir, "token")
+		if err := os.WriteFile(tokenPath, []byte("cfg-tok"), 0o600); err != nil {
+			t.Fatalf("write token file: %v", err)
+		}
+		getenv := func(string) string { return "" }
+		cfg := map[string]string{"NIGHTSHIFT_GITHUB_TOKEN_FILE": tokenPath}
+		tok, _, err := ResolveToken("NIGHTSHIFT_GITHUB_TOKEN", getenv, cfg)
+		if err != nil {
+			t.Fatalf("ResolveToken: %v", err)
+		}
+		if tok != "cfg-tok" {
+			t.Fatalf("tok = %q, want %q", tok, "cfg-tok")
+		}
+	})
+
+	t.Run("neither set is not configured", func(t *testing.T) {
+		getenv := func(string) string { return "" }
+		tok, warning, err := ResolveToken("NIGHTSHIFT_GITHUB_TOKEN", getenv, nil)
+		if err != nil || tok != "" || warning != "" {
+			t.Fatalf("tok=%q warning=%q err=%v, want all empty/nil", tok, warning, err)
+		}
+	})
+
+	t.Run("unreadable file is an error naming the _FILE key", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "nope")
+		getenv := func(k string) string {
+			if k == "NIGHTSHIFT_GITHUB_TOKEN_FILE" {
+				return missing
+			}
+			return ""
+		}
+		tok, _, err := ResolveToken("NIGHTSHIFT_GITHUB_TOKEN", getenv, nil)
+		if tok != "" {
+			t.Fatalf("tok = %q, want empty", tok)
+		}
+		if err == nil {
+			t.Fatalf("expected an error")
+		}
+		want := fmt.Sprintf("NIGHTSHIFT_GITHUB_TOKEN_FILE=%s: ", missing)
+		if !strings.HasPrefix(err.Error(), want) {
+			t.Fatalf("err = %q, want prefix %q", err.Error(), want)
+		}
+	})
+
+	t.Run("world-readable file warns once, 0600 is silent", func(t *testing.T) {
+		dir := t.TempDir()
+		loosePath := filepath.Join(dir, "loose")
+		if err := os.WriteFile(loosePath, []byte("tok"), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		getenv := func(k string) string {
+			if k == "NIGHTSHIFT_GITHUB_TOKEN_FILE" {
+				return loosePath
+			}
+			return ""
+		}
+		_, warning, err := ResolveToken("NIGHTSHIFT_GITHUB_TOKEN", getenv, nil)
+		if err != nil {
+			t.Fatalf("ResolveToken: %v", err)
+		}
+		want := fmt.Sprintf("warning: %s is readable by other users — chmod 600 it", loosePath)
+		if warning != want {
+			t.Fatalf("warning = %q, want %q", warning, want)
+		}
+
+		tightPath := filepath.Join(dir, "tight")
+		if err := os.WriteFile(tightPath, []byte("tok"), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		getenv2 := func(k string) string {
+			if k == "NIGHTSHIFT_GITHUB_TOKEN_FILE" {
+				return tightPath
+			}
+			return ""
+		}
+		_, warning2, err := ResolveToken("NIGHTSHIFT_GITHUB_TOKEN", getenv2, nil)
+		if err != nil {
+			t.Fatalf("ResolveToken: %v", err)
+		}
+		if warning2 != "" {
+			t.Fatalf("warning = %q, want empty for a 0600 file", warning2)
+		}
+	})
 }

@@ -65,6 +65,27 @@ const commentedConfig = `# nightshift config file.
 # NIGHTSHIFT_OPENCODE_BIN=opencode
 # opencode JSON config for non-Claude providers (no inline secrets)
 # NIGHTSHIFT_OPENCODE_CONFIG=
+
+# nightshift pr: pre-review of GitHub PRs / GitLab MRs
+# NIGHTSHIFT_PR_MODEL=sonnet
+# free opencode reviewer: NIGHTSHIFT_PR_MODEL=opencode/opencode/longcat-2.5-preview-free
+# NIGHTSHIFT_PR_MAX_TURNS=30
+# NIGHTSHIFT_PR_TIMEOUT=15m
+# NIGHTSHIFT_PR_MAX_LINES=3000
+# override the embedded review prompt (defaults to <home>/pr-prompt.md, then embedded)
+# NIGHTSHIFT_PR_PROMPT=
+# also write each review note here (committed if it's a git work tree)
+# NIGHTSHIFT_PR_MIRROR=
+# extra hosts to allow the review sandbox to reach, comma-separated
+# NIGHTSHIFT_PR_EGRESS=
+
+# self-hosted GitLab
+# NIGHTSHIFT_GITLAB_URL=
+# file containing the GitLab token, mode 600 (a NIGHTSHIFT_GITLAB_TOKEN= line here is rejected)
+# NIGHTSHIFT_GITLAB_TOKEN_FILE=
+# NIGHTSHIFT_GITHUB_URL=https://github.com
+# file containing the GitHub token, mode 600 (a NIGHTSHIFT_GITHUB_TOKEN= line here is rejected)
+# NIGHTSHIFT_GITHUB_TOKEN_FILE=
 `
 
 func fileExists(path string) bool {
@@ -94,9 +115,23 @@ func ensureLayout(home string) error {
 func Init(home, sbxBin string, stdout, stderr io.Writer) error {
 	var created []string
 
-	for _, d := range []string{home, DraftDir(home), ReadyDir(home), DoneDir(home), ResultsDir(home), RunsDir(home), LogsDir(home), ContextDir(home), LensesDir(home)} {
+	for _, d := range []string{home, DraftDir(home), ReadyDir(home), DoneDir(home), ResultsDir(home), RunsDir(home), LogsDir(home), ContextDir(home), LensesDir(home), ReviewsDir(home)} {
 		existed := dirExists(d)
 		if err := os.MkdirAll(d, 0o755); err != nil {
+			return err
+		}
+		if !existed {
+			created = append(created, d)
+		}
+	}
+
+	prDir := PRDir(home)
+	for _, d := range []string{prDir, filepath.Join(prDir, "repos"), filepath.Join(prDir, "work"), filepath.Join(prDir, "logs")} {
+		existed := dirExists(d)
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			return err
+		}
+		if err := os.Chmod(d, 0o700); err != nil {
 			return err
 		}
 		if !existed {

@@ -33,9 +33,22 @@ func TestInitCreatesLayout(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	for _, d := range []string{home, DraftDir(home), ReadyDir(home), DoneDir(home), ResultsDir(home), RunsDir(home), LogsDir(home)} {
+	for _, d := range []string{home, DraftDir(home), ReadyDir(home), DoneDir(home), ResultsDir(home), RunsDir(home), LogsDir(home), ReviewsDir(home)} {
 		if !dirExists(d) {
 			t.Fatalf("directory missing: %s", d)
+		}
+	}
+	prDir := PRDir(home)
+	for _, d := range []string{prDir, filepath.Join(prDir, "repos"), filepath.Join(prDir, "work"), filepath.Join(prDir, "logs")} {
+		info, err := os.Stat(d)
+		if err != nil {
+			t.Fatalf("pr directory missing: %s: %v", d, err)
+		}
+		if !info.IsDir() {
+			t.Fatalf("%s is not a directory", d)
+		}
+		if perm := info.Mode().Perm(); perm != 0o700 {
+			t.Fatalf("%s mode = %o, want 0700", d, perm)
 		}
 	}
 	if !fileExists(TemplatePath(home)) {

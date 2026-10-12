@@ -30,6 +30,27 @@ var configKeys = map[string]bool{
 	"NIGHTSHIFT_LIMIT_MAX_HITS":  true,
 	"NIGHTSHIFT_OPENCODE_BIN":    true,
 	"NIGHTSHIFT_OPENCODE_CONFIG": true,
+
+	"NIGHTSHIFT_PR_MODEL":          true,
+	"NIGHTSHIFT_PR_MAX_TURNS":      true,
+	"NIGHTSHIFT_PR_TIMEOUT":        true,
+	"NIGHTSHIFT_PR_MAX_LINES":      true,
+	"NIGHTSHIFT_PR_PROMPT":         true,
+	"NIGHTSHIFT_PR_MIRROR":         true,
+	"NIGHTSHIFT_PR_EGRESS":         true,
+	"NIGHTSHIFT_GITLAB_URL":        true,
+	"NIGHTSHIFT_GITLAB_TOKEN_FILE": true,
+	"NIGHTSHIFT_GITHUB_URL":        true,
+	"NIGHTSHIFT_GITHUB_TOKEN_FILE": true,
+}
+
+// inlineTokenKeys are config keys that must never appear in the config
+// file itself — only as env vars — because the file is not an acceptable
+// place to store a secret. Each has a "_FILE" counterpart that points at
+// a file containing the token instead.
+var inlineTokenKeys = map[string]bool{
+	"NIGHTSHIFT_GITLAB_TOKEN": true,
+	"NIGHTSHIFT_GITHUB_TOKEN": true,
 }
 
 // ParseConfig reads KEY=value pairs from path. A missing file is not an
@@ -61,6 +82,9 @@ func ParseConfig(path string) (map[string]string, error) {
 			return nil, fmt.Errorf("config %s line %d: %s", path, lineNo, "expected KEY=value")
 		}
 		key = strings.TrimSpace(key)
+		if inlineTokenKeys[key] {
+			return nil, fmt.Errorf("config %s line %d: tokens don't belong in the config file — put it in a file and set %s_FILE", path, lineNo, key)
+		}
 		if !configKeys[key] {
 			return nil, fmt.Errorf("config %s line %d: %s", path, lineNo, fmt.Sprintf("unknown key %q", key))
 		}

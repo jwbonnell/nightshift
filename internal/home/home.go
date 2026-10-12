@@ -35,6 +35,13 @@ func TemplatePath(home string) string { return filepath.Join(home, "spec-templat
 func ContextDir(home string) string   { return filepath.Join(home, "context") }
 func LensesDir(home string) string    { return filepath.Join(home, "lenses") }
 
+// ReviewsDir, PRDir and PRPromptPath are nightshift pr's layout (P5):
+// review notes land in ReviewsDir, PRDir holds its state (clones, work
+// trees, logs, lock), and PRPromptPath is the optional prompt override.
+func ReviewsDir(home string) string   { return filepath.Join(home, "reviews") }
+func PRDir(home string) string        { return filepath.Join(home, "pr") }
+func PRPromptPath(home string) string { return filepath.Join(home, "pr-prompt.md") }
+
 // SpecLockPath is the per-spec lock file path under home's state root,
 // shared with internal/runner so both agree on the same convention.
 func SpecLockPath(home, slug string) string {
