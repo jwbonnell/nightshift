@@ -2,9 +2,23 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 )
+
+// assertDirEmpty confirms a no-forge-configured failure left dir untouched:
+// resolveHome never creates anything, so the directory must still be empty.
+func assertDirEmpty(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir(%s): %v", dir, err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("dir %s not empty: %v", dir, entries)
+	}
+}
 
 // TestCLIPR covers nightshift pr's own usage/flag-parsing errors (SPEC.md
 // P4): no args, -h, --forge with --pending, and --list with --dry-run.
@@ -85,6 +99,22 @@ func TestCLIPR(t *testing.T) {
 		if !strings.Contains(stderr.String(), "no forge configured") {
 			t.Fatalf("stderr = %q", stderr.String())
 		}
+		assertDirEmpty(t, homeDir)
+	})
+
+	t.Run("no forge configured is also a usage error for an explicit target", func(t *testing.T) {
+		homeDir := t.TempDir()
+		t.Setenv("NIGHTSHIFT_HOME", homeDir)
+
+		var stdout, stderr bytes.Buffer
+		exit := dispatch([]string{"pr", "o/r#1"}, &stdout, &stderr, strings.NewReader(""))
+		if exit != 2 {
+			t.Fatalf("exit=%d, want 2; stderr=%s", exit, stderr.String())
+		}
+		if !strings.Contains(stderr.String(), "no forge configured") {
+			t.Fatalf("stderr = %q", stderr.String())
+		}
+		assertDirEmpty(t, homeDir)
 	})
 
 	t.Run("top-level usage mentions both pr lines", func(t *testing.T) {

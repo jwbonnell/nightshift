@@ -562,6 +562,63 @@ func TestPRLimitMarkerIgnoredByOpencode(t *testing.T) {
 	}
 }
 
+func TestPRLimitMarkerIgnoredByListAndDryRun(t *testing.T) {
+	homeDir := t.TempDir()
+	now := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
+	if err := usagelimit.Write(home.RunsDir(homeDir), usagelimit.Hit{ResetAt: now.Add(time.Hour)}, now, "pr", time.Hour); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+
+	t.Run("dry-run", func(t *testing.T) {
+		client, _, _, _ := gitlabChangeClient(t, 1, "T", "a")
+		sb := &stubSandbox{available: true}
+		opts := baseOptions(t, homeDir, client, sb)
+		opts.Targets = []Target{{Forge: forge.KindGitLab, Repo: "team/app", Number: 1}}
+		opts.Agent = mustAgent(t, opts.Settings.Selector)
+		opts.Now = func() time.Time { return now }
+		opts.DryRun = true
+
+		var stdout, stderr strings.Builder
+		opts.Stdout, opts.Stderr = &stdout, &stderr
+
+		if rc := Run(opts); rc != 0 {
+			t.Fatalf("Run() = %d, want 0; stderr=%s", rc, stderr.String())
+		}
+		if strings.Contains(stderr.String(), "usage limit") {
+			t.Fatalf("stderr = %q, --dry-run must ignore the marker", stderr.String())
+		}
+		if stdout.String() == "" {
+			t.Fatal("--dry-run printed nothing; plan should still print under an active marker")
+		}
+		if client.getCalls != 0 {
+			t.Fatalf("Get calls = %d, want 0 (--dry-run makes no API calls)", client.getCalls)
+		}
+	})
+
+	t.Run("list", func(t *testing.T) {
+		client, _, _, _ := gitlabChangeClient(t, 1, "T", "a")
+		sb := &stubSandbox{available: true}
+		opts := baseOptions(t, homeDir, client, sb)
+		opts.Targets = []Target{{Forge: forge.KindGitLab, Repo: "team/app", Number: 1}}
+		opts.Agent = mustAgent(t, opts.Settings.Selector)
+		opts.Now = func() time.Time { return now }
+		opts.List = true
+
+		var stdout, stderr strings.Builder
+		opts.Stdout, opts.Stderr = &stdout, &stderr
+
+		if rc := Run(opts); rc != 0 {
+			t.Fatalf("Run() = %d, want 0; stderr=%s", rc, stderr.String())
+		}
+		if strings.Contains(stderr.String(), "usage limit") {
+			t.Fatalf("stderr = %q, --list must ignore the marker", stderr.String())
+		}
+		if !strings.Contains(stdout.String(), "would review") {
+			t.Fatalf("stdout = %q, want a would-review line (--list must still resolve the target)", stdout.String())
+		}
+	})
+}
+
 func TestRefuseWithoutSbx(t *testing.T) {
 	homeDir := t.TempDir()
 	client, _, _, _ := gitlabChangeClient(t, 1, "T", "a")

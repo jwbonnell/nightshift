@@ -400,6 +400,53 @@ func TestSmokeInitNewReadyDryRunStatus(t *testing.T) {
 	}
 }
 
+// TestStatusIgnoresReviewsDir asserts the second half of SPEC.md's
+// TestPRNoteTypeDistinct: `nightshift pr`'s notes under reviews/ are a
+// different directory from `nightshift review`'s own result/review notes
+// under results/, so a decoy file there — even one named to match the
+// same slug and the same result/review filename pattern status.go's
+// latestNote looks for — must never change what `nightshift status`
+// reports for that spec.
+func TestStatusIgnoresReviewsDir(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("NIGHTSHIFT_HOME", homeDir)
+	srcRepo := newTestSourceRepo(t)
+
+	run := func(args ...string) (int, string, string) {
+		var stdout, stderr bytes.Buffer
+		got := dispatch(args, &stdout, &stderr, strings.NewReader(""))
+		return got, stdout.String(), stderr.String()
+	}
+
+	if exit, _, stderr := run("init"); exit != 0 {
+		t.Fatalf("init: exit=%d stderr=%s", exit, stderr)
+	}
+	if exit, _, stderr := run("new", "demo", "--repo", srcRepo, "--verify", "true"); exit != 0 {
+		t.Fatalf("new: exit=%d stderr=%s", exit, stderr)
+	}
+	if exit, _, stderr := run("ready", "demo", "--no-lint"); exit != 0 {
+		t.Fatalf("ready: exit=%d stderr=%s", exit, stderr)
+	}
+
+	for _, name := range []string{"demo-2024-01-01.md", "demo-2024-01-01-review.md"} {
+		path := filepath.Join(home.ReviewsDir(homeDir), name)
+		if err := os.WriteFile(path, []byte("---\ntype: nightshift-pr-review\n---\ndecoy\n"), 0o644); err != nil {
+			t.Fatalf("write decoy %s: %v", name, err)
+		}
+	}
+
+	exit, stdout, stderr := run("status")
+	if exit != 0 {
+		t.Fatalf("status: exit=%d stderr=%s", exit, stderr)
+	}
+	if !strings.Contains(stdout, "ready, not started: demo") {
+		t.Fatalf("status output changed by decoy reviews/ notes:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "done") || strings.Contains(stdout, "2024-01-01") {
+		t.Fatalf("status picked up a reviews/ decoy note:\n%s", stdout)
+	}
+}
+
 func TestUntilInvalidIsUsageError(t *testing.T) {
 	homeDir := t.TempDir()
 	t.Setenv("NIGHTSHIFT_HOME", homeDir)
