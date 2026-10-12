@@ -332,9 +332,6 @@ func (r *runner) reviewOne(ctx context.Context, kind forge.Kind, repoPath string
 	}
 	prompt := buildPrompt(promptText, kind, repoPath, label, change.Title, change.Author, change.TargetBranch, base, head, inputs, change.Description)
 
-	execCtx, cancel := context.WithTimeout(ctx, r.opts.Settings.Timeout)
-	defer cancel()
-
 	logW := agentLogWriter(homeDir, label, r.opts.Now())
 	defer logW.Close()
 
@@ -349,8 +346,10 @@ func (r *runner) reviewOne(ctx context.Context, kind forge.Kind, repoPath string
 	var res agent.Result
 	var execErr error
 	for {
+		execCtx, cancel := context.WithTimeout(ctx, r.opts.Settings.Timeout)
 		var stdout string
 		stdout, execErr = r.opts.Sandbox.Exec(execCtx, treeDir, argv, prompt, env, logW)
+		cancel()
 
 		if errors.Is(execErr, context.DeadlineExceeded) && ctx.Err() == nil {
 			if serr := r.opts.Sandbox.Stop(env); serr != nil {

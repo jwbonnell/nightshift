@@ -453,6 +453,56 @@ func TestPRTransientRetryOnce(t *testing.T) {
 	}
 }
 
+// TestPRTransientRetryGetsFreshTimeout guards against a regression where
+// the retry attempt reused the first attempt's exec context, so a slow
+// first attempt left the retry almost no time before it too timed out.
+func TestPRTransientRetryGetsFreshTimeout(t *testing.T) {
+	homeDir := t.TempDir()
+	client, _, _, _ := gitlabChangeClient(t, 1, "T", "a")
+
+	const timeout = 400 * time.Millisecond
+	var call2Slack time.Duration
+	sb := &stubSandbox{available: true}
+	sb.execFn = func(ctx context.Context, call int, dir string, argv []string, stdin string) (string, error) {
+		if call == 1 {
+			time.Sleep(timeout * 9 / 10)
+			return opencodeErrorJSON(), nil
+		}
+		start := time.Now()
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatalf("call 2: exec context has no deadline")
+		}
+		call2Slack = deadline.Sub(start)
+		return opencodeSuccessJSON("LGTM"), nil
+	}
+
+	opts := baseOptions(t, homeDir, client, sb)
+	opts.Targets = []Target{{Forge: forge.KindGitLab, Repo: "team/app", Number: 1}}
+	opts.Settings.Timeout = timeout
+	opts.Settings.Selector = agent.Selector{Agent: "opencode", Model: "opencode/longcat-2.5-preview-free"}
+	opts.Agent = mustAgent(t, opts.Settings.Selector)
+
+	rc := Run(opts)
+	if rc != 0 {
+		t.Fatalf("Run() = %d, want 0", rc)
+	}
+	if sb.execCalls != 2 {
+		t.Fatalf("execCalls = %d, want 2 (one retry)", sb.execCalls)
+	}
+	if sb.stopCalls != 0 {
+		t.Fatalf("stopCalls = %d, want 0", sb.stopCalls)
+	}
+	if call2Slack < timeout-50*time.Millisecond {
+		t.Fatalf("retry deadline slack = %v, want close to a fresh %v (not the first attempt's leftover)", call2Slack, timeout)
+	}
+
+	notePath := filepath.Join(home.ReviewsDir(homeDir), "team-app-mr1.md")
+	if _, err := os.Stat(notePath); err != nil {
+		t.Fatalf("note not written: %v", err)
+	}
+}
+
 func TestPRRateLimitStopsPass(t *testing.T) {
 	homeDir := t.TempDir()
 	remote1, head1, base1 := makeRemote(t, "refs/merge-requests/%d/head", 1)
