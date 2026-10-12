@@ -9,16 +9,20 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
+	"syscall"
 	"text/tabwriter"
 )
 
 // Waiter is the subset of *exec.Cmd the --jobs scheduler needs from an
 // already-started child process, abstracted so tests can script a child's
 // exit code without a real exec. Cmd.Start (or the test equivalent) has
-// already happened by the time a Spawner returns one.
+// already happened by the time a Spawner returns one. Signal forwards a
+// signal to the child (D-j: SIGINT/SIGTERM on the scheduler's first signal,
+// SIGKILL on its second).
 type Waiter interface {
 	Wait() error
 	Pid() int
+	Signal(sig os.Signal) error
 }
 
 // Spawner starts one --jobs child ("nightshift run <path> ..."), with
@@ -46,8 +50,9 @@ func defaultSpawner(ctx context.Context, args []string, stdout, stderr *linePref
 // own — the pid lives on cmd.Process).
 type execWaiter struct{ cmd *exec.Cmd }
 
-func (w *execWaiter) Wait() error { return w.cmd.Wait() }
-func (w *execWaiter) Pid() int    { return w.cmd.Process.Pid }
+func (w *execWaiter) Wait() error                { return w.cmd.Wait() }
+func (w *execWaiter) Pid() int                   { return w.cmd.Process.Pid }
+func (w *execWaiter) Signal(sig os.Signal) error { return w.cmd.Process.Signal(sig) }
 
 // linePrefixWriter prefixes each complete line written to it with prefix
 // before handing it to write, guarded by mu so concurrent children sharing
@@ -104,6 +109,12 @@ type jobsResult struct {
 	status string // run.json status after the child exited, or "busy"/"" (see runJobs)
 }
 
+// schedulerInterruptMessageFmt is the --jobs scheduler's own first-signal
+// message, printed once, with the number of then-running children — distinct
+// from interruptMessage (signal.go), which is the single-run child's own
+// message and gets printed by the child process, not the scheduler.
+const schedulerInterruptMessageFmt = "nightshift: interrupt received — stopping %d run(s) (press Ctrl+C again to force quit)\n"
+
 // runJobs is the `run --next --jobs N` scheduler (D-j), for N already
 // resolved to > 1 (N<=1 is runNext, unchanged). It starts up to jobs
 // eligible specs at once as child "nightshift run <path>" processes,
@@ -111,8 +122,20 @@ type jobsResult struct {
 // same spec twice in this invocation, and stops starting new work once
 // nothing is eligible, the --until window has ended, the usage-limit
 // marker is active, or the context is cancelled (D8) — it still waits
-// for whatever is already running. Signal forwarding to children is not
-// implemented yet; see PROGRESS.md.
+// for whatever is already running.
+//
+// Signal handling: the first SIGINT/SIGTERM cancels opts.Ctx as usual
+// (stopping new starts, same as any other D8 interrupt) and, here, also
+// forwards SIGINT to every currently-running child so each takes its own
+// graceful interrupted path. A second signal must SIGKILL the children
+// before the process exits — but by the time a second real signal arrives,
+// the generic interrupt goroutine in signal.go is about to call os.Exit
+// directly, with no further chance for this function's own goroutines to
+// run. So rather than racing that exit with a second, independent signal
+// registration here, runJobs installs its SIGKILL callback via
+// opts.RegisterForceKill (wired to NewSchedulerInterruptContext in
+// cmd/nightshift): that callback runs synchronously, in the same
+// goroutine, strictly before the os.Exit call — no race at all.
 func runJobs(opts Options, limit int, capSrc string, jobs int) (Status, error) {
 	_ = capSrc
 	spawn := opts.Spawn
@@ -130,10 +153,52 @@ func runJobs(opts Options, limit int, capSrc string, jobs int) (Status, error) {
 	completions := make(chan jobsResult)
 	running := 0
 
+	var runningMu sync.Mutex
+	runningWaiters := map[string]Waiter{}
+
 	ctx := opts.Ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
+
+	done := make(chan struct{})
+	defer close(done)
+
+	if opts.RegisterForceKill != nil {
+		opts.RegisterForceKill(func() {
+			runningMu.Lock()
+			defer runningMu.Unlock()
+			for _, w := range runningWaiters {
+				_ = w.Signal(syscall.SIGKILL)
+			}
+		})
+	}
+
+	// forwardFirstSignal reacts to ctx's first cancellation by printing the
+	// scheduler's own message and forwarding SIGINT to every child running
+	// at that moment. It exits without doing anything if runJobs itself
+	// returns first (done closes before ctx would ever be cancelled by a
+	// normal, non-interrupted exit — see newInterruptContextWithHook's own
+	// identical done-vs-ctx.Done() race note in signal.go).
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-done:
+			return
+		}
+		select {
+		case <-done:
+			return
+		default:
+		}
+
+		runningMu.Lock()
+		defer runningMu.Unlock()
+		fmt.Fprintf(opts.Stderr, schedulerInterruptMessageFmt, len(runningWaiters))
+		for _, w := range runningWaiters {
+			_ = w.Signal(os.Interrupt)
+		}
+	}()
 
 	// deadline is resolved once, like loop()'s own --until deadline:
 	// parseUntil anchors "next occurrence of HH:MM" to ref, so calling it
@@ -184,8 +249,14 @@ func runJobs(opts Options, limit int, capSrc string, jobs int) (Status, error) {
 				completions <- jobsResult{slug: slug, exit: -1, status: "error"}
 				continue
 			}
+			runningMu.Lock()
+			runningWaiters[slug] = w
+			runningMu.Unlock()
 			go func() {
 				waitErr := w.Wait()
+				runningMu.Lock()
+				delete(runningWaiters, slug)
+				runningMu.Unlock()
 				stdout.flush()
 				stderr.flush()
 				completions <- jobsResult{slug: slug, exit: exitCodeOf(waitErr), status: ""}

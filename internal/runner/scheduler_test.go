@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -39,7 +40,8 @@ func (w *fakeWaiter) Wait() error {
 	}
 	return &testExitError{w.exit}
 }
-func (w *fakeWaiter) Pid() int { return 0 }
+func (w *fakeWaiter) Pid() int                   { return 0 }
+func (w *fakeWaiter) Signal(sig os.Signal) error { return nil }
 
 // childScript describes one slug's scripted child: its exit code, the
 // run.json status it writes (as if it were the real child process) right
@@ -121,7 +123,8 @@ func (w *scriptedChildWaiter) Wait() error {
 	}
 	return &testExitError{w.sc.exit}
 }
-func (w *scriptedChildWaiter) Pid() int { return 0 }
+func (w *scriptedChildWaiter) Pid() int                   { return 0 }
+func (w *scriptedChildWaiter) Signal(sig os.Signal) error { return nil }
 
 // TestJobsOneIsNext: with the effective jobs count at its default of 1,
 // `run --next` must behave exactly like it did before --jobs existed —
@@ -550,5 +553,105 @@ func TestJobsDryRun(t *testing.T) {
 	want := "jobs: 2 (max_concurrent 2)\nwould start: a, b\nthen: c (after a, b)\n"
 	if stdout.String() != want {
 		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+	}
+}
+
+// signalRecordingWaiter blocks in Wait until block is closed, recording
+// every Signal call (guarded by mu) for TestJobsSignalsForwarded.
+type signalRecordingWaiter struct {
+	mu      sync.Mutex
+	signals []os.Signal
+	block   chan struct{}
+}
+
+func (w *signalRecordingWaiter) Wait() error { <-w.block; return nil }
+func (w *signalRecordingWaiter) Pid() int    { return 0 }
+func (w *signalRecordingWaiter) Signal(sig os.Signal) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.signals = append(w.signals, sig)
+	return nil
+}
+
+func (w *signalRecordingWaiter) signalCount() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return len(w.signals)
+}
+
+// TestJobsSignalsForwarded: the first simulated signal must print the
+// scheduler's own message and forward SIGINT to every running child; a
+// second must SIGKILL them. A real second signal ends in os.Exit(130)
+// (see signal.go's own TestNewInterruptContextFirstSignal comment), so —
+// exactly like that existing test — this one simulates signals by driving
+// opts.Ctx's cancel func and the registered force-kill hook directly,
+// rather than sending real OS signals and risking killing the test binary.
+func TestJobsSignalsForwarded(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "a", "", repo)
+	stateRoot := home.RunsDir(homeDir)
+
+	block := make(chan struct{})
+	w := &signalRecordingWaiter{block: block}
+	spawnedCh := make(chan struct{}, 1)
+	spawn := func(_ context.Context, args []string, stdout, stderr *linePrefixWriter) (Waiter, error) {
+		spawnedCh <- struct{}{}
+		return w, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	registeredFn := make(chan func(), 1)
+	var stderrBuf syncBuffer
+
+	opts := Options{
+		Next: true, Jobs: 2, Home: homeDir, StateRoot: stateRoot,
+		Stdout: io.Discard, Stderr: &stderrBuf, Stdin: strings.NewReader(""), Spawn: spawn,
+		Ctx:               ctx,
+		RegisterForceKill: func(fn func()) { registeredFn <- fn },
+	}
+
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		runJobs(opts, 2, "test", 2)
+	}()
+
+	killHook := <-registeredFn
+	<-spawnedCh
+	// Give the scheduler's own bookkeeping (recording "a" as a running
+	// child) a moment to finish — it happens synchronously, a few
+	// instructions after spawn returns, in the same goroutine.
+	time.Sleep(50 * time.Millisecond)
+
+	cancel() // simulate the first SIGINT/SIGTERM
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && w.signalCount() < 1 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := w.signalCount(); n != 1 || w.signals[0] != os.Interrupt {
+		t.Fatalf("after the first signal, child signals = %v, want exactly [interrupt]", w.signals)
+	}
+	wantMsg := "nightshift: interrupt received — stopping 1 run(s) (press Ctrl+C again to force quit)"
+	if !strings.Contains(stderrBuf.String(), wantMsg) {
+		t.Fatalf("stderr missing the scheduler's own interrupt message:\n%s", stderrBuf.String())
+	}
+
+	killHook() // simulate the second SIGINT/SIGTERM
+
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && w.signalCount() < 2 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := w.signalCount(); n != 2 || w.signals[1] != syscall.SIGKILL {
+		t.Fatalf("after the second signal, child signals = %v, want [interrupt SIGKILL]", w.signals)
+	}
+
+	close(block) // let the fake child "exit" so runJobs can finish
+	select {
+	case <-runDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runJobs did not return after the fake child exited")
 	}
 }

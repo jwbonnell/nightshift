@@ -659,26 +659,31 @@ func cmdRun(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 		return 1
 	}
 
-	ctx, stop := runner.NewInterruptContext()
+	// NewSchedulerInterruptContext is safe to use unconditionally here: when
+	// --jobs resolves to <=1 (including plain `run`/`run --next`), runJobs
+	// never runs and so never calls registerForceKill — a second signal
+	// then behaves exactly like NewInterruptContext's, same as today.
+	ctx, stop, registerForceKill := runner.NewSchedulerInterruptContext()
 	defer stop()
 
 	opts := runner.Options{
-		Next:          *next,
-		Fresh:         *fresh,
-		Yes:           *yes,
-		MaxIter:       *maxIter,
-		Until:         *until,
-		DryRun:        *dryRun,
-		Base:          *base,
-		MaxConcurrent: *maxConcurrent,
-		IgnoreDeps:    *ignoreDeps,
-		Home:          h,
-		Stdout:        stdout,
-		Stderr:        stderr,
-		Stdin:         stdin,
-		IsTTY:         isTTY(),
-		Ctx:           ctx,
-		Version:       version,
+		Next:              *next,
+		Fresh:             *fresh,
+		Yes:               *yes,
+		MaxIter:           *maxIter,
+		Until:             *until,
+		DryRun:            *dryRun,
+		Base:              *base,
+		MaxConcurrent:     *maxConcurrent,
+		IgnoreDeps:        *ignoreDeps,
+		Home:              h,
+		Stdout:            stdout,
+		Stderr:            stderr,
+		Stdin:             stdin,
+		IsTTY:             isTTY(),
+		Ctx:               ctx,
+		Version:           version,
+		RegisterForceKill: registerForceKill,
 	}
 	if *jobs != -1 {
 		opts.Jobs = *jobs

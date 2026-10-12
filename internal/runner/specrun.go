@@ -88,24 +88,30 @@ type Options struct {
 	MaxConcurrent string  // raw flag value ("" = unset)
 	Jobs          int     // --jobs flag value, 0 = unset; only valid with Next (resolveJobsCount)
 	Spawn         Spawner // nil = defaultSpawner (a real exec.CommandContext); --jobs child processes
-	Home          string
-	StateRoot     string    // default: <Home>/runs
-	Now           time.Time // stamps run.json "started" and PROGRESS.md lines; zero = time.Now()
-	Sandbox       Sandbox   // nil = real sbx sandbox
-	SbxBin        string    // default "sbx"
-	ClaudeBin     string    // default "claude"
-	OpencodeBin   string    // default "opencode"
-	Stdout        io.Writer
-	Stderr        io.Writer
-	Stdin         io.Reader // not in the reference's Options (which reads os.Stdin directly); added for testability
-	IsTTY         bool
-	Notifier      notify.Notifier                                  // nil = resolve from NIGHTSHIFT_NOTIFY/config
-	Reviewer      Reviewer                                         // nil = sbxReviewer
-	Ctx           context.Context                                  // D8: cancellation source; nil = context.Background()
-	Version       string                                           // the running binary's version; "" is recorded as "dev"
-	Sleep         func(ctx context.Context, d time.Duration) error // injectable waiter for Task 3's usage-limit wait; nil = a real timer that returns ctx.Err() early on cancellation
-	clock         func() time.Time                                 // unexported: wall clock for --until and log stamps; nil = time.Now
-	limits        limitConfig                                      // unexported: resolved by Run() via resolveLimitConfig; zero fields mean "use limitCfg()'s defaults"
+	// RegisterForceKill, if set, is called once by runJobs when it starts,
+	// installing its SIGKILL-the-children callback for a second interrupt
+	// signal (wired to NewSchedulerInterruptContext's register return value
+	// by cmd/nightshift). nil is safe: it just means a second signal exits
+	// immediately with no extra cleanup, same as a plain (non-jobs) run.
+	RegisterForceKill func(func())
+	Home              string
+	StateRoot         string    // default: <Home>/runs
+	Now               time.Time // stamps run.json "started" and PROGRESS.md lines; zero = time.Now()
+	Sandbox           Sandbox   // nil = real sbx sandbox
+	SbxBin            string    // default "sbx"
+	ClaudeBin         string    // default "claude"
+	OpencodeBin       string    // default "opencode"
+	Stdout            io.Writer
+	Stderr            io.Writer
+	Stdin             io.Reader // not in the reference's Options (which reads os.Stdin directly); added for testability
+	IsTTY             bool
+	Notifier          notify.Notifier                                  // nil = resolve from NIGHTSHIFT_NOTIFY/config
+	Reviewer          Reviewer                                         // nil = sbxReviewer
+	Ctx               context.Context                                  // D8: cancellation source; nil = context.Background()
+	Version           string                                           // the running binary's version; "" is recorded as "dev"
+	Sleep             func(ctx context.Context, d time.Duration) error // injectable waiter for Task 3's usage-limit wait; nil = a real timer that returns ctx.Err() early on cancellation
+	clock             func() time.Time                                 // unexported: wall clock for --until and log stamps; nil = time.Now
+	limits            limitConfig                                      // unexported: resolved by Run() via resolveLimitConfig; zero fields mean "use limitCfg()'s defaults"
 }
 
 // clockFn returns o.clock if set, else time.Now. D11.9: PROGRESS.md and

@@ -38,15 +38,53 @@ func (r *run) interrupted() bool {
 // exits the process immediately with code 130, without cleanup — the
 // lock files held at that point are reclaimed as stale on the next run.
 func NewInterruptContext() (context.Context, func()) {
-	ctx, stop, _ := newInterruptContext()
+	ctx, stop, _ := newInterruptContextWithHook(nil)
 	return ctx, stop
 }
 
-// newInterruptContext is NewInterruptContext's implementation. The third
-// return value, exited, is closed when the goroutine below returns — tests
-// use it to know the goroutine has finished (and so can no longer write to
-// interruptOut) rather than racily polling an output buffer.
+// NewSchedulerInterruptContext is NewInterruptContext, plus a third return
+// value, register: the --jobs scheduler calls it once runJobs starts,
+// installing a callback that runs synchronously on a second SIGINT/SIGTERM,
+// right before the process exits with code 130 — its one chance to SIGKILL
+// already-started children before the process itself goes away mid-exit.
+// Until register is called (e.g. the resolved --jobs count turns out to be
+// 1, so the scheduler never runs), a second signal behaves exactly like
+// NewInterruptContext's: an immediate, uncoordinated exit. cmd/nightshift
+// can therefore use this unconditionally for the run command, with no
+// behavior change for plain `run`/`run --next`.
+func NewSchedulerInterruptContext() (context.Context, func(), func(func())) {
+	var mu sync.Mutex
+	var hook func()
+	register := func(fn func()) {
+		mu.Lock()
+		defer mu.Unlock()
+		hook = fn
+	}
+	callHook := func() {
+		mu.Lock()
+		fn := hook
+		mu.Unlock()
+		if fn != nil {
+			fn()
+		}
+	}
+	ctx, stop, _ := newInterruptContextWithHook(callHook)
+	return ctx, stop, register
+}
+
+// newInterruptContext is newInterruptContextWithHook with no hook — used
+// directly by tests that don't care about the scheduler's force-exit hook.
 func newInterruptContext() (context.Context, func(), <-chan struct{}) {
+	return newInterruptContextWithHook(nil)
+}
+
+// newInterruptContextWithHook is NewInterruptContext's implementation.
+// forceHook, if non-nil, is called synchronously right before os.Exit(130)
+// on a second signal — see NewSchedulerInterruptContext. The third return
+// value, exited, is closed when the goroutine below returns — tests use it
+// to know the goroutine has finished (and so can no longer write to
+// interruptOut) rather than racily polling an output buffer.
+func newInterruptContextWithHook(forceHook func()) (context.Context, func(), <-chan struct{}) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	done := make(chan struct{})
 	exited := make(chan struct{})
@@ -83,6 +121,9 @@ func newInterruptContext() (context.Context, func(), <-chan struct{}) {
 
 		select {
 		case <-forceExit:
+			if forceHook != nil {
+				forceHook()
+			}
 			os.Exit(130)
 		case <-done:
 		}
