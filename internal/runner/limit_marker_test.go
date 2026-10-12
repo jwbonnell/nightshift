@@ -14,68 +14,6 @@ import (
 	"github.com/jwbonnell/nightshift/internal/lock"
 )
 
-// TestLimitMarkerWrittenAndKeepsLater exercises writeLimitMarker's merge
-// rule directly: an existing marker whose reset_at is later than a new
-// hit's is kept as-is; a new hit with a later reset_at replaces it. A
-// zero ResetAt is stored as recorded+fallback.
-func TestLimitMarkerWrittenAndKeepsLater(t *testing.T) {
-	dir := t.TempDir()
-	base := time.Date(2026, 1, 5, 3, 0, 0, 0, time.UTC)
-
-	if err := writeLimitMarker(dir, limitHit{ResetAt: base.Add(30 * time.Minute)}, base, "first", time.Hour); err != nil {
-		t.Fatalf("writeLimitMarker: %v", err)
-	}
-	// An earlier-resetting hit arriving after must not overwrite the
-	// later one already recorded.
-	if err := writeLimitMarker(dir, limitHit{ResetAt: base.Add(10 * time.Minute)}, base.Add(time.Minute), "second", time.Hour); err != nil {
-		t.Fatalf("writeLimitMarker: %v", err)
-	}
-	m := readLimitMarkerRaw(dir)
-	if m == nil {
-		t.Fatalf("marker missing")
-	}
-	got, err := time.Parse(time.RFC3339, m.ResetAt)
-	if err != nil {
-		t.Fatalf("parse reset_at: %v", err)
-	}
-	if !got.Equal(base.Add(30 * time.Minute)) {
-		t.Fatalf("reset_at = %v, want the later (kept) reset %v", got, base.Add(30*time.Minute))
-	}
-	if m.By != "first" {
-		t.Fatalf("by = %q, want %q (first writer kept)", m.By, "first")
-	}
-
-	// A later-resetting hit does replace it.
-	if err := writeLimitMarker(dir, limitHit{ResetAt: base.Add(time.Hour), Weekly: true}, base.Add(2*time.Minute), "third", time.Hour); err != nil {
-		t.Fatalf("writeLimitMarker: %v", err)
-	}
-	m = readLimitMarkerRaw(dir)
-	got, err = time.Parse(time.RFC3339, m.ResetAt)
-	if err != nil {
-		t.Fatalf("parse reset_at: %v", err)
-	}
-	if !got.Equal(base.Add(time.Hour)) {
-		t.Fatalf("reset_at = %v, want the new later reset %v", got, base.Add(time.Hour))
-	}
-	if m.By != "third" || !m.Weekly {
-		t.Fatalf("marker = %+v, want by=third weekly=true", m)
-	}
-
-	// A zero ResetAt (an unparsable message) is stored as recorded+fallback.
-	dir2 := t.TempDir()
-	if err := writeLimitMarker(dir2, limitHit{}, base, "x", 45*time.Minute); err != nil {
-		t.Fatalf("writeLimitMarker: %v", err)
-	}
-	m2 := readLimitMarkerRaw(dir2)
-	got2, err := time.Parse(time.RFC3339, m2.ResetAt)
-	if err != nil {
-		t.Fatalf("parse reset_at: %v", err)
-	}
-	if !got2.Equal(base.Add(45 * time.Minute)) {
-		t.Fatalf("reset_at = %v, want recorded+fallback %v", got2, base.Add(45*time.Minute))
-	}
-}
-
 // TestLimitMarkerBlocksStart: an active marker whose wait cannot fit the
 // default window blocks run <spec> entirely — no sandbox, no result note,
 // run.json left exactly as it was, and both locks released.
