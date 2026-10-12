@@ -22,6 +22,10 @@ and recovery. See [`SPEC.md`](SPEC.md) for the spec this build was driven
 from, and [`docs/reference/`](docs/reference/) for the detailed design this
 one supersedes.
 
+`nightshift pr` pre-reviews GitLab merge requests and GitHub pull requests
+in a read-only sandbox and writes a review note — see
+[`docs/pr.md`](docs/pr.md).
+
 Linux only. `sbx` must be installed and configured (`sbx secret ls` should
 show an `anthropic` service secret) on the host; `claude` runs only inside
 the sandbox template, never on the host.

@@ -61,8 +61,15 @@ nightshift run <spec> [flags]         run one ready spec (nightshift run -h for 
 nightshift run --next [flags]         run the oldest eligible ready spec
 nightshift status [<slug>]            list runs, or show one run in detail
 nightshift review <slug> [--model M]  sandboxed Claude review of a run's work
+nightshift pr <url>|<repo> <n> [flags] pre-review one PR/MR (nightshift pr -h for flags)
+nightshift pr --pending [flags]       pre-review every open PR/MR awaiting your review
 nightshift version                    print the version
 ```
+
+`pr` pre-reviews a GitLab merge request or GitHub pull request, read-only,
+in its own sandbox — see [`docs/pr.md`](pr.md) for setup, usage, and the
+note format. It's otherwise independent of everything above: no run, spec,
+or review note it writes touches `specs/`, `runs/`, or `results/`.
 
 Every command except `run` exits `0` on success, `1` on error (printed as
 `nightshift: <error>` on stderr), `2` on a usage error. `-h`, `--help`, and

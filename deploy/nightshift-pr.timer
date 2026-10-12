@@ -1,0 +1,12 @@
+[Unit]
+Description=nightshift PR pre-review passes on weekdays
+
+[Timer]
+OnCalendar=Mon..Fri 11:00
+OnCalendar=Mon..Fri 14:00
+OnCalendar=Mon..Fri 16:30
+Persistent=false
+Unit=nightshift-pr.service
+
+[Install]
+WantedBy=timers.target

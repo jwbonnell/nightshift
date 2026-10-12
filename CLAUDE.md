@@ -14,6 +14,14 @@ from and [`docs/nightshift.md`](docs/nightshift.md) for user-facing docs.
 `docs/reference/` is the behavioral baseline this supersedes — never edit
 it, and never edit `SPEC.md`.
 
+`nightshift pr` is a second, independent feature on the same binary: a
+read-only pre-reviewer for GitLab merge requests and GitHub pull requests.
+It was built from its own design spec (not `SPEC.md`), carried entirely in
+`internal/review`/`internal/forge`/`internal/usagelimit` — see
+[`docs/pr.md`](docs/pr.md) for user-facing docs. It shares `internal/home`,
+`internal/lock`, `internal/gitx`, `internal/notify`, and `internal/agent`
+with the runner, but never the runner itself.
+
 ## Architecture
 
 ```
@@ -34,17 +42,28 @@ internal/interview/    `new`/`refine`'s host claude session: settings.json
                         generation, argv building. The one place nightshift
                         launches a *host* claude — no shell in its tool set,
                         no bypass-permissions flag, ever.
+internal/forge/        Kind/Change/Repo/Listed/Client + shared read-only HTTP
+                        (same-host redirect check, getJSON); forge/gitlab and
+                        forge/github implement Client against each API
+internal/usagelimit/   Usage-limit marker + limit-message parsing, shared by
+                        internal/runner and internal/review
+internal/review/       `nightshift pr`: target parsing, the persistent bare
+                        clone + export, the read-only review sandbox, note
+                        writing/mirroring, --pending across both forges —
+                        see docs/pr.md
 deploy/                systemd units, shipped disabled — never install/enable these
 vendor/                github.com/jwbonnell/go-libs/pkg/logx only
 ```
 
 `internal/lock` has zero internal dependencies so `internal/gitx` can import
-it without a cycle. `internal/agent` imports only the std-lib, same
-constraint as `internal/lock`. Everything else may import
-`home`/`gitx`/`lock`/`notify`/`agent` freely; `runner` is the only package
-that imports all of them. `runner` and `internal/review` (if it exists) may
-both import `agent`, but must never import each other — see
-`TestPackageBoundaries` in `internal/agent`.
+it without a cycle. `internal/agent` and `internal/usagelimit` import only
+the std-lib, same constraint as `internal/lock`. Everything else may import
+`home`/`gitx`/`lock`/`notify`/`agent`/`usagelimit` freely; `runner` is the
+only package that imports all of them. `runner` and `internal/review`/
+`internal/forge/...` may both import `agent` and `usagelimit`, but
+`internal/review`/`internal/forge/...` must never import `runner` and vice
+versa — see `TestPackageBoundaries` in `internal/agent` and in
+`internal/review`.
 
 `internal/runner`'s own files roughly mirror the reference's
 `internal/specrun` split (`spec.go`/`base.go` resolution, `state.go` setup
@@ -103,6 +122,13 @@ of stopping `rate-limited` — see the `run` subcommand section there.
   the *source* repo, read-only `Read,Grep,Glob` tools, no permission-bypass
   flag — and its verdict can never change a run's status, exit code, or
   history. See `docs/nightshift.md`'s Review section.)
+- `nightshift pr` is entirely outside this trust model — it has no agent
+  sandbox, no `-ctl` sandbox, and the clone it works from has no remotes
+  and never gets a git op run inside the agent's reach. Its one sandbox
+  (`nightshift-pr-<RunID>`) runs a read-only reviewer (claude with
+  `--tools Read,Grep,Glob`, or opencode's read-only invocation) against an
+  exported tree with no `.git`, and every forge API call from the host is a
+  `GET`. See `docs/pr.md`.
 
 ## Running tests
 
