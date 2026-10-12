@@ -73,6 +73,8 @@ usage:
   nightshift run <spec> [flags]         run one ready spec (nightshift run -h for flags)
   nightshift run --next [flags]         run the oldest eligible ready spec
   nightshift status [<slug>]            list runs, or show one run in detail
+  nightshift pr <url>|<repo> <n> [flags] pre-review one PR/MR (nightshift pr -h for flags)
+  nightshift pr --pending [flags]       pre-review every open PR/MR awaiting your review
   nightshift review <slug> [--model M] [--lens a,b]
                                         sandboxed Claude review of a run's work
   nightshift version                    print the version
@@ -113,6 +115,8 @@ func dispatch(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 		return cmdRun(args[1:], stdout, stderr, stdin)
 	case "status":
 		return cmdStatus(args[1:], stdout, stderr)
+	case "pr":
+		return cmdPR(args[1:], stdout, stderr)
 	case "review":
 		return cmdReview(args[1:], stdout, stderr)
 	default:
