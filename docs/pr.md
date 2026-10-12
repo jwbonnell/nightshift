@@ -103,7 +103,17 @@ failed, `2` on a usage/config error (including a missing `sbx` or no forge
 configured), `130` on Ctrl-C/SIGTERM — the change being reviewed when the
 signal arrives is reported `interrupted`, not `failed`, and isn't retried as
 a failure on the next run; no later change in that `--pending` pass is
-touched, and the sandbox is still removed before exit.
+touched, and the sandbox is still removed before exit. A Ctrl-C/SIGTERM that
+lands while `--pending` is still listing changes from a forge (before any
+change starts) is an interrupt too — exit `130`, ` · interrupted: 1` in the
+summary — not a failure.
+
+`--pending` always prints its one summary line
+(`reviewed: N · skipped: N · failed: N[ · limited: until <time>][ ·
+interrupted: 1]`), even when every configured forge's listing failed. A
+change that errors while being fetched is logged as `FAILED: get <MR|PR>:
+<err>` or `FAILED: get <project|repo>: <err>`, matching the error an
+explicit target would print.
 
 ### `--list` vs `--dry-run`
 
@@ -275,19 +285,24 @@ the review sandbox to reach `opencode.ai` (`sbx policy allow network
 --sandbox <name> opencode.ai`), on top of anything in `NIGHTSHIFT_PR_EGRESS`
 (a comma-separated list of extra `host`/`host:port` entries, for another
 opencode provider or a homelab model server). Claude needs no extra egress —
-the sandbox baseline already allows the Anthropic API. A failed policy call
-fails the run before any review and still removes the sandbox.
+the sandbox baseline already allows the Anthropic API. The policy is applied
+once, up front, before the first change is processed; a failed policy call
+fails the run before any change is processed or any note — including a
+size-cap `SKIPPED` note — is written, and still removes the sandbox.
 
 **A usage limit** (claude only) is checked before any API call: if the
 marker from a previous rate-limited run is still active, `nightshift pr`
 prints `usage limit active until <time> — skipping` and exits `0` without
-touching the network — for both explicit targets and `--pending`. A review
+touching the network — for both explicit targets and `--pending` (`<time>`
+reads `unknown` if the marker's own reset time can't be parsed). A review
 that comes back rate-limited mid-`--pending` stops the rest of that pass
 (the change itself isn't counted as failed), writes the marker, and appends
 ` · limited: until <time>` to the summary. A transient error (an opencode
 provider's free-tier rate limit counts as transient too) retries the same
-change once after a short wait, then counts as a normal failure if it
-recurs. `--list` and `--dry-run` ignore the usage-limit marker.
+change once after a short wait and a fresh full `--timeout` of its own —
+a slow first attempt never eats into the retry's deadline — then counts as
+a normal failure if it recurs. `--list` and `--dry-run` ignore the
+usage-limit marker.
 
 **Privacy.** The reviewer sees your full diff and source tree. Some free
 OpenCode Zen models (for example `big-pickle`, and the `mimo-*`/`ling-*`
