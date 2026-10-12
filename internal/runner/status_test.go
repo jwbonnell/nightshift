@@ -114,6 +114,37 @@ func TestStatusShowsWaiting(t *testing.T) {
 	}
 }
 
+// TestStatusShowsWaitsOn checks the `ready, not started:` trailer
+// annotates a spec waiting on an unmet dependency with "(waits on <d>)",
+// leaves specs with no dependency (or an already-satisfied one) bare, and
+// keeps the whole trailer sorted by slug.
+func TestStatusShowsWaitsOn(t *testing.T) {
+	homeDir := t.TempDir()
+	stateRoot := home.RunsDir(homeDir)
+	repo := newSourceRepo(t)
+
+	writeReadySpec(t, homeDir, "a", "", repo)
+	writeReadySpec(t, homeDir, "b", "depends_on: a\n", repo)
+	writeReadySpec(t, homeDir, "c", "", repo)
+	writeReadySpec(t, homeDir, "d", "depends_on: done1\n", repo)
+
+	writeRunState(t, stateRoot, "done1", &runState{
+		Slug: "done1", Branch: "spec/done1", Status: "complete",
+		Started: "2026-01-01T00:00:00Z",
+	})
+
+	var buf bytes.Buffer
+	if err := PrintStatusTable(&buf, homeDir, stateRoot); err != nil {
+		t.Fatalf("PrintStatusTable: %v", err)
+	}
+	out := buf.String()
+
+	want := "ready, not started: a, b (waits on a), c, d\n"
+	if !strings.Contains(out, want) {
+		t.Fatalf("output missing %q:\n%s", want, out)
+	}
+}
+
 func TestStatusShowsUsageLimitMarker(t *testing.T) {
 	homeDir := t.TempDir()
 	stateRoot := home.RunsDir(homeDir)
@@ -240,6 +271,62 @@ func TestStatusDetail(t *testing.T) {
 	wantErr := "no run state for nope"
 	if err == nil || err.Error() != wantErr {
 		t.Fatalf("err = %v, want %q", err, wantErr)
+	}
+}
+
+// TestStatusDetailShowsDeps checks `status <slug>` prints depends_on and
+// owns (read from the spec's frontmatter, since run.json never stores
+// them) plus dep_tips and base_resolved (from run.json) when set, and
+// omits all four when unset.
+func TestStatusDetailShowsDeps(t *testing.T) {
+	homeDir := t.TempDir()
+	stateRoot := home.RunsDir(homeDir)
+	repo := newSourceRepo(t)
+
+	writeReadySpec(t, homeDir, "demo", "depends_on: a, b\nowns: internal/api/, go.mod\n", repo)
+	writeRunState(t, stateRoot, "demo", &runState{
+		Slug: "demo", Repo: repo, Branch: "spec/demo",
+		Base: strings.Repeat("a", 40), BaseRef: "main", LastGreen: strings.Repeat("b", 40),
+		DepTips:      map[string]string{"a": strings.Repeat("c", 40), "b": strings.Repeat("d", 40)},
+		BaseResolved: strings.Repeat("e", 40),
+		Iterations:   1, Commits: 1, Status: "complete",
+		Started: "2026-01-01T00:00:00Z",
+	})
+
+	var buf bytes.Buffer
+	if err := PrintStatusDetail(&buf, homeDir, stateRoot, "demo"); err != nil {
+		t.Fatalf("PrintStatusDetail: %v", err)
+	}
+	out := buf.String()
+
+	for _, want := range []string{
+		"depends_on: a, b\n",
+		"owns: internal/api/, go.mod\n",
+		"dep_tips: a=" + strings.Repeat("c", 40) + ", b=" + strings.Repeat("d", 40) + "\n",
+		"base_resolved: " + strings.Repeat("e", 40) + "\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+
+	writeReadySpec(t, homeDir, "plain", "", repo)
+	writeRunState(t, stateRoot, "plain", &runState{
+		Slug: "plain", Repo: repo, Branch: "spec/plain",
+		Base: strings.Repeat("a", 40), BaseRef: "main", LastGreen: strings.Repeat("b", 40),
+		Iterations: 1, Commits: 1, Status: "complete",
+		Started: "2026-01-01T00:00:00Z",
+	})
+
+	var plainBuf bytes.Buffer
+	if err := PrintStatusDetail(&plainBuf, homeDir, stateRoot, "plain"); err != nil {
+		t.Fatalf("PrintStatusDetail: %v", err)
+	}
+	plainOut := plainBuf.String()
+	for _, notWant := range []string{"depends_on:", "owns:", "dep_tips:", "base_resolved:"} {
+		if strings.Contains(plainOut, notWant) {
+			t.Fatalf("output should omit %q:\n%s", notWant, plainOut)
+		}
 	}
 }
 

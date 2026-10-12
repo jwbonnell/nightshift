@@ -62,6 +62,43 @@ func reviewRefFor(st *runState, slug string) string {
 	return st.Branch
 }
 
+// specDepsOwns looks up slug's spec file across specs/draft/, specs/ready/
+// and specs/done/ (in that order) and returns its parsed depends_on and
+// owns frontmatter, or nil, nil if the spec file is gone or either key
+// doesn't parse.
+func specDepsOwns(homeDir, slug string) (dependsOn, owns []string) {
+	for _, dir := range []string{home.DraftDir(homeDir), home.ReadyDir(homeDir), home.DoneDir(homeDir)} {
+		p, ok := findCaseInsensitive(dir, slug+".md")
+		if !ok {
+			continue
+		}
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		fm := home.ParseFrontmatter(raw)
+		dependsOn, _ = parseDependsOn(fm["depends_on"])
+		owns, _ = parseOwns(fm["owns"])
+		return dependsOn, owns
+	}
+	return nil, nil
+}
+
+// formatDepTips renders run.json's dep_tips map as "slug=sha, slug=sha",
+// sorted by slug for a deterministic order.
+func formatDepTips(tips map[string]string) string {
+	keys := make([]string, 0, len(tips))
+	for k := range tips {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = k + "=" + tips[k]
+	}
+	return strings.Join(parts, ", ")
+}
+
 // PrintStatusTable prints the no-argument `status` table plus the
 // ready-not-started/drafts trailer lines, or the "no runs yet" line if
 // there is nothing at all to show.
@@ -112,7 +149,9 @@ func PrintStatusTable(w io.Writer, homeDir, stateRoot string) error {
 
 	readyDir := home.ReadyDir(homeDir)
 	readyEntries, _ := os.ReadDir(readyDir)
-	var readyNotStarted []string
+	opts := Options{Home: homeDir, StateRoot: stateRoot}
+	type readyRow struct{ slug, display string }
+	var readyRows []readyRow
 	for _, e := range readyEntries {
 		if e.IsDir() {
 			continue
@@ -121,11 +160,25 @@ func PrintStatusTable(w io.Writer, homeDir, stateRoot string) error {
 			continue
 		}
 		slug := slugFromFilename(e.Name())
-		if _, ok := rows[slug]; !ok {
-			readyNotStarted = append(readyNotStarted, slug)
+		if _, ok := rows[slug]; ok {
+			continue
 		}
+		display := slug
+		if data, err := os.ReadFile(filepath.Join(readyDir, e.Name())); err == nil {
+			fm := home.ParseFrontmatter(data)
+			if deps, derr := parseDependsOn(fm["depends_on"]); derr == nil && len(deps) > 0 {
+				if d, _, ok := firstUnmet(opts, deps); ok {
+					display = fmt.Sprintf("%s (waits on %s)", slug, d)
+				}
+			}
+		}
+		readyRows = append(readyRows, readyRow{slug: slug, display: display})
 	}
-	sort.Strings(readyNotStarted)
+	sort.Slice(readyRows, func(i, j int) bool { return readyRows[i].slug < readyRows[j].slug })
+	readyNotStarted := make([]string, len(readyRows))
+	for i, r := range readyRows {
+		readyNotStarted[i] = r.display
+	}
 
 	draftDir := home.DraftDir(homeDir)
 	draftEntries, _ := os.ReadDir(draftDir)
@@ -192,7 +245,20 @@ func PrintStatusDetail(w io.Writer, homeDir, stateRoot, slug string) error {
 	fmt.Fprintf(w, "branch: %s\n", st.Branch)
 	fmt.Fprintf(w, "base: %s\n", st.Base)
 	fmt.Fprintf(w, "base_ref: %s\n", st.BaseRef)
+	dependsOn, owns := specDepsOwns(homeDir, slug)
+	if len(dependsOn) > 0 {
+		fmt.Fprintf(w, "depends_on: %s\n", strings.Join(dependsOn, ", "))
+	}
+	if len(owns) > 0 {
+		fmt.Fprintf(w, "owns: %s\n", strings.Join(owns, ", "))
+	}
 	fmt.Fprintf(w, "last_green: %s\n", st.LastGreen)
+	if len(st.DepTips) > 0 {
+		fmt.Fprintf(w, "dep_tips: %s\n", formatDepTips(st.DepTips))
+	}
+	if st.BaseResolved != "" {
+		fmt.Fprintf(w, "base_resolved: %s\n", st.BaseResolved)
+	}
 	fmt.Fprintf(w, "sync_ref: %s\n", st.SyncRef)
 	fmt.Fprintf(w, "sync_owed: %v\n", st.SyncOwed)
 	fmt.Fprintf(w, "spec_hash: %s\n", st.SpecHash)
