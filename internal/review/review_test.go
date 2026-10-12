@@ -555,71 +555,64 @@ func TestPRRateLimitStopsPass(t *testing.T) {
 	}
 }
 
-func TestPRLimitMarkerSkipsClaude(t *testing.T) {
+// TestPRLimitMarker covers the claude-only usage-limit marker's effect on
+// every entry point: claude skips with the exact message, opencode ignores
+// it, and --list/--dry-run ignore it too since they make no reviewer call.
+func TestPRLimitMarker(t *testing.T) {
 	homeDir := t.TempDir()
 	now := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
-	if err := usagelimit.Write(home.RunsDir(homeDir), usagelimit.Hit{ResetAt: now.Add(time.Hour)}, now, "pr", time.Hour); err != nil {
+	reset := now.Add(time.Hour)
+	if err := usagelimit.Write(home.RunsDir(homeDir), usagelimit.Hit{ResetAt: reset}, now, "pr", time.Hour); err != nil {
 		t.Fatalf("write marker: %v", err)
 	}
 
-	client, _, _, _ := gitlabChangeClient(t, 1, "T", "a")
-	sb := &stubSandbox{available: true}
+	t.Run("claude skips", func(t *testing.T) {
+		client, _, _, _ := gitlabChangeClient(t, 1, "T", "a")
+		sb := &stubSandbox{available: true}
 
-	opts := baseOptions(t, homeDir, client, sb)
-	opts.Targets = []Target{{Forge: forge.KindGitLab, Repo: "team/app", Number: 1}}
-	opts.Agent = mustAgent(t, opts.Settings.Selector)
-	opts.Now = func() time.Time { return now }
+		opts := baseOptions(t, homeDir, client, sb)
+		opts.Targets = []Target{{Forge: forge.KindGitLab, Repo: "team/app", Number: 1}}
+		opts.Agent = mustAgent(t, opts.Settings.Selector)
+		opts.Now = func() time.Time { return now }
 
-	var stderr strings.Builder
-	opts.Stderr = &stderr
+		var stderr strings.Builder
+		opts.Stderr = &stderr
 
-	rc := Run(opts)
-	if rc != 0 {
-		t.Fatalf("Run() = %d, want 0", rc)
-	}
-	if !strings.Contains(stderr.String(), "usage limit active until") {
-		t.Fatalf("stderr = %q, want a usage-limit message", stderr.String())
-	}
-	if client.getCalls != 0 {
-		t.Fatalf("Get calls = %d, want 0 (no API calls under an active marker)", client.getCalls)
-	}
-}
+		rc := Run(opts)
+		if rc != 0 {
+			t.Fatalf("Run() = %d, want 0", rc)
+		}
+		wantStderr := fmt.Sprintf("nightshift pr: usage limit active until %s — skipping\n", reset.Local().Format("Mon 15:04"))
+		if stderr.String() != wantStderr {
+			t.Fatalf("stderr = %q, want %q", stderr.String(), wantStderr)
+		}
+		if client.getCalls != 0 {
+			t.Fatalf("Get calls = %d, want 0 (no API calls under an active marker)", client.getCalls)
+		}
+	})
 
-func TestPRLimitMarkerIgnoredByOpencode(t *testing.T) {
-	homeDir := t.TempDir()
-	now := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
-	if err := usagelimit.Write(home.RunsDir(homeDir), usagelimit.Hit{ResetAt: now.Add(time.Hour)}, now, "pr", time.Hour); err != nil {
-		t.Fatalf("write marker: %v", err)
-	}
+	t.Run("opencode ignores", func(t *testing.T) {
+		client, _, _, _ := gitlabChangeClient(t, 1, "T", "a")
+		sb := &stubSandbox{available: true}
+		sb.execFn = func(ctx context.Context, call int, dir string, argv []string, stdin string) (string, error) {
+			return opencodeSuccessJSON("LGTM"), nil
+		}
 
-	client, _, _, _ := gitlabChangeClient(t, 1, "T", "a")
-	sb := &stubSandbox{available: true}
-	sb.execFn = func(ctx context.Context, call int, dir string, argv []string, stdin string) (string, error) {
-		return opencodeSuccessJSON("LGTM"), nil
-	}
+		opts := baseOptions(t, homeDir, client, sb)
+		opts.Targets = []Target{{Forge: forge.KindGitLab, Repo: "team/app", Number: 1}}
+		opts.Settings.Selector = agent.Selector{Agent: "opencode", Model: "opencode/longcat-2.5-preview-free"}
+		opts.Agent = mustAgent(t, opts.Settings.Selector)
+		opts.Now = func() time.Time { return now }
 
-	opts := baseOptions(t, homeDir, client, sb)
-	opts.Targets = []Target{{Forge: forge.KindGitLab, Repo: "team/app", Number: 1}}
-	opts.Settings.Selector = agent.Selector{Agent: "opencode", Model: "opencode/longcat-2.5-preview-free"}
-	opts.Agent = mustAgent(t, opts.Settings.Selector)
-	opts.Now = func() time.Time { return now }
+		if rc := Run(opts); rc != 0 {
+			t.Fatalf("Run() = %d, want 0", rc)
+		}
+		if client.getCalls != 1 {
+			t.Fatalf("Get calls = %d, want 1 (opencode must ignore the claude-only marker)", client.getCalls)
+		}
+	})
 
-	if rc := Run(opts); rc != 0 {
-		t.Fatalf("Run() = %d, want 0", rc)
-	}
-	if client.getCalls != 1 {
-		t.Fatalf("Get calls = %d, want 1 (opencode must ignore the claude-only marker)", client.getCalls)
-	}
-}
-
-func TestPRLimitMarkerIgnoredByListAndDryRun(t *testing.T) {
-	homeDir := t.TempDir()
-	now := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
-	if err := usagelimit.Write(home.RunsDir(homeDir), usagelimit.Hit{ResetAt: now.Add(time.Hour)}, now, "pr", time.Hour); err != nil {
-		t.Fatalf("write marker: %v", err)
-	}
-
-	t.Run("dry-run", func(t *testing.T) {
+	t.Run("dry-run ignores", func(t *testing.T) {
 		client, _, _, _ := gitlabChangeClient(t, 1, "T", "a")
 		sb := &stubSandbox{available: true}
 		opts := baseOptions(t, homeDir, client, sb)
@@ -645,7 +638,7 @@ func TestPRLimitMarkerIgnoredByListAndDryRun(t *testing.T) {
 		}
 	})
 
-	t.Run("list", func(t *testing.T) {
+	t.Run("list ignores", func(t *testing.T) {
 		client, _, _, _ := gitlabChangeClient(t, 1, "T", "a")
 		sb := &stubSandbox{available: true}
 		opts := baseOptions(t, homeDir, client, sb)

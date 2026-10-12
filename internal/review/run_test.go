@@ -358,24 +358,62 @@ func TestPendingOneForgeFails(t *testing.T) {
 	}
 }
 
-func TestNoForgeConfiguredPending(t *testing.T) {
-	homeDir := t.TempDir()
-	opts := Options{
-		Settings: Settings{Home: homeDir, Selector: agent.Selector{Agent: "claude", Model: "sonnet"}, SbxBin: "sbx", Timeout: time.Second, MaxTurns: 1, MaxLines: 100, Notify: "off"},
-		Pending:  true,
-		Ctx:      context.Background(),
-		Stdout:   io.Discard,
-	}
-	var stderr strings.Builder
-	opts.Stderr = &stderr
+// TestNoForgeConfigured asserts that Run rejects a settings value with
+// neither forge configured, for both --pending and an explicit target, with
+// the exact P4 message, rc 2, and no directory created under Home.
+func TestNoForgeConfigured(t *testing.T) {
+	const wantLine = "nightshift pr: no forge configured — set NIGHTSHIFT_GITLAB_URL + NIGHTSHIFT_GITLAB_TOKEN_FILE and/or NIGHTSHIFT_GITHUB_TOKEN_FILE"
 
-	rc := Run(opts)
-	if rc != 2 {
-		t.Fatalf("Run() = %d, want 2", rc)
+	run := func(t *testing.T, opts Options) (int, string) {
+		homeDir := opts.Settings.Home
+		var stderr strings.Builder
+		opts.Stderr = &stderr
+		if opts.Stdout == nil {
+			opts.Stdout = io.Discard
+		}
+		if opts.Ctx == nil {
+			opts.Ctx = context.Background()
+		}
+
+		rc := Run(opts)
+
+		entries, err := os.ReadDir(homeDir)
+		if err != nil {
+			t.Fatalf("ReadDir(%s): %v", homeDir, err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("home dir %s not empty: %v", homeDir, entries)
+		}
+		return rc, stderr.String()
 	}
-	if !strings.Contains(stderr.String(), "no forge configured") {
-		t.Fatalf("stderr = %q, missing the no-forge message", stderr.String())
-	}
+
+	t.Run("pending", func(t *testing.T) {
+		homeDir := t.TempDir()
+		rc, stderr := run(t, Options{
+			Settings: Settings{Home: homeDir, Selector: agent.Selector{Agent: "claude", Model: "sonnet"}, SbxBin: "sbx", Timeout: time.Second, MaxTurns: 1, MaxLines: 100, Notify: "off"},
+			Pending:  true,
+		})
+		if rc != 2 {
+			t.Fatalf("Run() = %d, want 2", rc)
+		}
+		if !strings.Contains(stderr, wantLine) {
+			t.Fatalf("stderr = %q, want to contain %q", stderr, wantLine)
+		}
+	})
+
+	t.Run("explicit target", func(t *testing.T) {
+		homeDir := t.TempDir()
+		rc, stderr := run(t, Options{
+			Settings: Settings{Home: homeDir, Selector: agent.Selector{Agent: "claude", Model: "sonnet"}, SbxBin: "sbx", Timeout: time.Second, MaxTurns: 1, MaxLines: 100, Notify: "off"},
+			Targets:  []Target{{Forge: forge.KindGitLab, Repo: "team/app", Number: 1}},
+		})
+		if rc != 2 {
+			t.Fatalf("Run() = %d, want 2", rc)
+		}
+		if !strings.Contains(stderr, wantLine) {
+			t.Fatalf("stderr = %q, want to contain %q", stderr, wantLine)
+		}
+	})
 }
 
 func TestPendingNotifies(t *testing.T) {

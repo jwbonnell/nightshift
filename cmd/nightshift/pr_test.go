@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/jwbonnell/nightshift/internal/review"
 )
 
 // assertDirEmpty confirms a no-forge-configured failure left dir untouched:
@@ -87,7 +89,30 @@ func TestCLIPR(t *testing.T) {
 		}
 	})
 
-	t.Run("no forge configured is a usage error", func(t *testing.T) {
+	t.Run("top-level usage mentions both pr lines", func(t *testing.T) {
+		if !strings.Contains(usage, "nightshift pr <url>|<repo> <n> [flags]") {
+			t.Fatalf("usage missing the explicit-target pr line:\n%s", usage)
+		}
+		if !strings.Contains(usage, "nightshift pr --pending [flags]") {
+			t.Fatalf("usage missing the --pending pr line:\n%s", usage)
+		}
+	})
+}
+
+// TestNoForgeConfigured asserts that with no forge configured, both
+// --pending and an explicit target fail with the exact P4 message before
+// review.Run is ever reached, and leave the home directory untouched.
+func TestNoForgeConfigured(t *testing.T) {
+	const wantLine = "nightshift pr: no forge configured — set NIGHTSHIFT_GITLAB_URL + NIGHTSHIFT_GITLAB_TOKEN_FILE and/or NIGHTSHIFT_GITHUB_TOKEN_FILE"
+
+	orig := prRunFn
+	prRunFn = func(review.Options) int {
+		t.Fatal("prRunFn called despite no forge configured")
+		return 0
+	}
+	t.Cleanup(func() { prRunFn = orig })
+
+	t.Run("--pending", func(t *testing.T) {
 		homeDir := t.TempDir()
 		t.Setenv("NIGHTSHIFT_HOME", homeDir)
 
@@ -96,13 +121,13 @@ func TestCLIPR(t *testing.T) {
 		if exit != 2 {
 			t.Fatalf("exit=%d, want 2; stderr=%s", exit, stderr.String())
 		}
-		if !strings.Contains(stderr.String(), "no forge configured") {
-			t.Fatalf("stderr = %q", stderr.String())
+		if got := stderr.String(); !strings.Contains(got, wantLine) {
+			t.Fatalf("stderr = %q, want to contain %q", got, wantLine)
 		}
 		assertDirEmpty(t, homeDir)
 	})
 
-	t.Run("no forge configured is also a usage error for an explicit target", func(t *testing.T) {
+	t.Run("explicit target", func(t *testing.T) {
 		homeDir := t.TempDir()
 		t.Setenv("NIGHTSHIFT_HOME", homeDir)
 
@@ -111,18 +136,9 @@ func TestCLIPR(t *testing.T) {
 		if exit != 2 {
 			t.Fatalf("exit=%d, want 2; stderr=%s", exit, stderr.String())
 		}
-		if !strings.Contains(stderr.String(), "no forge configured") {
-			t.Fatalf("stderr = %q", stderr.String())
+		if got := stderr.String(); !strings.Contains(got, wantLine) {
+			t.Fatalf("stderr = %q, want to contain %q", got, wantLine)
 		}
 		assertDirEmpty(t, homeDir)
-	})
-
-	t.Run("top-level usage mentions both pr lines", func(t *testing.T) {
-		if !strings.Contains(usage, "nightshift pr <url>|<repo> <n> [flags]") {
-			t.Fatalf("usage missing the explicit-target pr line:\n%s", usage)
-		}
-		if !strings.Contains(usage, "nightshift pr --pending [flags]") {
-			t.Fatalf("usage missing the --pending pr line:\n%s", usage)
-		}
 	})
 }
