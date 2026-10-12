@@ -2,10 +2,14 @@ package main
 
 import (
 	"bytes"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/jwbonnell/nightshift/internal/home"
 	"github.com/jwbonnell/nightshift/internal/review"
 )
 
@@ -141,4 +145,46 @@ func TestNoForgeConfigured(t *testing.T) {
 		}
 		assertDirEmpty(t, homeDir)
 	})
+}
+
+// TestPRSelectorErrors asserts that a bad NIGHTSHIFT_PR_MODEL fails
+// dispatch before review.Run is ever reached: exit 2, the exact P4 prefix,
+// no lock file, no forge API call, and nothing new under the home.
+func TestPRSelectorErrors(t *testing.T) {
+	var hits int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	homeDir := t.TempDir()
+	t.Setenv("NIGHTSHIFT_HOME", homeDir)
+	t.Setenv("NIGHTSHIFT_GITHUB_TOKEN", "tok")
+	t.Setenv("NIGHTSHIFT_GITHUB_URL", server.URL)
+	t.Setenv("NIGHTSHIFT_PR_MODEL", "bogus/thing/here/extra")
+
+	orig := prRunFn
+	prRunFn = func(review.Options) int {
+		t.Fatal("prRunFn called despite a bad selector")
+		return 0
+	}
+	t.Cleanup(func() { prRunFn = orig })
+
+	var stdout, stderr bytes.Buffer
+	exit := dispatch([]string{"pr", "o/r#1"}, &stdout, &stderr, strings.NewReader(""))
+	if exit != 2 {
+		t.Fatalf("exit=%d, want 2; stderr=%s", exit, stderr.String())
+	}
+	wantPrefix := "nightshift pr: NIGHTSHIFT_PR_MODEL (from env): "
+	if got := stderr.String(); !strings.HasPrefix(got, wantPrefix) {
+		t.Fatalf("stderr = %q, want prefix %q", got, wantPrefix)
+	}
+	if hits != 0 {
+		t.Errorf("server hits = %d, want 0", hits)
+	}
+	if _, err := os.Stat(filepath.Join(home.PRDir(homeDir), ".lock")); !os.IsNotExist(err) {
+		t.Errorf("lock file exists: %v", err)
+	}
+	assertDirEmpty(t, homeDir)
 }

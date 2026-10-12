@@ -250,8 +250,9 @@ func TestPREgress(t *testing.T) {
 			"NIGHTSHIFT_PR_EGRESS": "not a host!",
 		})
 		_, err := ResolveSettings(FlagValues{}, home, env)
-		if err == nil {
-			t.Fatal("want error for a bad egress entry")
+		want := `NIGHTSHIFT_PR_EGRESS entry "not a host!": want a host or host:port`
+		if err == nil || err.Error() != want {
+			t.Fatalf("error = %v, want %q", err, want)
 		}
 	})
 }

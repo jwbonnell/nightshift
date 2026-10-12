@@ -378,29 +378,32 @@ func TestDryRunPR(t *testing.T) {
 	}
 	out := stdout.String()
 
-	for _, want := range []string{
-		"nightshift pr --dry-run: resolved config\n",
-		"  home:         " + homeDir + "\n",
-		"  reviews:      " + home.ReviewsDir(homeDir) + "\n",
-		"  mirror:       off\n",
-		"  gitlab:       unset (token unset)\n",
-		"  github:       https://github.com (token set)\n",
-		"  state dir:    " + home.PRDir(homeDir) + "\n",
-		"  model:        claude/sonnet\n",
-		"  egress:       a.lan\n",
-		"  max turns:    30\n",
-		"  max lines:    3000\n",
-		"  sbx bin:      sbx\n",
-		"  prompt:       embedded\n",
-		"targets:\n  o/r#1\n",
-		"commands that would run:\n",
-		"  sbx create --name nightshift-pr-test123 claude " + filepath.Join(home.PRDir(homeDir), "work") + "\n",
-		"  sbx policy allow network --sandbox nightshift-pr-test123 a.lan\n",
-		"  sbx exec -w " + filepath.Join(home.PRDir(homeDir), "work", Slug("o/r", 1, "pr"), "tree") + " nightshift-pr-test123 ",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("dry-run output missing %q\nfull output:\n%s", want, out)
-		}
+	workDir := filepath.Join(home.PRDir(homeDir), "work")
+	treeDir := filepath.Join(workDir, Slug("o/r", 1, "pr"), "tree")
+	want := "nightshift pr --dry-run: resolved config\n" +
+		"  home:         " + homeDir + "\n" +
+		"  reviews:      " + home.ReviewsDir(homeDir) + "\n" +
+		"  mirror:       off\n" +
+		"  gitlab:       unset (token unset)\n" +
+		"  github:       https://github.com (token set)\n" +
+		"  state dir:    " + home.PRDir(homeDir) + "\n" +
+		"  model:        claude/sonnet\n" +
+		"  egress:       a.lan\n" +
+		"  max turns:    30\n" +
+		"  timeout:      5s\n" +
+		"  max lines:    3000\n" +
+		"  sbx bin:      sbx\n" +
+		"  prompt:       embedded\n" +
+		"\n" +
+		"targets:\n" +
+		"  o/r#1\n" +
+		"\n" +
+		"commands that would run:\n" +
+		"  sbx create --name nightshift-pr-test123 claude " + workDir + "\n" +
+		"  sbx policy allow network --sandbox nightshift-pr-test123 a.lan\n" +
+		"  sbx exec -w " + treeDir + " nightshift-pr-test123 claude -p --output-format json --model sonnet --max-turns 30 --tools Read,Grep,Glob --permission-mode dontAsk --no-session-persistence --setting-sources user --disable-slash-commands\n"
+	if out != want {
+		t.Errorf("dry-run output =\n%s\nwant\n%s", out, want)
 	}
 
 	if strings.Contains(out, "github-super-secret-token") {
