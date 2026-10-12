@@ -5,7 +5,10 @@
 // internal/forge/github.
 package forge
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // Kind identifies which forge a Client talks to.
 type Kind string
@@ -39,6 +42,26 @@ func (k Kind) URLSetting() string {
 		return "NIGHTSHIFT_GITLAB_URL"
 	}
 	return "NIGHTSHIFT_GITHUB_URL"
+}
+
+// SlugSuffix is the forge-native note-slug suffix: "mr" for GitLab, "pr"
+// for GitHub — the same value as a Client's own SlugSuffix(), available
+// without constructing one (e.g. for --dry-run's client-less preview).
+func (k Kind) SlugSuffix() string {
+	if k == KindGitLab {
+		return "mr"
+	}
+	return "pr"
+}
+
+// Label formats repoPath/n the forge-native way ("path!n" for GitLab,
+// "path#n" for GitHub) — the same value as a Client's own Label(), without
+// needing one.
+func (k Kind) Label(repoPath string, n int) string {
+	if k == KindGitLab {
+		return fmt.Sprintf("%s!%d", repoPath, n)
+	}
+	return fmt.Sprintf("%s#%d", repoPath, n)
 }
 
 // Change is one pull/merge request, normalized across both forges.

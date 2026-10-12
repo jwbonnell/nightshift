@@ -134,6 +134,14 @@ func Run(opts Options) int {
 		return 2
 	}
 
+	if opts.DryRun {
+		printPlan(opts.Stdout, &opts)
+		return 0
+	}
+	if opts.List {
+		return runList(opts.Ctx, &opts)
+	}
+
 	// P12.4: the usage-limit marker is claude-only — an opencode reviewer
 	// never checks it.
 	if opts.Settings.Selector.Agent == "claude" {
