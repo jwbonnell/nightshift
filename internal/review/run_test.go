@@ -785,3 +785,97 @@ func TestLimitCountsOnlyExecAndFailedExec(t *testing.T) {
 		t.Fatalf("stdout = %q, want a limit-reached line for the one remaining item", stdout.String())
 	}
 }
+
+// TestEgressFailureAbortsBeforeSizeCapNote covers an explicit target: when
+// an egress host is configured and AllowNetwork fails, the run must abort
+// before the size-cap check ever writes a SKIPPED note, because the
+// up-front egress call (task 4, "network policy") now runs before the
+// first change is processed.
+func TestEgressFailureAbortsBeforeSizeCapNote(t *testing.T) {
+	homeDir := t.TempDir()
+	remote, head, base := makeSizedRemote(t, "refs/merge-requests/%d/head", 1, 20)
+	change := testChange("Big", "a", "main", head, base)
+	repo := forge.Repo{ID: 1, Path: "team/app", CloneURL: remote}
+	client := &fakeClient{
+		kind:      forge.KindGitLab,
+		getFn:     func(ctx context.Context, r string, n int) (forge.Change, error) { return change, nil },
+		getRepoFn: func(ctx context.Context, r string) (forge.Repo, error) { return repo, nil },
+	}
+	sb := &stubSandbox{available: true, allowErr: map[string]error{"a.lan": fmt.Errorf("boom")}}
+
+	opts := baseOptions(t, homeDir, client, sb)
+	opts.Targets = []Target{{Forge: forge.KindGitLab, Repo: "team/app", Number: 1}}
+	opts.Settings.MaxLines = 5
+	opts.Settings.Egress = []string{"a.lan"}
+	opts.Agent = mustAgent(t, opts.Settings.Selector)
+
+	var stderr strings.Builder
+	opts.Stderr = &stderr
+
+	if rc := Run(opts); rc != 1 {
+		t.Fatalf("Run() = %d, want 1", rc)
+	}
+	if sb.execCalls != 0 {
+		t.Fatalf("execCalls = %d, want 0 (the egress failure must abort before Exec)", sb.execCalls)
+	}
+	if sb.removeCalls != 1 {
+		t.Fatalf("removeCalls = %d, want 1", sb.removeCalls)
+	}
+	if _, err := os.Stat(filepath.Join(home.ReviewsDir(homeDir), "team-app-mr1.md")); err == nil {
+		t.Fatalf("a SKIPPED note was written despite the up-front egress failure")
+	}
+	if n := strings.Count(stderr.String(), "allow network"); n != 1 {
+		t.Fatalf("stderr = %q, want exactly one %q", stderr.String(), "allow network")
+	}
+}
+
+// TestPendingEgressFailureAbortsBeforeSizeCapNote is the --pending
+// equivalent: the up-front egress call runs once, after listing and
+// before the queue loop, so a size-cap change queued first never gets a
+// SKIPPED note written when AllowNetwork fails.
+func TestPendingEgressFailureAbortsBeforeSizeCapNote(t *testing.T) {
+	homeDir := t.TempDir()
+	remote, head, base := makeSizedRemote(t, "refs/merge-requests/%d/head", 1, 20)
+	change := testChange("Big", "a", "main", head, base)
+	repo := forge.Repo{ID: 1, Path: "team/app", CloneURL: remote}
+	client := &fakeClient{
+		kind:          forge.KindGitLab,
+		currentUserFn: func(ctx context.Context) (string, error) { return "alice", nil },
+		listFn: func(ctx context.Context, user string) ([]forge.Listed, error) {
+			return []forge.Listed{{RepoRef: "1", Label: "team/app", Number: 1, Title: "Big", State: "open"}}, nil
+		},
+		getFn:     func(ctx context.Context, r string, n int) (forge.Change, error) { return change, nil },
+		getRepoFn: func(ctx context.Context, r string) (forge.Repo, error) { return repo, nil },
+	}
+	sb := &stubSandbox{available: true, allowErr: map[string]error{"a.lan": fmt.Errorf("boom")}}
+
+	opts := pendingOptions(t, homeDir, client, sb)
+	opts.Settings.MaxLines = 5
+	opts.Settings.Egress = []string{"a.lan"}
+
+	var stdout, stderr strings.Builder
+	opts.Stdout = &stdout
+	opts.Stderr = &stderr
+
+	if rc := Run(opts); rc != 1 {
+		t.Fatalf("Run() = %d, want 1", rc)
+	}
+	if sb.execCalls != 0 {
+		t.Fatalf("execCalls = %d, want 0 (the egress failure must abort before Exec)", sb.execCalls)
+	}
+	if sb.removeCalls != 1 {
+		t.Fatalf("removeCalls = %d, want 1", sb.removeCalls)
+	}
+	if client.getCalls != 0 {
+		t.Fatalf("Get calls = %d, want 0 (the egress failure must abort before any change is fetched)", client.getCalls)
+	}
+	if _, err := os.Stat(filepath.Join(home.ReviewsDir(homeDir), "team-app-mr1.md")); err == nil {
+		t.Fatalf("a SKIPPED note was written despite the up-front egress failure")
+	}
+	if n := strings.Count(stderr.String(), "allow network"); n != 1 {
+		t.Fatalf("stderr = %q, want exactly one %q", stderr.String(), "allow network")
+	}
+	if strings.Contains(stdout.String(), "reviewed:") {
+		t.Fatalf("stdout = %q, want no summary line for a fatal egress failure", stdout.String())
+	}
+}

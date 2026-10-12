@@ -192,6 +192,13 @@ func Run(opts Options) int {
 // runTargetsTop drives the explicit-target loop (no summary line is ever
 // printed for this path — only --pending gets one).
 func runTargetsTop(r *runner, opts *Options) int {
+	if len(opts.Targets) > 0 {
+		if err := r.ensureEgressUpFront(opts.Ctx); err != nil {
+			fmt.Fprintf(opts.Stderr, "nightshift pr: %v\n", err)
+			return 1
+		}
+	}
+
 	failed := 0
 	notReviewed := 0
 	interrupted := false
@@ -327,6 +334,14 @@ func (r *runner) runPending(ctx context.Context) runTally {
 		return tally
 	}
 
+	if len(queue) > 0 {
+		if err := r.ensureEgressUpFront(ctx); err != nil {
+			fmt.Fprintf(r.opts.Stderr, "nightshift pr: %v\n", err)
+			tally.fatal = true
+			return tally
+		}
+	}
+
 	started := 0
 queueLoop:
 	for i, q := range queue {
@@ -392,7 +407,6 @@ func (r *runner) processPendingItem(ctx context.Context, q pendingItem, remainin
 
 	out := r.reviewOne(ctx, q.client.Kind(), canonical, q.listed.Number, change, repo, true)
 	if out.isFatal() {
-		fmt.Fprintf(r.opts.Stderr, "nightshift pr: %v\n", out.err)
 		tally.fatal = true
 		return pendingFatal
 	}

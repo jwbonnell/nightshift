@@ -198,6 +198,20 @@ func (r *runner) ensureSandbox(ctx context.Context) error {
 	return nil
 }
 
+// ensureEgressUpFront allows the run's configured egress hosts once, before
+// the first change is processed, so an AllowNetwork failure (P12.3) fails
+// the run before any note — including a size-cap SKIPPED note — gets
+// written for that first change. A no-op when no egress host is
+// configured: claude's baseline sandbox needs nothing allowed, and
+// reviewOne's own lazy ensureSandbox call still creates the sandbox when
+// the first change actually needs it.
+func (r *runner) ensureEgressUpFront(ctx context.Context) error {
+	if len(r.opts.Settings.Egress) == 0 {
+		return nil
+	}
+	return r.ensureSandbox(ctx)
+}
+
 // rateLimitedOutcome records res's rate-limit (P12.4) in the shared usage-
 // limit marker and reports the reset time a caller should show.
 func (r *runner) rateLimitedOutcome(label string, res agent.Result) reviewOutcome {
