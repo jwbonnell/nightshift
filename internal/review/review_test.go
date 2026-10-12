@@ -559,56 +559,135 @@ func TestPRTransientRetryGetsFreshTimeout(t *testing.T) {
 	}
 }
 
+// TestPRRateLimitStopsPass covers both entry points: a rate limit on the
+// first review stops the rest of the pass, writes the shared usage-limit
+// marker, and exits 0 — never a failure.
 func TestPRRateLimitStopsPass(t *testing.T) {
-	homeDir := t.TempDir()
-	remote1, head1, base1 := makeRemote(t, "refs/merge-requests/%d/head", 1)
-	remote2, head2, base2 := makeRemote(t, "refs/merge-requests/%d/head", 2)
+	t.Run("explicit targets", func(t *testing.T) {
+		homeDir := t.TempDir()
+		remote1, head1, base1 := makeRemote(t, "refs/merge-requests/%d/head", 1)
+		remote2, head2, base2 := makeRemote(t, "refs/merge-requests/%d/head", 2)
 
-	repos := map[int]forge.Repo{1: {ID: 1, Path: "team/app", CloneURL: remote1}, 2: {ID: 2, Path: "team/other", CloneURL: remote2}}
-	changes := map[int]forge.Change{
-		1: testChange("First", "a", "main", head1, base1),
-		2: testChange("Second", "b", "main", head2, base2),
-	}
-	client := &fakeClient{
-		kind: forge.KindGitLab,
-		getFn: func(ctx context.Context, repo string, n int) (forge.Change, error) {
-			return changes[n], nil
-		},
-		getRepoFn: func(ctx context.Context, repo string) (forge.Repo, error) {
-			if repo == "team/app" {
-				return repos[1], nil
+		repos := map[int]forge.Repo{1: {ID: 1, Path: "team/app", CloneURL: remote1}, 2: {ID: 2, Path: "team/other", CloneURL: remote2}}
+		changes := map[int]forge.Change{
+			1: testChange("First", "a", "main", head1, base1),
+			2: testChange("Second", "b", "main", head2, base2),
+		}
+		client := &fakeClient{
+			kind: forge.KindGitLab,
+			getFn: func(ctx context.Context, repo string, n int) (forge.Change, error) {
+				return changes[n], nil
+			},
+			getRepoFn: func(ctx context.Context, repo string) (forge.Repo, error) {
+				if repo == "team/app" {
+					return repos[1], nil
+				}
+				return repos[2], nil
+			},
+		}
+
+		sb := &stubSandbox{available: true}
+		sb.execFn = func(ctx context.Context, call int, dir string, argv []string, stdin string) (string, error) {
+			return claudeRateLimitJSON(), nil
+		}
+
+		opts := baseOptions(t, homeDir, client, sb)
+		opts.Targets = []Target{
+			{Forge: forge.KindGitLab, Repo: "team/app", Number: 1},
+			{Forge: forge.KindGitLab, Repo: "team/other", Number: 2},
+		}
+		opts.Agent = mustAgent(t, opts.Settings.Selector)
+
+		rc := Run(opts)
+		if rc != 0 {
+			t.Fatalf("Run() = %d, want 0", rc)
+		}
+		if sb.execCalls != 1 {
+			t.Fatalf("execCalls = %d, want 1 (the pass must stop at the first rate limit)", sb.execCalls)
+		}
+		if client.getCalls != 1 {
+			t.Fatalf("Get calls = %d, want 1 (the second target must never be fetched)", client.getCalls)
+		}
+
+		marker := usagelimit.ReadActive(home.RunsDir(homeDir), opts.Now().Add(-time.Hour), false)
+		if marker == nil {
+			t.Fatalf("expected a usage-limit marker to be written")
+		}
+	})
+
+	t.Run("pending", func(t *testing.T) {
+		homeDir := t.TempDir()
+		remote1, head1, base1 := makeRemote(t, "refs/merge-requests/%d/head", 1)
+		remote2, head2, base2 := makeRemote(t, "refs/merge-requests/%d/head", 2)
+
+		repos := map[int]forge.Repo{1: {ID: 1, Path: "team/app", CloneURL: remote1}, 2: {ID: 2, Path: "team/other", CloneURL: remote2}}
+		changes := map[int]forge.Change{
+			1: testChange("First", "a", "main", head1, base1),
+			2: testChange("Second", "b", "main", head2, base2),
+		}
+		client := &fakeClient{
+			kind:          forge.KindGitLab,
+			currentUserFn: func(ctx context.Context) (string, error) { return "alice", nil },
+			listFn: func(ctx context.Context, user string) ([]forge.Listed, error) {
+				return []forge.Listed{
+					{RepoRef: "1", Label: "team/app", Number: 1, Title: "First", State: "open"},
+					{RepoRef: "2", Label: "team/other", Number: 2, Title: "Second", State: "open"},
+				}, nil
+			},
+			getFn: func(ctx context.Context, repo string, n int) (forge.Change, error) {
+				return changes[n], nil
+			},
+			getRepoFn: func(ctx context.Context, repo string) (forge.Repo, error) {
+				if repo == "1" {
+					return repos[1], nil
+				}
+				return repos[2], nil
+			},
+		}
+
+		sb := &stubSandbox{available: true}
+		sb.execFn = func(ctx context.Context, call int, dir string, argv []string, stdin string) (string, error) {
+			return claudeRateLimitJSON(), nil
+		}
+
+		opts := pendingOptions(t, homeDir, client, sb)
+		var stdout strings.Builder
+		opts.Stdout = &stdout
+
+		rc := Run(opts)
+		if rc != 0 {
+			t.Fatalf("Run() = %d, want 0", rc)
+		}
+		if sb.execCalls != 1 {
+			t.Fatalf("execCalls = %d, want 1 (the pass must stop at the first rate limit)", sb.execCalls)
+		}
+		if client.getCalls != 1 {
+			t.Fatalf("Get calls = %d, want 1 (the second change must never start)", client.getCalls)
+		}
+
+		marker := usagelimit.ReadActive(home.RunsDir(homeDir), opts.Now().Add(-time.Hour), false)
+		if marker == nil {
+			t.Fatalf("expected a usage-limit marker to be written")
+		}
+		resetAt, err := time.Parse(time.RFC3339, marker.ResetAt)
+		if err != nil {
+			t.Fatalf("parse marker.ResetAt: %v", err)
+		}
+		want := fmt.Sprintf("reviewed: 0 · skipped: 0 · failed: 0 · limited: until %s", resetAt.Local().Format("Mon 15:04"))
+		lines := strings.Split(strings.TrimRight(stdout.String(), "\n"), "\n")
+		if last := lines[len(lines)-1]; last != want {
+			t.Fatalf("last stdout line = %q, want %q", last, want)
+		}
+
+		logPath := filepath.Join(home.PRDir(homeDir), "logs", "failures.log")
+		if data, err := os.ReadFile(logPath); err == nil {
+			if len(data) > 0 {
+				t.Fatalf("failures.log = %q, want empty or absent", data)
 			}
-			return repos[2], nil
-		},
-	}
-
-	sb := &stubSandbox{available: true}
-	sb.execFn = func(ctx context.Context, call int, dir string, argv []string, stdin string) (string, error) {
-		return claudeRateLimitJSON(), nil
-	}
-
-	opts := baseOptions(t, homeDir, client, sb)
-	opts.Targets = []Target{
-		{Forge: forge.KindGitLab, Repo: "team/app", Number: 1},
-		{Forge: forge.KindGitLab, Repo: "team/other", Number: 2},
-	}
-	opts.Agent = mustAgent(t, opts.Settings.Selector)
-
-	rc := Run(opts)
-	if rc != 0 {
-		t.Fatalf("Run() = %d, want 0", rc)
-	}
-	if sb.execCalls != 1 {
-		t.Fatalf("execCalls = %d, want 1 (the pass must stop at the first rate limit)", sb.execCalls)
-	}
-	if client.getCalls != 1 {
-		t.Fatalf("Get calls = %d, want 1 (the second target must never be fetched)", client.getCalls)
-	}
-
-	marker := usagelimit.ReadActive(home.RunsDir(homeDir), opts.Now().Add(-time.Hour), false)
-	if marker == nil {
-		t.Fatalf("expected a usage-limit marker to be written")
-	}
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("stat failures.log: %v", err)
+		}
+	})
 }
 
 // TestPRLimitMarker covers the claude-only usage-limit marker's effect on
