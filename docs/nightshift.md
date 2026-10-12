@@ -117,7 +117,7 @@ Lints the draft (see `lint` below), then moves `specs/draft/<slug>.md` to
 `specs/ready/<slug>.md`. The lint output always prints before anything
 else. Any `FAIL` line refuses the move: `nightshift: <slug> failed lint —
 not moved to specs/ready/`, exit `1`, draft left untouched. `--no-verify`
-passes through to lint, skipping check 8. `--no-lint` restores the old
+passes through to lint, skipping check 9. `--no-lint` restores the old
 behavior exactly — only the `repo:`/`verify:`-non-empty check, no lint
 call at all — for when you already know the spec is fine and don't want
 to wait on a sandboxed verify run.
@@ -139,13 +139,21 @@ error.
 | 5 | `acceptance` | `## Acceptance criteria` has no `- [ ]` items | — |
 | 6 | `max_iter` | — | `max_iter` is less than tasks + 2 (no room for a planning iteration plus a retry) |
 | 7 | `base` | the spec's `base:` doesn't resolve in `repo:` | — |
-| 8 | `verify-on-base` | the verify command fails on the resolved base commit | — (skipped on `--no-verify`, or after a check 1/7 FAIL) |
+| 8 | `depends` | an unknown `depends_on` entry, or a self-dependency/cycle | an unsatisfied dependency (`waits on <d> (<state>)`) |
+| 9 | `verify-on-base` | the verify command fails on the resolved base commit | — (skipped on `--no-verify`, or after a check 1/7 FAIL) |
 
 Check 7 fetches `origin` first, best-effort, the same way `run` does — so
 a stale local `origin/main` doesn't make lint resolve and verify a
 different commit than a run would start from.
 
-Check 8 is the one that matters most: it's the only check that actually
+Check 8 builds a dependency graph from every spec's frontmatter across
+`specs/draft/`, `specs/ready/`, and `specs/done/`; a sibling spec whose
+frontmatter doesn't parse is skipped rather than hiding the others. It's
+`skip`ped (not run at all) when there's no `depends_on`. See [Multi-spec
+projects](#multi-spec-projects) for the exact FAIL/warn text and what each
+means.
+
+Check 9 is the one that matters most: it's the only check that actually
 runs your `verify:` command, inside a throwaway sandbox, against the
 exact commit a run would start from. A spec whose verify is already red
 on its base fails its first real iteration before any work happens, and
@@ -172,14 +180,18 @@ already exists. Run state under `runs/` is never touched or moved.
 ### `run <spec-name|path> [flags]` / `run --next [flags]`
 
 ```
-usage: nightshift run <spec-name|path> [--fresh [--yes]] [--max-iter N] [--until HH:MM] [--base REF] [--max-concurrent N] [--dry-run]
-       nightshift run --next [--until HH:MM] [--max-concurrent N] [--dry-run]
+usage: nightshift run <spec-name|path> [--fresh [--yes]] [--max-iter N] [--until HH:MM] [--base REF] [--max-concurrent N] [--ignore-deps] [--dry-run]
+       nightshift run --next [--until HH:MM] [--max-concurrent N] [--jobs N] [--dry-run]
   -base string
         branch/ref/sha the run starts from (default: spec base:/NIGHTSHIFT_BASE/origin HEAD)
   -dry-run
         resolve, validate, and print the plan; run nothing
   -fresh
         discard prior state for this spec and start over
+  -ignore-deps
+        skip dependency satisfaction and the integrated base
+  -jobs int
+        with --next, run up to N eligible specs at once (default: NIGHTSHIFT_JOBS/1, capped by max-concurrent) (default -1)
   -max-concurrent string
         max simultaneous runs (default: NIGHTSHIFT_MAX_CONCURRENT/2)
   -max-iter int
@@ -206,6 +218,11 @@ case-insensitively, so `DEMO`, `demo`, and `DEMO.MD` all find the same file.
 Resolving outside `specs/ready/` is refused: a path still in `specs/draft/`
 says so and names the `ready` command to fix it; anywhere else says `spec
 must live under <ready-dir> (got <path>)`.
+
+A spec with `depends_on:` won't run until each dependency is complete, and
+`--ignore-deps` skips that check and the integrated base it builds — see
+[Multi-spec projects](#multi-spec-projects) for the refusal text, the
+integrated base, `owns:`, and `--next --jobs N`.
 
 Re-running a spec that already completed with an unchanged hash is refused
 (`spec <slug> already completed on branch spec/<slug> — move it to
@@ -506,6 +523,7 @@ env > config > default.)
 | `review_model:` | `NIGHTSHIFT_REVIEW_MODEL` | `NIGHTSHIFT_REVIEW_MODEL` | `opus` |
 | `review_rounds:` | `NIGHTSHIFT_REVIEW_ROUNDS` | `NIGHTSHIFT_REVIEW_ROUNDS` | `0` |
 | — | — | `NIGHTSHIFT_MAX_CONCURRENT` | `2` |
+| — | — | `NIGHTSHIFT_JOBS` | `1` — capped by `NIGHTSHIFT_MAX_CONCURRENT`; see [Multi-spec projects](#multi-spec-projects) |
 | — | `NIGHTSHIFT_SBX_BIN` | `NIGHTSHIFT_SBX_BIN` | `sbx` |
 | — | `NIGHTSHIFT_CLAUDE_BIN` | `NIGHTSHIFT_CLAUDE_BIN` | `claude` |
 | — | `NIGHTSHIFT_OPENCODE_BIN` | `NIGHTSHIFT_OPENCODE_BIN` | `opencode` |
@@ -923,6 +941,211 @@ iterations that took, never the status itself.
 a live run (no fix round — it just writes a note) — see the
 [`review`](#review-slug---model-m---lens-ab) subcommand above for its
 preconditions, output, and exit codes.
+
+## Multi-spec projects
+
+A spec can declare `depends_on:` other specs and `owns:` the paths it may
+change, so a project that's naturally several specs — a shared contract,
+then backend and frontend work against it, then an integration pass —
+can be queued up front and run unattended over one or more nights. The
+runner only handles what's mechanical: ordering, merging dependency
+branches in, checking paths, and starting runs. Splitting the work into
+specs, and writing each spec's `owns:` narrowly enough that two specs
+never fight over the same files, is still up to you.
+
+### `depends_on` and `owns`
+
+Both are frontmatter-only — no flag, env var, or config equivalent.
+
+- `depends_on: a, b` — a comma list of other specs' slugs (trimmed,
+  deduplicated, order kept; each must pass the slug rule `new` already
+  enforces). This spec won't start until every one of them is complete,
+  and it starts from a base that already has their branches merged in
+  (below).
+- `owns: internal/api/, web/, go.mod` — a comma list of repo-relative
+  paths this spec may change. An entry ending in `/` is a directory
+  prefix; anything else is an exact file. Each entry must already be
+  clean (`filepath.Clean` of it, minus any trailing `/`, has to equal the
+  entry itself), relative, and contain no `..` — otherwise `ready`/`lint`
+  fail with `owns entry "<entry>": want a clean repo-relative path`. With
+  no `owns:`, a spec can touch anything, exactly as before.
+
+`ready`/`lint` also validate `depends_on` itself — see the `depends`
+check below — and both keys are on lint's frontmatter allow-list, so they
+never trip the `frontmatter: unknown key` warn.
+
+### The `depends` lint check
+
+`ready`/`lint` (check 8, between `base` and `verify-on-base`) builds a
+dependency graph from the frontmatter of every spec in `specs/draft/`,
+`specs/ready/`, and `specs/done/`; a sibling spec whose frontmatter
+doesn't parse is skipped and doesn't hide the others. For the spec being
+checked:
+
+| Situation | Result |
+|---|---|
+| no `depends_on` | `skip depends (no depends_on)` |
+| a dependency slug isn't any spec's slug | `FAIL depends: <slug> depends on <d>, which isn't in specs/draft, specs/ready or specs/done` |
+| a self-dependency or a cycle | `FAIL depends: dependency cycle: a -> b -> a` (the shortest cycle through this spec) |
+| a dependency exists but isn't complete | `warn depends: waits on <d> (<state>)` |
+| every dependency is complete | `ok depends` |
+
+So `ready` refuses to move a spec with an unknown dependency or a cycle
+into `specs/ready/`. `run` and `--next` run the same graph check before
+creating anything and fail with the same FAIL text.
+
+### Dependency satisfaction
+
+A dependency `d` is satisfied once `specs/done/d.md` exists, or its
+`run.json` status is `complete` — `blocked`, `red`, and `rate-limited`
+(or no run at all) all count as not satisfied.
+
+- `run <spec>` with an unsatisfied dependency refuses before creating
+  anything: `nightshift: <slug> waits on <d> (<state>) — run it first, or
+  pass --ignore-deps`, exit `1`, naming only the first unmet dependency.
+- `--ignore-deps` skips both the satisfaction check and the integrated
+  base below, and runs from the plain base exactly as a spec with no
+  `depends_on` would. Combining it with `--next` is a usage error (exit
+  `2`) — `--ignore-deps` is a per-spec override, not something a batch
+  pick should apply blindly.
+- `--next` silently skips a spec with an unsatisfied dependency when
+  choosing what to run; its `--dry-run` instead prints one line per
+  skipped spec, `skip  <slug>: waits on <d> (<state>)`.
+
+### The integrated base
+
+Once a spec's dependencies are satisfied, setup brings their work into
+the base before the first agent iteration, right after the plain base
+`B` is resolved:
+
+1. For each dependency, in `depends_on` order, its tip is
+   `refs/heads/spec/<d>` in the *source* repo. A dependency is skipped
+   here if that ref is gone (you merged it into your main branch and
+   deleted it) or if its tip is already an ancestor of the base.
+2. The needed tips are fetched into the clone the same way the base
+   commit already gets there — the clone still ends up with no remotes.
+3. A tip that descends from the current base fast-forwards, no merge
+   commit. Otherwise nightshift runs `git merge --no-ff -m "nightshift:
+   merge spec/<d> for <slug>" <tip>` in the clone, through the same
+   `-ctl` sandbox and git identity every other clone git operation uses.
+4. **A conflict** aborts the merge and ends the run `blocked` before any
+   agent iteration, with `QUESTION.md`:
+   `Merging the dependencies conflicts on <paths>. Merge them by hand on
+   a branch and set base:, or narrow their owns:.` (paths comma-joined,
+   at most 10). Fix it by hand on a branch, point `base:` at the result,
+   and re-run — or go back and narrow the dependencies' `owns:` so they
+   stop colliding.
+5. If anything was fast-forwarded or merged, verify runs once more, in a
+   fresh verify sandbox, against the combined result:
+   - **Red** ends the run `blocked`: `The dependencies merged cleanly but
+     verify is red on the combined base. Fix the dependency specs
+     first.`
+   - **Green** becomes this run's `run.json` `base` and `last_green` —
+     the agent's first iteration starts from a base it knows passes
+     verify.
+6. `run.json` also gets `dep_tips` (a `slug: sha` map of every dependency
+   actually applied) and `base_resolved` (the plain base `B`, before any
+   merge) — `status <slug>`'s own review command still uses `base`, so it
+   only ever shows this spec's own commits, not its dependencies'.
+
+Resuming a run recomputes every tip. If a recorded one moved, or a
+dependency added since the run started now has one, the resume refuses
+rather than silently re-merging: `nightshift: dependency <d> changed
+since this run started (<old> → <new>); re-run with --fresh` (short shas,
+`(none)` for a brand-new dependency) — state is left untouched.
+
+### Path ownership
+
+With `owns:` set, every iteration is checked once verify is green, before
+it's allowed to count as green. The changed paths are the files touched
+in `last_green..HEAD` plus anything `git status --porcelain
+--untracked-files=all` still shows (both sides of a rename) — the same
+mechanism the post-run porcelain check already uses. `PROGRESS.md`,
+`QUESTION.md`, `.spec-complete`, and `REVIEW.md` (when it exists) are
+always allowed, regardless of `owns:`. Any other path outside every
+`owns:` entry makes the iteration red exactly like a failed verify:
+runner.log gets `iter N changed paths outside owns: <first 5>[, +K
+more]`, PROGRESS.md gets `iteration <n> changed <paths> outside owns
+(<owns>) — it was reset; stay inside owns or stop and ask`, then the
+commit is reset to `last_green` and the red streak is charged. Dependency
+merges are part of the base, not a worker iteration, so they're never
+checked against `owns:`.
+
+### `run --next --jobs N`
+
+`--jobs N` runs up to N eligible specs side by side, starting a dependent
+the moment every one of its dependencies finishes — so a whole
+"contract → backend + frontend → integrate" project can run in one
+night. It's only valid with `--next`; `--jobs 0` or negative is a usage
+error (`--jobs %d: want 1 or more`, exit `2`). The count comes from the
+flag, else `NIGHTSHIFT_JOBS` (env, then config, then default `1`), capped
+by `max_concurrent` — so `--jobs 1` (or no flag at all) is exactly
+today's single `--next`.
+
+Each slot is a real child `nightshift run` process —
+`<nightshift binary> run <spec> [--until HH:MM] [--max-concurrent N]` with
+the parent's own values — not a goroutine, so each child keeps its own
+lock, signal handling, and exit code. Its stdout/stderr lines are copied
+to the parent's, prefixed `[<slug>] `. The scheduler loop: find eligible
+specs the way plain `--next` does, start children up to the count, and
+when one exits, record its slug/exit code/`run.json` status and look
+again — a spec started once in an invocation is never started again in
+it. A child that exits `busy` (7) is recorded as `busy` and not retried.
+It stops starting new children (but still waits for the ones already
+running) when nothing is eligible, the `--until` window has closed, the
+usage-limit marker is active, or the context is cancelled — a child that
+itself ends `rate-limited` writes that marker, so the next scheduler
+check sees it immediately.
+
+The first SIGINT/SIGTERM is forwarded to every running child, which each
+take their own `interrupted` path; the scheduler itself prints
+`nightshift: interrupt received — stopping <n> run(s) (press Ctrl+C again
+to force quit)` and starts nothing new. A second signal sends SIGKILL to
+every child and exits `130`, with no cleanup — same contract as a single
+run's second Ctrl+C.
+
+At the end it prints a table (`SLUG STATUS EXIT`, start order, same
+tabwriter settings as `status`) and `started <n> · complete <c> · other
+<o>`. Exit code: `7` if nothing was started; else `1` if any child exited
+`1`; else the interrupt's exit code if the scheduler was signalled; else
+`0`.
+
+`--jobs --dry-run` spawns and creates nothing — it prints `jobs: <n>
+(max_concurrent <m>)`, `would start: a, b` (eligible now, up to the
+count), then one `then: c (after a, b)` line per dependent that's exactly
+one round away, from the graph.
+
+### Status
+
+`status`'s `ready, not started:` trailer annotates a waiting spec, e.g.
+`b (waits on a), c`. `status <slug>` prints `depends_on`, `owns`,
+`dep_tips`, and `base_resolved` whenever they're set.
+
+### Worked example
+
+Four specs, run as `nightshift run --next --jobs 2` (or picked up by the
+nightly wrapper, which already runs `--next`):
+
+- `todo-contract` — no `depends_on`; defines the shared types/API shape.
+- `todo-api`, `depends_on: todo-contract`, `owns: internal/api/,
+  cmd/server/`.
+- `todo-web`, `depends_on: todo-contract`, `owns: web/`.
+- `todo-integrate`, `depends_on: todo-api, todo-web`, with an end-to-end
+  test as its `verify:`.
+
+`todo-contract` runs alone first (nothing else is eligible yet). Once it
+completes, `todo-api` and `todo-web` both become eligible and, with
+`--jobs 2`, start together — each gets `spec/todo-contract` merged into
+its base before its first iteration, and each is confined to its own
+`owns:`, so neither can touch the other's files even by accident.
+`todo-integrate` stays skipped (shown as `waits on todo-api`/`todo-web` in
+`--dry-run`) until both finish, then starts with both branches merged
+into its base, verified green before the agent sees it.
+
+Nightshift never merges any of these branches into your source repo's
+main branch — that stays a human step, same as a single spec today;
+`depends_on`/the integrated base only ever affect the *clone* a run works
+in.
 
 ## Concurrency
 

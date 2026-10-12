@@ -52,10 +52,16 @@ and clone management, `sandbox.go`/`prompt.go` the sbx backend and prompts,
 `loop.go` the Ralph loop, `result.go` the result note, `locks.go`/`next.go`/
 `specrun.go` the top-level `Run`/concurrency, `signal.go` D8 interrupts,
 `status.go` the `status` command, `lint.go` the `lint` checks and the
-`BaseVerifier` interface behind check 8's sandboxed verify-on-base) — see
+`BaseVerifier` interface behind check 9's sandboxed verify-on-base) — see
 `PROGRESS.md` (local, gitignored) for exactly how each piece arrived,
 including a few deliberate forward-declarations that got relocated once
-their target file existed.
+their target file existed. nightshift-deps added `deps.go` (the dependency
+graph and satisfaction) and `integrate.go` (the integrated base) to that
+same `specrun`-shaped split, plus `owns.go` (path-ownership checking) and
+`scheduler.go`/`jobs.go` (the `--jobs` scheduler and its config
+resolution) on top; `--jobs` children are separate `nightshift run`
+processes, never goroutines, so each keeps its own lock, signal handling,
+and exit code.
 
 `runner.log` (built in `state.go` via `logx.NewText`) is plain-text lines,
 `<date> <time> <LEVEL> <message>`, with no attrs and no source location —
