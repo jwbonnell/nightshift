@@ -93,6 +93,16 @@ func (c *fakeClient) ListReviewRequests(ctx context.Context, user string) ([]for
 	return c.listFn(ctx, user)
 }
 
+// sandboxCall is one call stubSandbox received, in the order it arrived —
+// unlike the per-method counters/slices below, which only track each
+// method on its own, this lets a test assert ordering across methods
+// (e.g. "allow before the first exec"). argv holds: create's {workDir,
+// agent}; allow's {host}; exec's the argv Exec was given.
+type sandboxCall struct {
+	method string
+	argv   []string
+}
+
 // stubSandbox implements Sandbox entirely in-process (no real sbx, no
 // fake binary), recording every call for assertions and letting tests
 // script Exec's behavior via execFn.
@@ -110,6 +120,8 @@ type stubSandbox struct {
 	stopCalls   int
 	removeCalls int
 
+	calls []sandboxCall
+
 	execFn func(ctx context.Context, call int, dir string, argv []string, stdin string) (string, error)
 }
 
@@ -118,11 +130,13 @@ func (s *stubSandbox) Available() bool { return s.available }
 func (s *stubSandbox) Create(ctx context.Context, workDir, sbxAgent string, env []string) error {
 	s.createCalls = append(s.createCalls, struct{ workDir, agent string }{workDir, sbxAgent})
 	s.createEnvs = append(s.createEnvs, env)
+	s.calls = append(s.calls, sandboxCall{method: "create", argv: []string{workDir, sbxAgent}})
 	return s.createErr
 }
 
 func (s *stubSandbox) AllowNetwork(ctx context.Context, hostName string, env []string) error {
 	s.allowCalls = append(s.allowCalls, hostName)
+	s.calls = append(s.calls, sandboxCall{method: "allow", argv: []string{hostName}})
 	if s.allowErr != nil {
 		if err, ok := s.allowErr[hostName]; ok {
 			return err
@@ -134,6 +148,7 @@ func (s *stubSandbox) AllowNetwork(ctx context.Context, hostName string, env []s
 func (s *stubSandbox) Exec(ctx context.Context, dir string, argv []string, stdin string, env []string, stderr io.Writer) (string, error) {
 	s.execCalls++
 	s.execEnvs = append(s.execEnvs, env)
+	s.calls = append(s.calls, sandboxCall{method: "exec", argv: append([]string(nil), argv...)})
 	if s.execFn != nil {
 		return s.execFn(ctx, s.execCalls, dir, argv, stdin)
 	}
@@ -271,37 +286,44 @@ func TestPRClaudeArgvGolden(t *testing.T) {
 
 	opts := baseOptions(t, homeDir, client, sb)
 	opts.Targets = []Target{{Forge: forge.KindGitLab, Repo: "team/app", Number: 12}}
+	opts.Settings.MaxTurns = 30 // default settings' --max-turns, per the spec
 	opts.Agent = mustAgent(t, opts.Settings.Selector)
 
 	if rc := Run(opts); rc != 0 {
 		t.Fatalf("Run() = %d, want 0", rc)
 	}
 
-	if len(sb.createCalls) != 1 || sb.createCalls[0].agent != "claude" {
-		t.Fatalf("create calls = %+v, want one claude create", sb.createCalls)
+	if len(sb.calls) != 2 {
+		t.Fatalf("calls = %+v, want exactly create then exec", sb.calls)
 	}
-	if sb.execCalls != 1 {
-		t.Fatalf("execCalls = %d, want 1", sb.execCalls)
+	if sb.calls[0].method != "create" || sb.calls[0].argv[1] != "claude" {
+		t.Fatalf("calls[0] = %+v, want a claude create", sb.calls[0])
+	}
+	if wantWorkDir := filepath.Join(home.PRDir(homeDir), "work"); sb.calls[0].argv[0] != wantWorkDir {
+		t.Fatalf("create workDir = %q, want %q", sb.calls[0].argv[0], wantWorkDir)
+	}
+	if sb.calls[1].method != "exec" {
+		t.Fatalf("calls[1] = %+v, want exec", sb.calls[1])
 	}
 
 	wantArgv := []string{
 		"claude", "-p",
 		"--output-format", "json",
 		"--model", "sonnet",
-		"--max-turns", "5",
+		"--max-turns", "30",
 		"--tools", "Read,Grep,Glob",
 		"--permission-mode", "dontAsk",
 		"--no-session-persistence",
 		"--setting-sources", "user",
 		"--disable-slash-commands",
 	}
-	gotArgv := opts.Agent.Argv(agent.Invocation{Role: agent.RoleReview, Model: "sonnet", ReadOnly: true, MaxTurns: 5, Hardened: true})
+	gotArgv := sb.calls[1].argv
 	if len(gotArgv) != len(wantArgv) {
-		t.Fatalf("argv = %q, want %q", gotArgv, wantArgv)
+		t.Fatalf("exec argv = %q, want %q", gotArgv, wantArgv)
 	}
 	for i := range wantArgv {
 		if gotArgv[i] != wantArgv[i] {
-			t.Fatalf("argv[%d] = %q, want %q (full: %q)", i, gotArgv[i], wantArgv[i], gotArgv)
+			t.Fatalf("exec argv[%d] = %q, want %q (full: %q)", i, gotArgv[i], wantArgv[i], gotArgv)
 		}
 	}
 
@@ -324,18 +346,52 @@ func TestPROpencodeReviewer(t *testing.T) {
 	opts := baseOptions(t, homeDir, client, sb)
 	opts.Targets = []Target{{Forge: forge.KindGitLab, Repo: "team/app", Number: 3}}
 	opts.Settings.Selector = agent.Selector{Agent: "opencode", Model: "opencode/longcat-2.5-preview-free"}
-	opts.Settings.Egress = []string{"opencode.ai"}
+	egress, err := resolveEgress(opts.Settings.Selector, func(string) string { return "" }, nil)
+	if err != nil {
+		t.Fatalf("resolveEgress: %v", err)
+	}
+	if len(egress) != 1 || egress[0] != "opencode.ai" {
+		t.Fatalf("resolveEgress = %v, want [opencode.ai]", egress)
+	}
+	opts.Settings.Egress = egress
 	opts.Agent = mustAgent(t, opts.Settings.Selector)
 
 	if rc := Run(opts); rc != 0 {
 		t.Fatalf("Run() = %d, want 0", rc)
 	}
 
-	if len(sb.createCalls) != 1 || sb.createCalls[0].agent != "opencode" {
-		t.Fatalf("create calls = %+v, want one opencode create", sb.createCalls)
+	allowIdx, execIdx := -1, -1
+	for i, c := range sb.calls {
+		switch c.method {
+		case "create":
+			if i != 0 || c.argv[1] != "opencode" {
+				t.Fatalf("calls[%d] = %+v, want the first call to be an opencode create", i, c)
+			}
+		case "allow":
+			if allowIdx == -1 {
+				allowIdx = i
+			}
+		case "exec":
+			if execIdx == -1 {
+				execIdx = i
+			}
+		}
 	}
-	if len(sb.allowCalls) != 1 || sb.allowCalls[0] != "opencode.ai" {
-		t.Fatalf("allow calls = %v, want [opencode.ai] before the first exec", sb.allowCalls)
+	if allowIdx == -1 || execIdx == -1 || allowIdx >= execIdx {
+		t.Fatalf("calls = %+v, want the policy allow call before the first exec", sb.calls)
+	}
+	if sb.calls[allowIdx].argv[0] != "opencode.ai" {
+		t.Fatalf("allow host = %q, want opencode.ai", sb.calls[allowIdx].argv[0])
+	}
+
+	execArgv := sb.calls[execIdx].argv
+	if len(execArgv) < 2 || execArgv[len(execArgv)-2] != "-m" || execArgv[len(execArgv)-1] != "opencode/longcat-2.5-preview-free" {
+		t.Fatalf("exec argv = %q, want it to end with -m opencode/longcat-2.5-preview-free", execArgv)
+	}
+	for _, a := range execArgv {
+		if strings.Contains(a, "Add feature") || strings.Contains(a, "carol") || strings.Contains(a, "VERDICT") {
+			t.Fatalf("exec argv = %q, contains prompt text", execArgv)
+		}
 	}
 
 	notePath := filepath.Join(home.ReviewsDir(homeDir), "team-app-mr3.md")
