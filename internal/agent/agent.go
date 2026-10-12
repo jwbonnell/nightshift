@@ -18,6 +18,12 @@ type Invocation struct {
 	Model    string
 	ReadOnly bool // reviewers: read and search tools only
 	MaxTurns int  // 0 = default; claude only
+
+	// Hardened, claude read-only only: the pinned nightshift pr argv,
+	// docs/reference/pensieve-mr-review.md §4.6, instead of nightshift
+	// review's own read-only argv. Ignored by opencode and by a non-
+	// read-only invocation.
+	Hardened bool
 }
 
 // Result is the information callers need from an agent's raw output,
@@ -25,6 +31,7 @@ type Invocation struct {
 type Result struct {
 	Found, IsError bool
 	APIStatus      int
+	Subtype        string // claude's "subtype" field; "" for opencode or when absent
 	Message        string // first line of the final text, cut to 200 chars
 	Text           string // the full final answer text
 	CostUSD        float64

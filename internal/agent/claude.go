@@ -20,8 +20,25 @@ func (claudeAgent) SbxAgent() string { return "claude" }
 
 // Argv returns today's exact argv for each role: a coding/planning
 // invocation runs with bypassPermissions, a read-only one (reviewers)
-// with a fixed read/search toolset and no permission-bypass flag.
+// with a fixed read/search toolset and no permission-bypass flag. A
+// read-only, Hardened invocation (nightshift pr) instead returns the
+// pinned reference argv byte for byte, including --max-turns
+// unconditionally.
 func (a claudeAgent) Argv(inv Invocation) []string {
+	if inv.ReadOnly && inv.Hardened {
+		return []string{
+			a.bin, "-p",
+			"--output-format", "json",
+			"--model", inv.Model,
+			"--max-turns", strconv.Itoa(inv.MaxTurns),
+			"--tools", "Read,Grep,Glob",
+			"--permission-mode", "dontAsk",
+			"--no-session-persistence",
+			"--setting-sources", "user",
+			"--disable-slash-commands",
+		}
+	}
+
 	argv := []string{a.bin, "-p", "--model", inv.Model}
 	if inv.ReadOnly {
 		argv = append(argv, "--tools", "Read,Grep,Glob", "--disallowedTools", "mcp__*", "--output-format", "json")
@@ -45,6 +62,7 @@ var rateLimitRe = regexp.MustCompile(`(?i)hit your .*limit`)
 // be told apart from one that's genuinely missing a result.
 type resultLine struct {
 	Type           *string  `json:"type"`
+	Subtype        string   `json:"subtype"`
 	IsError        bool     `json:"is_error"`
 	APIErrorStatus int      `json:"api_error_status"`
 	Result         *string  `json:"result"`
@@ -76,6 +94,7 @@ func (claudeAgent) Parse(out string) Result {
 			Found:     true,
 			IsError:   rl.IsError,
 			APIStatus: rl.APIErrorStatus,
+			Subtype:   rl.Subtype,
 			Message:   firstLineRunes(*rl.Result, 200),
 			Text:      *rl.Result,
 		}

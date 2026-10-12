@@ -144,6 +144,51 @@ func TestClaudeArgv(t *testing.T) {
 	}
 }
 
+// TestClaudeArgvHardened pins nightshift pr's argv (P12.2) byte for byte
+// against docs/reference/pensieve-mr-review.md §4.6, distinct from
+// nightshift review's own read-only argv (TestClaudeArgv, left unedited).
+func TestClaudeArgvHardened(t *testing.T) {
+	a := claudeAgent{bin: "claude"}
+
+	got := a.Argv(Invocation{Role: RoleReview, Model: "sonnet", ReadOnly: true, MaxTurns: 30, Hardened: true})
+	want := []string{
+		"claude", "-p",
+		"--output-format", "json",
+		"--model", "sonnet",
+		"--max-turns", "30",
+		"--tools", "Read,Grep,Glob",
+		"--permission-mode", "dontAsk",
+		"--no-session-persistence",
+		"--setting-sources", "user",
+		"--disable-slash-commands",
+	}
+	if !equalStrings(got, want) {
+		t.Errorf("hardened Argv = %q, want %q", got, want)
+	}
+
+	// Hardened without ReadOnly is ignored: a coding invocation stays the
+	// ordinary bypassPermissions argv.
+	code := a.Argv(Invocation{Role: RoleCode, Model: "sonnet", Hardened: true})
+	wantCode := []string{"claude", "-p", "--model", "sonnet", "--output-format", "json", "--permission-mode", "bypassPermissions"}
+	if !equalStrings(code, wantCode) {
+		t.Errorf("hardened-but-not-read-only Argv = %q, want %q", code, wantCode)
+	}
+}
+
+// TestClaudeParseSubtype asserts Parse fills Result.Subtype from the
+// wire "subtype" field (P8.5), empty when absent.
+func TestClaudeParseSubtype(t *testing.T) {
+	res := claudeAgent{}.Parse(`{"type":"result","subtype":"success","is_error":true,"result":"boom"}`)
+	if res.Subtype != "success" {
+		t.Errorf("Subtype = %q, want %q", res.Subtype, "success")
+	}
+
+	res2 := claudeAgent{}.Parse(`{"result":"no subtype here"}`)
+	if res2.Subtype != "" {
+		t.Errorf("Subtype = %q, want empty", res2.Subtype)
+	}
+}
+
 func equalStrings(got, want []string) bool {
 	if len(got) != len(want) {
 		return false
