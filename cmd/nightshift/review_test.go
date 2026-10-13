@@ -162,6 +162,90 @@ func TestReviewCommandNoCommits(t *testing.T) {
 	}
 }
 
+// gitIn runs a git command in dir, failing the test on error and
+// returning trimmed combined output.
+func gitIn(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func TestReviewCommandFallsBackToLastGreen(t *testing.T) {
+	slug := "demo"
+	homeDir, repo, _, headSHA := newReviewFixture(t, slug)
+	t.Setenv("NIGHTSHIFT_HOME", homeDir)
+
+	gitIn(t, repo, "merge", "-q", "--no-ff", "spec/"+slug, "-m", "merge")
+	gitIn(t, repo, "branch", "-D", "spec/"+slug)
+
+	rv := &recordingReviewer{text: "VERDICT: approve\nSUMMARY: looks good.\n"}
+	withStubReviewer(t, rv)
+
+	var stdout, stderr bytes.Buffer
+	exit := dispatch([]string{"review", slug}, &stdout, &stderr, strings.NewReader(""))
+	if exit != 0 {
+		t.Fatalf("exit=%d stderr=%s", exit, stderr.String())
+	}
+	wantLine := "review: spec/" + slug + " not found — reviewing last_green " + headSHA[:8]
+	if !strings.Contains(stderr.String(), wantLine) {
+		t.Fatalf("stderr = %q, want to contain %q", stderr.String(), wantLine)
+	}
+
+	matches, err := filepath.Glob(filepath.Join(home.ResultsDir(homeDir), slug+"-*-review.md"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("expected exactly one review note, got %v (err %v)", matches, err)
+	}
+	data, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatalf("read note: %v", err)
+	}
+	if !strings.Contains(string(data), "reviewed: "+headSHA[:8]+"\n") {
+		t.Fatalf("note missing reviewed: %s:\n%s", headSHA[:8], data)
+	}
+}
+
+func TestReviewCommandBranchAndCommitGone(t *testing.T) {
+	slug := "demo"
+	homeDir, repo, _, _ := newReviewFixture(t, slug)
+	t.Setenv("NIGHTSHIFT_HOME", homeDir)
+
+	gitIn(t, repo, "branch", "-D", "spec/"+slug)
+
+	missing := strings.Repeat("ab", 20)
+	dir := filepath.Join(home.RunsDir(homeDir), slug)
+	writeRunState(t, dir, map[string]any{
+		"slug": slug, "repo": repo, "branch": "spec/" + slug,
+		"base": missing, "base_ref": "main", "last_green": missing,
+		"iterations": 1, "commits": 1, "status": "complete",
+		"started": time.Now().Format(time.RFC3339),
+	})
+
+	rv := &recordingReviewer{text: "VERDICT: approve\n"}
+	withStubReviewer(t, rv)
+
+	var stdout, stderr bytes.Buffer
+	exit := dispatch([]string{"review", slug}, &stdout, &stderr, strings.NewReader(""))
+	if exit != 1 {
+		t.Fatalf("exit=%d, want 1; stdout=%s stderr=%s", exit, stdout.String(), stderr.String())
+	}
+	wantErr := "nothing to review: spec/" + slug + " is gone and last_green " + missing[:8] + " isn't in " + repo
+	if !strings.Contains(stderr.String(), wantErr) {
+		t.Fatalf("stderr = %q, want to contain %q", stderr.String(), wantErr)
+	}
+	if rv.calls != 0 {
+		t.Fatalf("reviewer should not have been called")
+	}
+	matches, err := filepath.Glob(filepath.Join(home.ResultsDir(homeDir), slug+"-*-review.md"))
+	if err != nil || len(matches) != 0 {
+		t.Fatalf("expected no review note, got %v (err %v)", matches, err)
+	}
+}
+
 func TestReviewCommandBusy(t *testing.T) {
 	slug := "demo"
 	homeDir, _, _, _ := newReviewFixture(t, slug)

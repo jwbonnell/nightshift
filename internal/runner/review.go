@@ -811,6 +811,18 @@ func Review(opts ReviewOptions) (Status, error) {
 		return StatusError, err
 	}
 
+	ref := reviewRefFor(&st, opts.Slug)
+	if _, verr := gitx.Run(st.Repo, "rev-parse", "--verify", ref+"^{commit}"); verr != nil {
+		if st.LastGreen == "" {
+			return StatusError, fmt.Errorf("nothing to review: %s is gone and last_green %s isn't in %s", ref, short(st.LastGreen), st.Repo)
+		}
+		if _, cerr := gitx.Run(st.Repo, "cat-file", "-e", st.LastGreen+"^{commit}"); cerr != nil {
+			return StatusError, fmt.Errorf("nothing to review: %s is gone and last_green %s isn't in %s", ref, short(st.LastGreen), st.Repo)
+		}
+		fmt.Fprintf(opts.Stderr, "review: %s not found — reviewing last_green %s\n", ref, short(st.LastGreen))
+		ref = st.LastGreen
+	}
+
 	rv := opts.Reviewer
 	if rv == nil {
 		rv = sbxReviewer{bin: opts.SbxBin, claudeBin: opts.ClaudeBin, slug: opts.Slug, opencodeBin: opts.OpencodeBin, opencodeConfig: opencodeCfg, egress: reviewEgress}
@@ -830,7 +842,7 @@ func Review(opts ReviewOptions) (Status, error) {
 		},
 		repo:     st.Repo,
 		base:     st.Base,
-		ref:      reviewRefFor(&st, opts.Slug),
+		ref:      ref,
 		specPath: specPath,
 		progress: progress,
 		summary: reviewSummary(st.Status, strconv.Itoa(st.Iterations), strconv.Itoa(st.Commits),
