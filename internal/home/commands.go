@@ -54,6 +54,8 @@ const commentedConfig = `# nightshift config file.
 # NIGHTSHIFT_REVIEW_MODEL=opus
 # fix rounds: hand a rejecting review back to the agent up to N times (0-5)
 # NIGHTSHIFT_REVIEW_ROUNDS=0
+# extra hosts the review sandbox may reach, comma-separated (opencode.ai is added for OpenCode Zen)
+# NIGHTSHIFT_REVIEW_EGRESS=
 
 # how long to wait out a usage limit with no usable reset time
 # NIGHTSHIFT_LIMIT_FALLBACK=60m

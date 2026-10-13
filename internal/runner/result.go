@@ -334,7 +334,7 @@ func (r *run) reviewer() Reviewer {
 	if r.opts.Reviewer != nil {
 		return r.opts.Reviewer
 	}
-	return sbxReviewer{bin: r.opts.SbxBin, claudeBin: r.opts.ClaudeBin, slug: r.spec.Slug, opencodeBin: r.opts.OpencodeBin, opencodeConfig: r.spec.OpencodeCfg}
+	return sbxReviewer{bin: r.opts.SbxBin, claudeBin: r.opts.ClaudeBin, slug: r.spec.Slug, opencodeBin: r.opts.OpencodeBin, opencodeConfig: r.spec.OpencodeCfg, egress: r.spec.ReviewEgress}
 }
 
 // runAutoReview runs the spec's automatic review (review: true, status

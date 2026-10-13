@@ -184,6 +184,7 @@ type sbxReviewer struct {
 	bin, claudeBin, slug string
 	opencodeBin          string
 	opencodeConfig       string // compacted JSON content, or "" if unset
+	egress               []string
 }
 
 func (rv sbxReviewer) name() string {
@@ -220,6 +221,12 @@ func (rv sbxReviewer) Review(ctx context.Context, ws, model, prompt string) (str
 		return "", fmt.Errorf("create: %w: %s", err, out)
 	}
 
+	for _, host := range dedupHosts(append(append([]string{}, agent.ProviderHosts(sel)...), rv.egress...)) {
+		if out, err := execStream(ctx, nil, io.Discard, rv.bin, "policy", "allow", "network", "--sandbox", name, host); err != nil {
+			return "", fmt.Errorf("allow network %s: %w: %s", host, err, out)
+		}
+	}
+
 	var stdout, stderr bytes.Buffer
 	args := append([]string{"exec", "-w", ws, name}, ag.Argv(inv)...)
 	err = execSplit(ctx, strings.NewReader(prompt), &stdout, &stderr, rv.bin, args...)
@@ -250,6 +257,43 @@ type reviewLimitError struct {
 }
 
 func (e *reviewLimitError) Error() string { return e.Message }
+
+// dedupHosts returns hosts with duplicates removed, first-seen order kept.
+func dedupHosts(hosts []string) []string {
+	seen := make(map[string]bool, len(hosts))
+	out := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		if seen[h] {
+			continue
+		}
+		seen[h] = true
+		out = append(out, h)
+	}
+	return out
+}
+
+// resolveReviewEgress resolves NIGHTSHIFT_REVIEW_EGRESS, the extra hosts a
+// review sandbox may reach beyond its reviewer's own ProviderHosts: env
+// wins over cfg, a comma list, trimmed, validated with
+// agent.ValidEgressHost, deduplicated in first-seen order.
+func resolveReviewEgress(getenv func(string) string, cfg map[string]string) ([]string, error) {
+	raw := getenv("NIGHTSHIFT_REVIEW_EGRESS")
+	if raw == "" {
+		raw = cfg["NIGHTSHIFT_REVIEW_EGRESS"]
+	}
+	var hosts []string
+	for _, part := range strings.Split(raw, ",") {
+		h := strings.TrimSpace(part)
+		if h == "" {
+			continue
+		}
+		if !agent.ValidEgressHost(h) {
+			return nil, fmt.Errorf("NIGHTSHIFT_REVIEW_EGRESS entry %q: want a host or host:port", h)
+		}
+		hosts = append(hosts, h)
+	}
+	return dedupHosts(hosts), nil
+}
 
 // firstBytes returns the first n bytes of s, unchanged if shorter.
 func firstBytes(s string, n int) string {
@@ -762,9 +806,14 @@ func Review(opts ReviewOptions) (Status, error) {
 		return StatusError, err
 	}
 
+	reviewEgress, err := resolveReviewEgress(os.Getenv, cfg)
+	if err != nil {
+		return StatusError, err
+	}
+
 	rv := opts.Reviewer
 	if rv == nil {
-		rv = sbxReviewer{bin: opts.SbxBin, claudeBin: opts.ClaudeBin, slug: opts.Slug, opencodeBin: opts.OpencodeBin, opencodeConfig: opencodeCfg}
+		rv = sbxReviewer{bin: opts.SbxBin, claudeBin: opts.ClaudeBin, slug: opts.Slug, opencodeBin: opts.OpencodeBin, opencodeConfig: opencodeCfg, egress: reviewEgress}
 	}
 
 	ctx, cancel := context.WithTimeout(opts.Ctx, iterTimeout)

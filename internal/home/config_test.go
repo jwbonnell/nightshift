@@ -121,7 +121,7 @@ func TestConfigAcceptsInterviewKeys(t *testing.T) {
 
 func TestConfigAcceptsReviewKeys(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config")
-	content := "NIGHTSHIFT_REVIEW=true\nNIGHTSHIFT_REVIEW_MODEL=sonnet\n"
+	content := "NIGHTSHIFT_REVIEW=true\nNIGHTSHIFT_REVIEW_MODEL=sonnet\nNIGHTSHIFT_REVIEW_EGRESS=a.lan,b.lan:8080\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -136,12 +136,18 @@ func TestConfigAcceptsReviewKeys(t *testing.T) {
 	if cfg["NIGHTSHIFT_REVIEW_MODEL"] != "sonnet" {
 		t.Fatalf("NIGHTSHIFT_REVIEW_MODEL = %q", cfg["NIGHTSHIFT_REVIEW_MODEL"])
 	}
+	if cfg["NIGHTSHIFT_REVIEW_EGRESS"] != "a.lan,b.lan:8080" {
+		t.Fatalf("NIGHTSHIFT_REVIEW_EGRESS = %q", cfg["NIGHTSHIFT_REVIEW_EGRESS"])
+	}
 
 	if !strings.Contains(commentedConfig, "# NIGHTSHIFT_REVIEW=false") {
 		t.Fatalf("commentedConfig missing NIGHTSHIFT_REVIEW line:\n%s", commentedConfig)
 	}
 	if !strings.Contains(commentedConfig, "# NIGHTSHIFT_REVIEW_MODEL=opus") {
 		t.Fatalf("commentedConfig missing NIGHTSHIFT_REVIEW_MODEL line:\n%s", commentedConfig)
+	}
+	if !strings.Contains(commentedConfig, "# NIGHTSHIFT_REVIEW_EGRESS=") {
+		t.Fatalf("commentedConfig missing NIGHTSHIFT_REVIEW_EGRESS line:\n%s", commentedConfig)
 	}
 }
 
