@@ -137,7 +137,7 @@ func TestReviewerWithOpencode(t *testing.T) {
 		t.Fatalf("text = %q", text)
 	}
 
-	const reviewPermission = `{"edit":"deny","bash":"deny","webfetch":"deny","websearch":"deny","task":"deny","external_directory":"deny"}`
+	const reviewPermission = `{"edit":"deny","bash":{"*":"deny"},"webfetch":"deny","websearch":"deny","task":"deny","external_directory":"deny"}`
 	got := readLog(t, logPath)
 	want := []string{
 		"rm -f nightshift-demo-review",
