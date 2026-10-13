@@ -282,7 +282,9 @@ NIGHTSHIFT_PR_MODEL=opencode/opencode/longcat-2.5-preview-free nightshift pr --p
 (`opencode models opencode` lists what's currently available.) When the
 selector names an OpenCode Zen model, `nightshift pr` automatically allows
 the review sandbox to reach `opencode.ai` (`sbx policy allow network
---sandbox <name> opencode.ai`), on top of anything in `NIGHTSHIFT_PR_EGRESS`
+--sandbox <name> opencode.ai`) — via the same `agent.ProviderHosts`
+helper `nightshift review`'s sandbox egress uses — on top of anything in
+`NIGHTSHIFT_PR_EGRESS`
 (a comma-separated list of extra `host`/`host:port` entries, for another
 opencode provider or a homelab model server). Claude needs no extra egress —
 the sandbox baseline already allows the Anthropic API. The policy is applied

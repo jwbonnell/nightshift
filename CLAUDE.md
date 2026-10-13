@@ -121,7 +121,11 @@ of stopping `rate-limited` — see the `run` subcommand section there.
   the agent's clone at all — only a fresh `--no-local` workspace built from
   the *source* repo, read-only `Read,Grep,Glob` tools, no permission-bypass
   flag — and its verdict can never change a run's status, exit code, or
-  history. See `docs/nightshift.md`'s Review section.)
+  history. An opencode reviewer's read-only tools are enforced the same
+  way via `OPENCODE_PERMISSION`, just with `bash` as a deny-all map
+  (`{"*":"deny"}`) rather than the bare string `"deny"`, so OpenCode's
+  free-tier check still accepts the request. See `docs/nightshift.md`'s
+  Review section.)
 - `nightshift pr` is entirely outside this trust model — it has no agent
   sandbox, no `-ctl` sandbox, and the bare clones it works from have no
   credentials in the remote URL or git config, and never get a git op run
