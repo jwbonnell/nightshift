@@ -9,7 +9,6 @@ package review
 
 import (
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -104,19 +103,11 @@ func intOrEmpty(n int) string {
 	return strconv.Itoa(n)
 }
 
-var egressHostRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$`)
-
 // resolveEgress builds the review sandbox's egress allow-list (P12.3):
 // opencode.ai for an OpenCode Zen model, then NIGHTSHIFT_PR_EGRESS's
 // entries, deduplicated in first-seen order.
 func resolveEgress(sel agent.Selector, getenv func(string) string, cfg map[string]string) ([]string, error) {
-	var hosts []string
-	if sel.Agent == "opencode" {
-		provider, _, _ := strings.Cut(sel.Model, "/")
-		if provider == "opencode" {
-			hosts = append(hosts, "opencode.ai")
-		}
-	}
+	hosts := append([]string{}, agent.ProviderHosts(sel)...)
 
 	raw := getenv("NIGHTSHIFT_PR_EGRESS")
 	if raw == "" {
@@ -127,7 +118,7 @@ func resolveEgress(sel agent.Selector, getenv func(string) string, cfg map[strin
 		if h == "" {
 			continue
 		}
-		if !egressHostRe.MatchString(h) {
+		if !agent.ValidEgressHost(h) {
 			return nil, fmt.Errorf("NIGHTSHIFT_PR_EGRESS entry %q: want a host or host:port", h)
 		}
 		hosts = append(hosts, h)

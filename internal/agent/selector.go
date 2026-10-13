@@ -7,6 +7,7 @@ package agent
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -59,4 +60,26 @@ func (sel Selector) Display() string {
 		return sel.Model
 	}
 	return sel.String()
+}
+
+// ProviderHosts returns the extra hosts a sandbox running sel's model
+// must reach beyond sbx's baseline allowlist. Only OpenCode Zen
+// (opencode/opencode/<model>) needs one today: opencode.ai.
+func ProviderHosts(sel Selector) []string {
+	if sel.Agent != "opencode" {
+		return nil
+	}
+	provider, _, _ := strings.Cut(sel.Model, "/")
+	if provider != "opencode" {
+		return nil
+	}
+	return []string{"opencode.ai"}
+}
+
+var egressHostRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$`)
+
+// ValidEgressHost reports whether h is an acceptable extra-egress entry:
+// a bare host, or host:port.
+func ValidEgressHost(h string) bool {
+	return egressHostRe.MatchString(h)
 }
