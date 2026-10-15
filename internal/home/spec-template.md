@@ -30,6 +30,10 @@ OPTIONAL frontmatter:
   egress:        comma-separated extra hosts the sandbox may reach, on top of the
                  default allowlist (Anthropic API + Go/npm/pypi/etc. registries),
                  e.g. "api.example.com,cdn.example.com"
+  image:         sbx image the agent, plan, and verify sandboxes start from (built
+                 FROM docker/sandbox-templates:claude-code, or the variant matching
+                 an opencode agent), e.g. "last-light-flutter:3.27.1"
+                                                      (default: the stock image)
   review:        run a sandboxed, read-only Claude review of the work when the run
                  ends complete, and record its verdict. Accepts true/false or a
                  comma list of lenses (general, requirements, quality, security,

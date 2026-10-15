@@ -172,6 +172,8 @@ shared objects), checks out the base SHA detached, drops the `origin`
 remote, and runs verify in a sandbox named `nightshift-lint-<slug>-
 verify` — distinct from a real run's `nightshift-<slug>-verify`, so
 linting a spec never collides with a run of the same spec in progress.
+That sandbox is created with `--template <image>` too, when the spec
+sets one — see [Custom sandbox images](#custom-sandbox-images).
 Both the clone and the sandbox are removed afterward, success or failure.
 `--no-verify` skips it outright (useful when `sbx` isn't available, or
 you just want the static checks); it's also skipped if the frontmatter
@@ -541,7 +543,7 @@ env > config > default.)
 | — | `NIGHTSHIFT_LIMIT_FALLBACK` | `NIGHTSHIFT_LIMIT_FALLBACK` | `60m` — wait when a usage-limit message has no parseable reset time |
 | — | `NIGHTSHIFT_LIMIT_MAX_WAIT` | `NIGHTSHIFT_LIMIT_MAX_WAIT` | `6h` — longest wait for a usage limit when no `--until` is set |
 | — | `NIGHTSHIFT_LIMIT_MAX_HITS` | `NIGHTSHIFT_LIMIT_MAX_HITS` | `3` — consecutive limit hits with no green iteration between before stopping anyway |
-| `repo:`, `verify:`, `egress:` | — | — | frontmatter only, required (`repo:`/`verify:`) |
+| `repo:`, `verify:`, `egress:`, `image:` | — | — | frontmatter only, required (`repo:`/`verify:`) |
 
 `model:`, `planner_model:`, and `review_model:` (and `--model` on
 `nightshift review`) each accept either a bare model name (always claude,
@@ -558,7 +560,9 @@ commented-out example so you always have the full list on hand.
 Frontmatter values get the same quote-stripping. `egress:` is a
 comma-separated list of extra hosts the sandbox may reach, on top of the
 baseline allowlist (the Anthropic API plus the usual language-package
-registries).
+registries). `image:` is the sbx image the agent, plan, and verify
+sandboxes start from instead of the stock image — see [Custom sandbox
+images](#custom-sandbox-images).
 
 ## Agents and models
 
@@ -703,6 +707,50 @@ or tamper with the result.
 the host, but only via `Lstat` + `O_NOFOLLOW` — an agent that replaces one
 with a symlink gets the link itself removed/ignored, never the symlink's
 target followed.
+
+### Custom sandbox images
+
+A spec can set `image:` to an sbx image reference, so a toolchain baked
+into that image (e.g. Flutter) is there for the agent to use and for
+`verify:` to run against — useful when `verify:` needs something the
+stock image doesn't have.
+
+It applies to the **agent** sandbox, the **plan** sandbox (when one
+exists), and the **verify** sandbox — each is created with
+`sbx create --template <image> ...` instead of the stock image. The
+**control** sandbox never gets it: it only runs git on the clone, has no
+need for the spec's toolchain, and keeping it on the stock image means
+one less thing to trust from a user-built image. `nightshift lint`'s
+verify-on-base check (check 9) also uses it, since that check runs
+`verify:` the same way a real run would. The review sandbox
+(`nightshift review` / auto review) and `nightshift pr`'s reviewer are
+separate features and always stay on the stock image.
+
+The verify sandbox is still recreated from that same clean image before
+*every* verify call, so the existing guarantee — nothing an iteration did
+to the toolchain carries forward — is unchanged; it just starts from your
+image instead of the stock one.
+
+The image must be built `FROM docker/sandbox-templates:claude-code` (or
+whichever variant's base matches an opencode agent, if the coding role
+resolves to opencode), then made available to sbx — pushed to a registry,
+or loaded locally:
+
+```
+docker build -t last-light-flutter:3.27.1 .
+docker image save last-light-flutter:3.27.1 -o last-light-flutter.tar
+sbx template load last-light-flutter.tar
+```
+
+Then reference it from the spec:
+
+```
+image: last-light-flutter:3.27.1
+```
+
+nightshift only passes the reference through to `sbx create --template`;
+it doesn't build, push, or validate that the image exists — an image
+that doesn't resolve surfaces as sbx's own error.
 
 ## Post-run checks
 
