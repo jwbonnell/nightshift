@@ -158,6 +158,9 @@ func printPlan(w io.Writer, opts Options, sp *Spec, maxConcurrent int, capSrc st
 	if len(sp.Egress) > 0 {
 		fmt.Fprintf(w, "egress+:     %s\n", strings.Join(sp.Egress, ", "))
 	}
+	if sp.Image != "" {
+		fmt.Fprintf(w, "image:       %s (agent, verify)\n", sp.Image)
+	}
 	fmt.Fprintf(w, "max_concurrent: %d (%s)\n", maxConcurrent, capSrc)
 	printHeldLocks(w, opts.StateRoot)
 	stateDir := stateDirFor(opts, sp)
@@ -177,13 +180,17 @@ func printPlan(w io.Writer, opts Options, sp *Spec, maxConcurrent int, capSrc st
 	hasCfg := sp.OpencodeCfgPath != ""
 
 	fmt.Fprintf(w, "\nsandboxes (agent=claude, ctl=git ops, verify=recreated fresh each verify):\n")
-	previews := []struct{ name, template string }{{sbx.agentName, sbx.codeTemplate}}
+	previews := []struct{ name, template, image string }{{sbx.agentName, sbx.codeTemplate, sp.Image}}
 	if sbx.planName != "" {
-		previews = append(previews, struct{ name, template string }{sbx.planName, sbx.planTemplate})
+		previews = append(previews, struct{ name, template, image string }{sbx.planName, sbx.planTemplate, sp.Image})
 	}
-	previews = append(previews, struct{ name, template string }{sbx.ctlName, "claude"})
+	previews = append(previews, struct{ name, template, image string }{sbx.ctlName, "claude", ""})
 	for _, p := range previews {
-		fmt.Fprintf(w, "  %s create --name %s %s %s/repo\n", opts.SbxBin, p.name, p.template, stateDir)
+		tmpl := ""
+		if p.image != "" {
+			tmpl = "--template " + p.image + " "
+		}
+		fmt.Fprintf(w, "  %s create --name %s %s%s %s/repo\n", opts.SbxBin, p.name, tmpl, p.template, stateDir)
 		for _, h := range sp.Egress {
 			fmt.Fprintf(w, "  %s policy allow network --sandbox %s %s\n", opts.SbxBin, p.name, h)
 		}
@@ -197,8 +204,12 @@ func printPlan(w io.Writer, opts Options, sp *Spec, maxConcurrent int, capSrc st
 		fmt.Fprintf(w, "  %s stop %s   # kill the plan agent before verify\n", opts.SbxBin, sbx.planName)
 	}
 	fmt.Fprintf(w, "git ops (per iteration, in the ctl sandbox):\n  %s exec -w %s/repo %s git ...\n", opts.SbxBin, stateDir, sbx.ctlName)
-	fmt.Fprintf(w, "verify (per iteration, in a freshly recreated sandbox):\n  %s rm -f %s && %s create --name %s claude %s/repo\n  %s exec -w %s/repo %s sh -c %q\n",
-		opts.SbxBin, sbx.verifyName, opts.SbxBin, sbx.verifyName, stateDir, opts.SbxBin, stateDir, sbx.verifyName, sp.Verify)
+	verifyTmpl := ""
+	if sp.Image != "" {
+		verifyTmpl = "--template " + sp.Image + " "
+	}
+	fmt.Fprintf(w, "verify (per iteration, in a freshly recreated sandbox):\n  %s rm -f %s && %s create --name %s %sclaude %s/repo\n  %s exec -w %s/repo %s sh -c %q\n",
+		opts.SbxBin, sbx.verifyName, opts.SbxBin, sbx.verifyName, verifyTmpl, stateDir, opts.SbxBin, stateDir, sbx.verifyName, sp.Verify)
 	fmt.Fprintf(w, "\n--- planning prompt ---\n%s\n", buildPrompt(sp, true))
 	fmt.Fprintf(w, "\n--- iteration prompt ---\n%s\n", buildPrompt(sp, false))
 }

@@ -58,6 +58,7 @@ type sbxSandbox struct {
 	bin, claudeBin, agentName, planName, ctlName, verifyName, mountDir string
 	codeTemplate, planTemplate                                         string
 	egress                                                             []string
+	image                                                              string
 	created                                                            bool
 }
 
@@ -98,10 +99,22 @@ func (s *sbxSandbox) Available() bool {
 	return err == nil
 }
 
-// mk creates sandbox name from template mounting s.mountDir, then allows
-// egress to each of s.egress, one host per call.
-func (s *sbxSandbox) mk(name, template string) error {
-	out, err := execStream(context.Background(), nil, io.Discard, s.bin, "create", "--name", name, template, s.mountDir)
+// createArgs builds the "sbx create" argv: --template <image> is inserted
+// before the agent template, but only when image is non-empty, so a spec
+// with no image produces byte-identical argv to before this field existed.
+func createArgs(name, image, template, dir string) []string {
+	args := []string{"create", "--name", name}
+	if image != "" {
+		args = append(args, "--template", image)
+	}
+	return append(args, template, dir)
+}
+
+// mk creates sandbox name from template mounting s.mountDir (adding
+// --template image when image is non-empty), then allows egress to each
+// of s.egress, one host per call.
+func (s *sbxSandbox) mk(name, image, template string) error {
+	out, err := execStream(context.Background(), nil, io.Discard, s.bin, createArgs(name, image, template, s.mountDir)...)
 	if err != nil {
 		return fmt.Errorf("sbx create %s: %v: %s", name, err, out)
 	}
@@ -141,16 +154,16 @@ func (s *sbxSandbox) Create(mountDir string, egress []string) error {
 
 	_, _ = execStream(context.Background(), nil, io.Discard, s.bin, append([]string{"rm", "-f"}, s.rmNames()...)...)
 
-	if err := s.mk(s.agentName, s.codeTemplate); err != nil {
+	if err := s.mk(s.agentName, s.image, s.codeTemplate); err != nil {
 		return err
 	}
 	if s.planName != "" {
-		if err := s.mk(s.planName, s.planTemplate); err != nil {
+		if err := s.mk(s.planName, s.image, s.planTemplate); err != nil {
 			_, _ = execStream(context.Background(), nil, io.Discard, s.bin, "rm", "-f", s.agentName)
 			return err
 		}
 	}
-	if err := s.mk(s.ctlName, "claude"); err != nil {
+	if err := s.mk(s.ctlName, "", "claude"); err != nil {
 		rm := []string{"rm", "-f", s.agentName}
 		if s.planName != "" {
 			rm = append(rm, s.planName)
@@ -208,7 +221,7 @@ func (s *sbxSandbox) Git(ctx context.Context, args ...string) (string, error) {
 
 func (s *sbxSandbox) ResetVerify() error {
 	_, _ = execStream(context.Background(), nil, io.Discard, s.bin, "rm", "-f", s.verifyName)
-	return s.mk(s.verifyName, "claude")
+	return s.mk(s.verifyName, s.image, "claude")
 }
 
 func (s *sbxSandbox) RunVerify(ctx context.Context, verifyCmd string) (string, error) {
@@ -234,12 +247,13 @@ type sbxBaseVerifier struct {
 	bin, name string
 }
 
-// Verify creates a fresh sandbox mounting dir, allows egress to each
-// host, runs cmd in it, and always removes the sandbox afterward — even
-// when create or exec fails — via a deferred cleanup registered right
-// after the leading best-effort "rm -f", on its own timeout so it still
-// runs if ctx is what failed.
-func (v sbxBaseVerifier) Verify(ctx context.Context, dir string, egress []string, cmd string) (string, error) {
+// Verify creates a fresh sandbox mounting dir (adding --template image
+// when image is non-empty), allows egress to each host, runs cmd in it,
+// and always removes the sandbox afterward — even when create or exec
+// fails — via a deferred cleanup registered right after the leading
+// best-effort "rm -f", on its own timeout so it still runs if ctx is what
+// failed.
+func (v sbxBaseVerifier) Verify(ctx context.Context, dir string, egress []string, image, cmd string) (string, error) {
 	_, _ = execStream(context.Background(), nil, io.Discard, v.bin, "rm", "-f", v.name)
 	defer func() {
 		cctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
@@ -247,7 +261,7 @@ func (v sbxBaseVerifier) Verify(ctx context.Context, dir string, egress []string
 		_, _ = execStream(cctx, nil, io.Discard, v.bin, "rm", "-f", v.name)
 	}()
 
-	if out, err := execStream(context.Background(), nil, io.Discard, v.bin, "create", "--name", v.name, "claude", dir); err != nil {
+	if out, err := execStream(context.Background(), nil, io.Discard, v.bin, createArgs(v.name, image, "claude", dir)...); err != nil {
 		return out, fmt.Errorf("create: %w", err)
 	}
 	for _, host := range egress {

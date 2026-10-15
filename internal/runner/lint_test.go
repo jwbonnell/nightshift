@@ -17,11 +17,11 @@ import (
 // check-8 test; sbxBaseVerifier (the real sbx implementation) lands in a
 // follow-up commit and is tested separately.
 type stubVerifier struct {
-	fn func(ctx context.Context, dir string, egress []string, cmd string) (string, error)
+	fn func(ctx context.Context, dir string, egress []string, image, cmd string) (string, error)
 }
 
-func (s stubVerifier) Verify(ctx context.Context, dir string, egress []string, cmd string) (string, error) {
-	return s.fn(ctx, dir, egress, cmd)
+func (s stubVerifier) Verify(ctx context.Context, dir string, egress []string, image, cmd string) (string, error) {
+	return s.fn(ctx, dir, egress, image, cmd)
 }
 
 // fullSpecBody is a clean spec body with all six sections, 2 tasks and 1
@@ -163,6 +163,24 @@ func TestLintAllowsReviewRounds(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), `unknown key "review_rounds"`) {
 		t.Fatalf("output unexpectedly warns about review_rounds:\n%s", buf.String())
+	}
+}
+
+func TestLintAllowsImage(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeLintSpec(t, home.DraftDir(homeDir), "demo", "image: foo:1\n", repo, fullSpecBody)
+
+	var buf bytes.Buffer
+	res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", NoVerify: true, Stdout: &buf})
+	if err != nil {
+		t.Fatalf("Lint: %v", err)
+	}
+	if res.Warns != 0 {
+		t.Fatalf("expected no warns, got %+v\n%s", res, buf.String())
+	}
+	if strings.Contains(buf.String(), `unknown key "image"`) {
+		t.Fatalf("output unexpectedly warns about image:\n%s", buf.String())
 	}
 }
 
@@ -547,7 +565,7 @@ func TestLintVerifyOnBasePass(t *testing.T) {
 	writeLintSpec(t, home.DraftDir(homeDir), "demo", "", repo, fullSpecBody)
 
 	called := false
-	verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, cmd string) (string, error) {
+	verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, image, cmd string) (string, error) {
 		called = true
 		return "all good", nil
 	}}
@@ -568,6 +586,26 @@ func TestLintVerifyOnBasePass(t *testing.T) {
 	}
 }
 
+func TestLintVerifyOnBasePassesImage(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeLintSpec(t, home.DraftDir(homeDir), "demo", "image: foo:1\n", repo, fullSpecBody)
+
+	var captured string
+	verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, image, cmd string) (string, error) {
+		captured = image
+		return "ok", nil
+	}}
+
+	var buf bytes.Buffer
+	if _, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", Verifier: verifier, Stdout: &buf}); err != nil {
+		t.Fatalf("Lint: %v", err)
+	}
+	if captured != "foo:1" {
+		t.Fatalf("verifier saw image = %q, want %q", captured, "foo:1")
+	}
+}
+
 func TestLintVerifyOnBaseFailShowsTail(t *testing.T) {
 	repo := newSourceRepo(t)
 	homeDir := t.TempDir()
@@ -578,7 +616,7 @@ func TestLintVerifyOnBaseFailShowsTail(t *testing.T) {
 		lines = append(lines, fmt.Sprintf("line %d", i))
 	}
 	out := strings.Join(lines, "\n")
-	verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, cmd string) (string, error) {
+	verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, image, cmd string) (string, error) {
 		return out, fmt.Errorf("exit status 1")
 	}}
 
@@ -625,7 +663,7 @@ func TestLintVerifyRunsAtBaseNotHead(t *testing.T) {
 	writeLintSpec(t, home.DraftDir(homeDir), "demo", "base: "+baseSHA+"\n", repo, fullSpecBody)
 
 	var got string
-	verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, cmd string) (string, error) {
+	verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, image, cmd string) (string, error) {
 		data, rerr := os.ReadFile(filepath.Join(dir, "file.txt"))
 		if rerr != nil {
 			return "", rerr
@@ -649,7 +687,7 @@ func TestLintTempCloneRemoved(t *testing.T) {
 	writeLintSpec(t, home.DraftDir(homeDir), "demo", "", repo, fullSpecBody)
 
 	var capturedDir string
-	verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, cmd string) (string, error) {
+	verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, image, cmd string) (string, error) {
 		capturedDir = dir
 		return "ok", nil
 	}}
@@ -681,7 +719,7 @@ func TestLintSkipsVerifyAfterEarlierFailure(t *testing.T) {
 		}
 
 		called := false
-		verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, cmd string) (string, error) {
+		verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, image, cmd string) (string, error) {
 			called = true
 			return "", nil
 		}}
@@ -852,7 +890,7 @@ func TestLintVerifyInterrupted(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	var capturedDir string
-	verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, cmd string) (string, error) {
+	verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, image, cmd string) (string, error) {
 		capturedDir = dir
 		cancel()
 		return "some output", context.Canceled
@@ -906,7 +944,7 @@ func TestLintSweepsStaleTempDirs(t *testing.T) {
 		t.Fatalf("chtimes young: %v", err)
 	}
 
-	verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, cmd string) (string, error) {
+	verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, image, cmd string) (string, error) {
 		return "ok", nil
 	}}
 

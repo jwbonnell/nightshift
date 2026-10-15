@@ -110,3 +110,76 @@ func TestDryRunShowsLensesAndRounds(t *testing.T) {
 		t.Fatalf("line after usage limit: = %q, want %q", lines[idx+2], want)
 	}
 }
+
+func TestDryRunShowsImage(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "demo", "image: last-light-flutter:3.27.1\n", repo)
+
+	opts := Options{
+		SpecArg:   "demo",
+		Home:      homeDir,
+		StateRoot: home.RunsDir(homeDir),
+		SbxBin:    "sbx",
+		ClaudeBin: "claude",
+	}
+	sp, err := resolveSpec(opts)
+	if err != nil {
+		t.Fatalf("resolveSpec: %v", err)
+	}
+	sha, err := resolveBase(sp.Repo, sp.Base)
+	if err != nil {
+		t.Fatalf("resolveBase: %v", err)
+	}
+	sp.BaseSHA = sha
+
+	var buf strings.Builder
+	printPlan(&buf, opts, sp, 2, "default")
+	out := buf.String()
+
+	mountDir := stateDirFor(opts, sp) + "/repo"
+	for _, want := range []string{
+		"image:       last-light-flutter:3.27.1 (agent, verify)",
+		"  sbx create --name nightshift-demo --template last-light-flutter:3.27.1 claude " + mountDir,
+		"  sbx create --name nightshift-demo-ctl claude " + mountDir,
+		"  sbx rm -f nightshift-demo-verify && sbx create --name nightshift-demo-verify --template last-light-flutter:3.27.1 claude " + mountDir,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("dry-run output missing %q\nfull output:\n%s", want, out)
+		}
+	}
+}
+
+func TestDryRunNoImageOmitsLineAndTemplate(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "demo", "", repo)
+
+	opts := Options{
+		SpecArg:   "demo",
+		Home:      homeDir,
+		StateRoot: home.RunsDir(homeDir),
+		SbxBin:    "sbx",
+		ClaudeBin: "claude",
+	}
+	sp, err := resolveSpec(opts)
+	if err != nil {
+		t.Fatalf("resolveSpec: %v", err)
+	}
+	sha, err := resolveBase(sp.Repo, sp.Base)
+	if err != nil {
+		t.Fatalf("resolveBase: %v", err)
+	}
+	sp.BaseSHA = sha
+
+	var buf strings.Builder
+	printPlan(&buf, opts, sp, 2, "default")
+	out := buf.String()
+
+	if strings.Contains(out, "image:") {
+		t.Fatalf("dry-run output should not contain an image: line without image:\n%s", out)
+	}
+	if strings.Contains(out, "--template") {
+		t.Fatalf("dry-run output should not contain --template without image:\n%s", out)
+	}
+}

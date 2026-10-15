@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jwbonnell/nightshift/internal/agent"
 	"github.com/jwbonnell/nightshift/internal/gitx"
@@ -41,6 +42,7 @@ type Spec struct {
 	MaxIter      int
 	IterTimeout  time.Duration
 	Egress       []string
+	Image        string // sbx --template for agent/plan/verify sandboxes; empty means the stock image
 	Review       bool
 	Lenses       []string // review lens names, in frontmatter order; empty when Review is false
 	ReviewRounds int
@@ -384,7 +386,7 @@ func resolveSpec(opts Options) (*Spec, error) {
 // calls this directly on a draft or ready path). Validation order
 // matches the reference: repo, base NAME (not yet resolved to a sha —
 // that's resolveBase, called later by the caller), verify, model,
-// planner, max_iter, iter_timeout, review, review_model, egress.
+// planner, max_iter, iter_timeout, review, review_model, egress, image.
 func resolveSpecFile(opts Options, path string) (*Spec, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -484,6 +486,11 @@ func resolveSpecFile(opts Options, path string) (*Spec, error) {
 		}
 	}
 
+	image := fmVal("image")
+	if strings.IndexFunc(image, unicode.IsSpace) >= 0 || strings.HasPrefix(image, "-") {
+		return nil, fmt.Errorf("image %q: want an image reference with no whitespace, not starting with '-'", image)
+	}
+
 	dependsOn, err := parseDependsOn(fm["depends_on"])
 	if err != nil {
 		return nil, err
@@ -522,6 +529,7 @@ func resolveSpecFile(opts Options, path string) (*Spec, error) {
 		MaxIter:         maxIter,
 		IterTimeout:     iterTimeout,
 		Egress:          egress,
+		Image:           image,
 		Review:          review,
 		Lenses:          lenses,
 		ReviewRounds:    reviewRounds,

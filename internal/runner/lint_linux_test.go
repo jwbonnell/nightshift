@@ -22,7 +22,7 @@ func TestLintTempCloneNotHardlinked(t *testing.T) {
 	writeLintSpec(t, home.DraftDir(homeDir), "demo", "", repo, fullSpecBody)
 
 	checked := false
-	verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, cmd string) (string, error) {
+	verifier := stubVerifier{fn: func(ctx context.Context, dir string, egress []string, image, cmd string) (string, error) {
 		objects := filepath.Join(dir, ".git", "objects")
 		err := filepath.Walk(objects, func(path string, fi os.FileInfo, walkErr error) error {
 			if walkErr != nil || fi.IsDir() {
