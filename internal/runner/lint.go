@@ -37,7 +37,7 @@ type LintResult struct{ Fails, Warns int }
 // BaseVerifier runs a spec's verify command, mounting dir, in a fresh
 // verify sandbox and returns its combined output.
 type BaseVerifier interface {
-	Verify(ctx context.Context, dir string, egress []string, cmd string) (string, error)
+	Verify(ctx context.Context, dir string, egress []string, image, cmd string) (string, error)
 }
 
 // allowedFrontmatterKeys are the keys lint does not warn about (check 1).
@@ -433,7 +433,7 @@ func checkVerifyOnBase(o LintOptions, sp *Spec, baseSHA string, res *LintResult)
 	ctx, cancel := context.WithTimeout(base, sp.IterTimeout)
 	defer cancel()
 
-	out, err := verifier.Verify(ctx, clone, sp.Egress, sp.Verify)
+	out, err := verifier.Verify(ctx, clone, sp.Egress, sp.Image, sp.Verify)
 	if err != nil {
 		if o.Ctx != nil && o.Ctx.Err() != nil {
 			lintLine(o.Stdout, "FAIL", "verify-on-base: interrupted")

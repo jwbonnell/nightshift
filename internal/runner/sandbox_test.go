@@ -443,6 +443,37 @@ func TestSbxBaseVerifierArgv(t *testing.T) {
 			t.Fatalf("last argv entry = %q, want final cleanup %q", last, "rm -f "+name)
 		}
 	})
+
+	t.Run("with image", func(t *testing.T) {
+		bin, logPath := newFakeSbx(t)
+
+		repo := newSourceRepo(t)
+		homeDir := t.TempDir()
+		writeLintSpec(t, home.DraftDir(homeDir), "demo", "image: foo:1\n", repo, fullSpecBody)
+
+		var buf bytes.Buffer
+		res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", SbxBin: bin, Stdout: &buf})
+		if err != nil {
+			t.Fatalf("Lint: %v", err)
+		}
+		if res.Fails != 0 {
+			t.Fatalf("res = %+v, want zero fails\n%s", res, buf.String())
+		}
+
+		name := "nightshift-lint-demo-verify"
+		got := readLog(t, logPath)
+		want := "create --name " + name + " --template foo:1 claude"
+		found := false
+		for _, line := range got {
+			if strings.HasPrefix(line, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("argv = %q, want a line with prefix %q", got, want)
+		}
+	})
 }
 
 func TestSbxBaseVerifierMissingBinary(t *testing.T) {

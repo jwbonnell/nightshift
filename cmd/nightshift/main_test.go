@@ -542,7 +542,7 @@ func writeFullDraftSpec(t *testing.T, homeDir, slug, repo string, brokenSections
 // sbx binary on PATH.
 type stubVerifier struct{}
 
-func (stubVerifier) Verify(ctx context.Context, dir string, egress []string, cmd string) (string, error) {
+func (stubVerifier) Verify(ctx context.Context, dir string, egress []string, image, cmd string) (string, error) {
 	return "", nil
 }
 

@@ -247,12 +247,13 @@ type sbxBaseVerifier struct {
 	bin, name string
 }
 
-// Verify creates a fresh sandbox mounting dir, allows egress to each
-// host, runs cmd in it, and always removes the sandbox afterward — even
-// when create or exec fails — via a deferred cleanup registered right
-// after the leading best-effort "rm -f", on its own timeout so it still
-// runs if ctx is what failed.
-func (v sbxBaseVerifier) Verify(ctx context.Context, dir string, egress []string, cmd string) (string, error) {
+// Verify creates a fresh sandbox mounting dir (adding --template image
+// when image is non-empty), allows egress to each host, runs cmd in it,
+// and always removes the sandbox afterward — even when create or exec
+// fails — via a deferred cleanup registered right after the leading
+// best-effort "rm -f", on its own timeout so it still runs if ctx is what
+// failed.
+func (v sbxBaseVerifier) Verify(ctx context.Context, dir string, egress []string, image, cmd string) (string, error) {
 	_, _ = execStream(context.Background(), nil, io.Discard, v.bin, "rm", "-f", v.name)
 	defer func() {
 		cctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
@@ -260,7 +261,7 @@ func (v sbxBaseVerifier) Verify(ctx context.Context, dir string, egress []string
 		_, _ = execStream(cctx, nil, io.Discard, v.bin, "rm", "-f", v.name)
 	}()
 
-	if out, err := execStream(context.Background(), nil, io.Discard, v.bin, "create", "--name", v.name, "claude", dir); err != nil {
+	if out, err := execStream(context.Background(), nil, io.Discard, v.bin, createArgs(v.name, image, "claude", dir)...); err != nil {
 		return out, fmt.Errorf("create: %w", err)
 	}
 	for _, host := range egress {
