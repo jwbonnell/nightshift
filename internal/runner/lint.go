@@ -46,7 +46,7 @@ var allowedFrontmatterKeys = map[string]bool{
 	"repo": true, "verify": true, "model": true, "planner_model": true,
 	"max_iter": true, "iter_timeout": true, "base": true, "egress": true,
 	"review": true, "review_model": true, "review_rounds": true,
-	"depends_on": true, "owns": true,
+	"depends_on": true, "owns": true, "image": true,
 }
 
 // requiredSections is the check-2 FAIL list, in spec order.

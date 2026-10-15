@@ -166,6 +166,24 @@ func TestLintAllowsReviewRounds(t *testing.T) {
 	}
 }
 
+func TestLintAllowsImage(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeLintSpec(t, home.DraftDir(homeDir), "demo", "image: foo:1\n", repo, fullSpecBody)
+
+	var buf bytes.Buffer
+	res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", NoVerify: true, Stdout: &buf})
+	if err != nil {
+		t.Fatalf("Lint: %v", err)
+	}
+	if res.Warns != 0 {
+		t.Fatalf("expected no warns, got %+v\n%s", res, buf.String())
+	}
+	if strings.Contains(buf.String(), `unknown key "image"`) {
+		t.Fatalf("output unexpectedly warns about image:\n%s", buf.String())
+	}
+}
+
 func TestLintSections(t *testing.T) {
 	repo := newSourceRepo(t)
 

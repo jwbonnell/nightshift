@@ -541,6 +541,46 @@ func TestFrontmatterMismatchedQuotesKept(t *testing.T) {
 	}
 }
 
+func TestImageFrontmatter(t *testing.T) {
+	repo := newSourceRepo(t)
+
+	cases := []struct {
+		fm   string
+		want string
+	}{
+		{"", ""},
+		{"image: last-light-flutter:3.27.1\n", "last-light-flutter:3.27.1"},
+		{"image: docker.io/me/img:v1\n", "docker.io/me/img:v1"},
+		{`image: "quoted:1"` + "\n", "quoted:1"},
+	}
+	for _, c := range cases {
+		homeDir := t.TempDir()
+		writeReadySpec(t, homeDir, "demo", c.fm, repo)
+
+		sp, err := resolveSpec(Options{SpecArg: "demo", Home: homeDir})
+		if err != nil {
+			t.Fatalf("fm=%q: resolveSpec: %v", c.fm, err)
+		}
+		if sp.Image != c.want {
+			t.Fatalf("fm=%q: Image = %q, want %q", c.fm, sp.Image, c.want)
+		}
+	}
+}
+
+func TestImageInvalid(t *testing.T) {
+	repo := newSourceRepo(t)
+
+	for _, bad := range []string{"-x", "a b"} {
+		homeDir := t.TempDir()
+		writeReadySpec(t, homeDir, "demo", "image: "+bad+"\n", repo)
+
+		_, err := resolveSpec(Options{SpecArg: "demo", Home: homeDir})
+		if err == nil || !strings.Contains(err.Error(), "image") {
+			t.Fatalf("image=%q: err = %v, want error naming image", bad, err)
+		}
+	}
+}
+
 func TestUppercaseMDSpec(t *testing.T) {
 	repo := newSourceRepo(t)
 	homeDir := t.TempDir()
