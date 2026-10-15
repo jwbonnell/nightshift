@@ -407,7 +407,9 @@ func runLocked(opts Options, sp *Spec, limit int, capSrc string, specLock *lock.
 		if err != nil {
 			return StatusError, err
 		}
-		sb = newSbxSandboxAgents(opts.SbxBin, sp.Slug, codeAg, planAg)
+		real := newSbxSandboxAgents(opts.SbxBin, sp.Slug, codeAg, planAg)
+		real.image = sp.Image
+		sb = real
 	}
 	if !sb.Available() {
 		return StatusError, fmt.Errorf("Docker Sandboxes (%s) is not available — install it and run `sbx setup`; the agent is never run on the host", opts.SbxBin)

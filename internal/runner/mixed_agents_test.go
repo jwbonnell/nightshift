@@ -96,6 +96,39 @@ func TestMixedAgentsPlanCreateFailureRemovesAgent(t *testing.T) {
 	}
 }
 
+// TestSbxImageArgv covers D2 (spec `image:`): with sb.image set, the
+// agent, -plan and verify sandboxes are created with "--template <image>"
+// before their agent template, but the -ctl sandbox never gets it.
+func TestSbxImageArgv(t *testing.T) {
+	claudeAg := mustAgent(t, agent.Selector{Agent: "claude"}, agent.Settings{ClaudeBin: "claude"})
+	opencodeAg := mustAgent(t, agent.Selector{Agent: "opencode", Model: "openai/gpt-5"}, agent.Settings{OpencodeBin: "opencode"})
+
+	bin, logPath := newFakeSbx(t)
+	mountDir := "/mnt/demo/repo"
+
+	sb := newSbxSandboxAgents(bin, "demo", opencodeAg, claudeAg)
+	sb.image = "foo:1"
+	if err := sb.Create(mountDir, nil); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := sb.ResetVerify(); err != nil {
+		t.Fatalf("ResetVerify: %v", err)
+	}
+
+	got := readLog(t, logPath)
+	want := []string{
+		"rm -f nightshift-demo nightshift-demo-plan nightshift-demo-ctl nightshift-demo-verify",
+		"create --name nightshift-demo --template foo:1 opencode " + mountDir,
+		"create --name nightshift-demo-plan --template foo:1 claude " + mountDir,
+		"create --name nightshift-demo-ctl claude " + mountDir,
+		"rm -f nightshift-demo-verify",
+		"create --name nightshift-demo-verify --template foo:1 claude " + mountDir,
+	}
+	if !equalLines(got, want) {
+		t.Fatalf("argv =\n%v\nwant\n%v (ctl must never get --template)", got, want)
+	}
+}
+
 // TestSameAgentOneSandbox mirrors TestClaudeArgvGolden's sandbox
 // sequence exactly, but builds the sbxSandbox via newSbxSandboxAgents
 // (as runner wiring now always does) instead of newSbxSandbox directly.
