@@ -772,7 +772,8 @@ func TestJobsStopsAtUntil(t *testing.T) {
 	}
 }
 
-// TestJobsDryRun: `--next --jobs N --dry-run` prints the jobs plan —
+// TestJobsDryRun: `--next --jobs N --dry-run` prints the leading "skip"
+// lines for specs excluded by an unmet dependency, then the jobs plan —
 // what would start now, and what starts in the round right after — and
 // spawns or creates nothing.
 func TestJobsDryRun(t *testing.T) {
@@ -807,9 +808,62 @@ func TestJobsDryRun(t *testing.T) {
 		t.Fatalf("--jobs --dry-run must not create state: %v", serr)
 	}
 
-	want := "jobs: 2 (max_concurrent 2)\nwould start: a, b\nthen: c (after a, b)\n"
+	want := "skip  c: waits on a (not started)\njobs: 2 (max_concurrent 2)\nwould start: a, b\nthen: c (after a, b)\n"
 	if stdout.String() != want {
 		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+	}
+}
+
+// TestNextDryRunOneSlot: at the default job count (1), `--next --dry-run`
+// prints the waiting-spec skip lines, the jobs/would-start/then lines, and
+// then the full single-spec plan for the one candidate that would start —
+// in that order — and still creates and spawns nothing.
+func TestNextDryRunOneSlot(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "a", "", repo)
+	writeReadySpec(t, homeDir, "b", "depends_on: a\n", repo)
+	writeReadySpec(t, homeDir, "c", "depends_on: z\n", repo)
+	stateRoot := home.RunsDir(homeDir)
+
+	var stdout strings.Builder
+	opts := Options{
+		Next: true, DryRun: true, Home: homeDir, StateRoot: stateRoot,
+		Stdout: &stdout, Stderr: io.Discard, Stdin: strings.NewReader(""),
+		Spawn: func(ctx context.Context, args []string, stdout, stderr *linePrefixWriter) (Waiter, error) {
+			return nil, fmt.Errorf("--dry-run must never spawn a child")
+		},
+	}
+	status, err := Run(opts)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if status != statusDryRun {
+		t.Fatalf("status = %v, want dry-run", status)
+	}
+	if _, serr := os.Stat(filepath.Join(stateRoot, "a", "run.json")); !os.IsNotExist(serr) {
+		t.Fatalf("--next --dry-run must not create state: %v", serr)
+	}
+
+	out := stdout.String()
+	idx := func(s string) int {
+		i := strings.Index(out, s)
+		if i < 0 {
+			t.Fatalf("stdout missing %q; full output:\n%s", s, out)
+		}
+		return i
+	}
+	skipB := idx("skip  b: waits on a (not started)\n")
+	skipC := idx("skip  c: waits on z (not started)\n")
+	jobsLine := idx("jobs: 1 (max_concurrent 2)\n")
+	wouldStart := idx("would start: a\n")
+	then := idx("then: b (after a)\n")
+	plan := idx("slug:        a\n")
+
+	for i, pair := range [][2]int{{skipB, jobsLine}, {skipC, jobsLine}, {jobsLine, wouldStart}, {wouldStart, then}, {then, plan}} {
+		if pair[0] >= pair[1] {
+			t.Fatalf("pair %d out of order; full output:\n%s", i, out)
+		}
 	}
 }
 

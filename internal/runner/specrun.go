@@ -236,26 +236,24 @@ func Run(opts Options) (Status, error) {
 		if err != nil {
 			return StatusError, err
 		}
-		if jobs > 1 {
-			if err := printJobsDryRun(opts, jobs, limit); err != nil {
-				return StatusError, err
-			}
-			return statusDryRun, nil
-		}
-	}
-	if opts.Next {
-		next, waits, err := selectNext(opts)
+		cands, waits, err := selectNextCandidates(opts)
 		if err != nil {
 			return StatusError, err
 		}
 		for _, w := range waits {
 			fmt.Fprintf(opts.Stdout, "skip  %s: waits on %s (%s)\n", w.slug, w.dep, w.state)
 		}
-		if next == "" {
+		if err := printJobsDryRun(opts, jobs, limit); err != nil {
+			return StatusError, err
+		}
+		if jobs > 1 {
+			return statusDryRun, nil
+		}
+		if len(cands) == 0 {
 			fmt.Fprint(opts.Stdout, "no eligible spec in specs/ready/ — nothing to do\n")
 			return statusNothing, nil
 		}
-		opts.SpecArg = next
+		opts.SpecArg = cands[0].path
 	}
 
 	sp, err := resolveSpec(opts)
