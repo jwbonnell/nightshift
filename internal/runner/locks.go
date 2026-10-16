@@ -24,10 +24,6 @@ func slotLockPath(stateRoot string, n int) string {
 	return filepath.Join(stateRoot, ".locks", fmt.Sprintf("slot-%d.lock", n))
 }
 
-func nextLockPath(stateRoot string) string {
-	return filepath.Join(stateRoot, ".locks", "next.lock")
-}
-
 // repoHash is a stable 12-hex-char id for repoPath's git-common-dir, used
 // to name its repo lock file. Worktrees and symlinked repo paths that
 // share a git dir canonicalize to the same hash.

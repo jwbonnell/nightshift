@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/jwbonnell/nightshift/internal/agent"
@@ -207,8 +206,6 @@ func resolveCap(opts Options) (int, string, error) {
 	return defaultMaxConcurrent, "default", nil
 }
 
-var nextLockWait = 10 * time.Second
-
 // Run resolves and runs (or dry-runs, or selects via --next) one spec per
 // opts, returning its terminal Status. See reference §3.5.1.
 func Run(opts Options) (Status, error) {
@@ -289,77 +286,6 @@ func Run(opts Options) (Status, error) {
 		return StatusError, err
 	}
 
-	return runLocked(opts, sp, limit, capSrc, specLock)
-}
-
-// runNext is the real (non-dry-run) --next path: it holds the selection
-// lock only while picking a winner among the eligible, not-already-
-// running candidates, then hands off to runLocked.
-func runNext(opts Options, limit int, capSrc string) (Status, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), nextLockWait)
-	defer cancel()
-	nl, err := lock.Acquire(ctx, nextLockPath(opts.StateRoot), "next")
-	if err != nil {
-		return StatusError, fmt.Errorf("--next: could not take the selection lock: %w", err)
-	}
-
-	if running := runningSlots(opts.StateRoot, limit); len(running) >= limit {
-		fmt.Fprintf(opts.Stderr, "no free slot (max_concurrent=%d, %s): %s running\n", limit, capSrc, joinOrNone(running))
-		nl.Release()
-		return StatusBusy, nil
-	}
-
-	cands, _, err := selectNextCandidates(opts)
-	if err != nil {
-		nl.Release()
-		return StatusError, err
-	}
-	if len(cands) == 0 {
-		fmt.Fprint(opts.Stdout, "no eligible spec in specs/ready/ — nothing to do\n")
-		nl.Release()
-		return statusNothing, nil
-	}
-
-	var winner *nextCandidate
-	var specLock *lock.Lock
-	var skipped []string
-	for i := range cands {
-		c := cands[i]
-		if _, held := lock.Probe(specLockPath(opts.StateRoot, c.slug)); held {
-			skipped = append(skipped, c.slug)
-			continue
-		}
-		l, aerr := lock.TryAcquire(specLockPath(opts.StateRoot, c.slug), c.slug)
-		if aerr == nil {
-			winner = &c
-			specLock = l
-			break
-		}
-		var heldErr *lock.HeldError
-		if errors.As(aerr, &heldErr) {
-			skipped = append(skipped, c.slug)
-			continue
-		}
-		nl.Release()
-		return StatusError, aerr
-	}
-	nl.Release()
-
-	if specLock == nil {
-		fmt.Fprintf(opts.Stdout, "no eligible spec — already running: %s\n", strings.Join(skipped, ", "))
-		return statusNothing, nil
-	}
-
-	opts.SpecArg = winner.path
-	sp, err := resolveSpec(opts)
-	if err != nil {
-		specLock.Release()
-		return StatusError, err
-	}
-	if err := checkDeps(opts, sp); err != nil {
-		specLock.Release()
-		return StatusError, err
-	}
 	return runLocked(opts, sp, limit, capSrc, specLock)
 }
 
