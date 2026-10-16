@@ -473,40 +473,12 @@ func TestNextSkipsTerminalUnchanged(t *testing.T) {
 	}
 }
 
-func TestNextSkipsRunning(t *testing.T) {
-	repo := newSourceRepo(t)
-	homeDir := t.TempDir()
-	writeReadySpec(t, homeDir, "a", "created: 2026-01-01T00:00:00Z\n", repo)
-	writeReadySpec(t, homeDir, "b", "created: 2026-01-02T00:00:00Z\n", repo)
-	stateRoot := home.RunsDir(homeDir)
-
-	aLock, err := lock.TryAcquire(specLockPath(stateRoot, "a"), "a")
-	if err != nil {
-		t.Fatalf("TryAcquire: %v", err)
-	}
-	defer aLock.Release()
-
-	sb := newStubSandbox()
-	sb.agent = completingAgent(t)
-	sb.verify = alwaysGreenVerify
-
-	opts := Options{
-		Next: true, Home: homeDir, StateRoot: stateRoot, Sandbox: sb,
-		Stdout: io.Discard, Stderr: io.Discard, Stdin: strings.NewReader(""), Notifier: noopNotifierForTest{},
-	}
-	status, err := Run(opts)
-	if err != nil || status != StatusComplete {
-		t.Fatalf("status=%v err=%v, want Complete/nil", status, err)
-	}
-	if !dirExists(filepath.Join(stateRoot, "b")) {
-		t.Fatalf("expected b to have been picked and run")
-	}
-	if dirExists(filepath.Join(stateRoot, "a")) {
-		t.Fatalf("a should never have been touched (it was 'running')")
-	}
-}
-
-func TestNextNoFreeSlot(t *testing.T) {
+// TestRunNoFreeSlot covers runLocked's own "no free slot ... running"
+// message on a direct `run <spec>` (no --next) when every concurrency
+// slot is already held — the scheduler has no equivalent of this
+// precheck (it relies on runLocked's slot acquisition when it spawns a
+// direct child), so this is the only remaining coverage for the message.
+func TestRunNoFreeSlot(t *testing.T) {
 	repo := newSourceRepo(t)
 	homeDir := t.TempDir()
 	writeReadySpec(t, homeDir, "a", "", repo)
@@ -524,39 +496,13 @@ func TestNextNoFreeSlot(t *testing.T) {
 	defer l2.Release()
 
 	var stderr bytes.Buffer
-	opts := Options{Next: true, Home: homeDir, StateRoot: stateRoot, Stdout: io.Discard, Stderr: &stderr, Stdin: strings.NewReader("")}
+	opts := Options{SpecArg: "a", Home: homeDir, StateRoot: stateRoot, Stdout: io.Discard, Stderr: &stderr, Stdin: strings.NewReader("")}
 	status, err := Run(opts)
 	if status != StatusBusy || err != nil {
 		t.Fatalf("status=%v err=%v, want Busy/nil", status, err)
 	}
 	if !strings.Contains(stderr.String(), "x") || !strings.Contains(stderr.String(), "y") {
 		t.Fatalf("stderr missing running labels: %q", stderr.String())
-	}
-}
-
-// TestNextOnlyCandidateRunning: a free slot exists, but the only eligible
-// candidate is itself already running elsewhere — --next finds nothing
-// (not busy), naming it.
-func TestNextOnlyCandidateRunning(t *testing.T) {
-	repo := newSourceRepo(t)
-	homeDir := t.TempDir()
-	writeReadySpec(t, homeDir, "a", "", repo)
-	stateRoot := home.RunsDir(homeDir)
-
-	aLock, err := lock.TryAcquire(specLockPath(stateRoot, "a"), "a")
-	if err != nil {
-		t.Fatalf("TryAcquire: %v", err)
-	}
-	defer aLock.Release()
-
-	var stdout bytes.Buffer
-	opts := Options{Next: true, Home: homeDir, StateRoot: stateRoot, Stdout: &stdout, Stderr: io.Discard, Stdin: strings.NewReader("")}
-	status, err := Run(opts)
-	if status != statusNothing || err != nil {
-		t.Fatalf("status=%v err=%v, want nothing-eligible/nil", status, err)
-	}
-	if !strings.Contains(stdout.String(), "already running: a") {
-		t.Fatalf("stdout missing the running candidate's name: %q", stdout.String())
 	}
 }
 
@@ -640,23 +586,22 @@ func TestNextSkipsWaiting(t *testing.T) {
 		writeReadySpec(t, homeDir, "b", "created: 2026-01-02T00:00:00Z\ndepends_on: a\n", repo)
 		stateRoot := home.RunsDir(homeDir)
 
-		sb := newStubSandbox()
-		sb.agent = completingAgent(t)
-		sb.verify = alwaysGreenVerify
+		// a ends non-complete (red), so b — gated on a — stays waiting and
+		// is never started in this invocation.
+		scripts := map[string]childScript{"a": {exit: 3, runStatus: "red"}}
+		var calls []string
+		var callsMu sync.Mutex
+		spawn := fakeSchedulerSpawner(t, stateRoot, scripts, &calls, &callsMu)
 
 		opts := Options{
-			Next: true, Home: homeDir, StateRoot: stateRoot, Sandbox: sb,
-			Stdout: io.Discard, Stderr: io.Discard, Stdin: strings.NewReader(""), Notifier: noopNotifierForTest{},
+			Next: true, Home: homeDir, StateRoot: stateRoot,
+			Stdout: io.Discard, Stderr: io.Discard, Stdin: strings.NewReader(""), Spawn: spawn,
 		}
-		status, err := Run(opts)
-		if err != nil || status != StatusComplete {
-			t.Fatalf("status=%v err=%v, want Complete/nil", status, err)
+		if _, err := Run(opts); err != nil {
+			t.Fatalf("Run: %v", err)
 		}
-		if !dirExists(filepath.Join(stateRoot, "a")) {
-			t.Fatalf("expected a to have been picked and run")
-		}
-		if dirExists(filepath.Join(stateRoot, "b")) {
-			t.Fatalf("b should never have been touched (it is waiting on a)")
+		if len(calls) != 1 || calls[0] != "a" {
+			t.Fatalf("calls = %v, want exactly [a]", calls)
 		}
 	})
 
@@ -732,17 +677,31 @@ func TestUppercaseMDSpecFullRun(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(home.ReadyDir(homeDir), "DEMO.MD"), []byte(content), 0o644); err != nil {
 			t.Fatalf("write spec: %v", err)
 		}
+		stateRoot := home.RunsDir(homeDir)
 
-		sb := newStubSandbox()
-		sb.agent = completingAgent(t)
-		sb.verify = alwaysGreenVerify
-		opts := Options{
-			Next: true, Home: homeDir, Sandbox: sb,
-			Stdout: io.Discard, Stderr: io.Discard, Stdin: strings.NewReader(""), Notifier: noopNotifierForTest{},
+		var calls [][]string
+		var callsMu sync.Mutex
+		spawn := func(_ context.Context, args []string, stdout, stderr *linePrefixWriter) (Waiter, error) {
+			callsMu.Lock()
+			calls = append(calls, args)
+			callsMu.Unlock()
+			return &scriptedChildWaiter{t: t, stateRoot: stateRoot, slug: slugFromRunArgs(args), sc: childScript{exit: 0, runStatus: "complete"}}, nil
 		}
-		status, err := Run(opts)
-		if err != nil || status != StatusComplete {
-			t.Fatalf("status=%v err=%v, want Complete/nil", status, err)
+		opts := Options{
+			Next: true, Home: homeDir, StateRoot: stateRoot,
+			Stdout: io.Discard, Stderr: io.Discard, Stdin: strings.NewReader(""), Spawn: spawn,
+		}
+		if _, err := Run(opts); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if len(calls) != 1 {
+			t.Fatalf("calls = %v, want exactly one spawn", calls)
+		}
+		if !strings.HasSuffix(calls[0][1], "DEMO.MD") {
+			t.Fatalf("calls[0] = %v, want args[1] to end in DEMO.MD", calls[0])
+		}
+		if got := slugFromRunArgs(calls[0]); got != "DEMO" {
+			t.Fatalf("slugFromRunArgs(calls[0]) = %q, want DEMO", got)
 		}
 	})
 }

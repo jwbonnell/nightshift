@@ -115,8 +115,8 @@ type jobsResult struct {
 // message and gets printed by the child process, not the scheduler.
 const schedulerInterruptMessageFmt = "nightshift: interrupt received — stopping %d run(s) (press Ctrl+C again to force quit)\n"
 
-// runJobs is the `run --next --jobs N` scheduler (D-j), for N already
-// resolved to > 1 (N<=1 is runNext, unchanged). It starts up to jobs
+// runJobs is the `run --next` scheduler (D-j): every non-dry-run --next
+// invocation routes here, at any job count. It starts up to jobs
 // eligible specs at once as child "nightshift run <path>" processes,
 // starting dependents as their dependencies finish, never starting the
 // same spec twice in this invocation, and stops starting new work once

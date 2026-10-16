@@ -229,9 +229,6 @@ func Run(opts Options) (Status, error) {
 		if err != nil {
 			return StatusError, err
 		}
-		if jobs <= 1 {
-			return runNext(opts, limit, capSrc)
-		}
 		return runJobs(opts, limit, capSrc, jobs)
 	}
 	if opts.Next && opts.DryRun {

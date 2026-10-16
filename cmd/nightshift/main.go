@@ -663,10 +663,11 @@ func cmdRun(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 		return 1
 	}
 
-	// NewSchedulerInterruptContext is safe to use unconditionally here: when
-	// --jobs resolves to <=1 (including plain `run`/`run --next`), runJobs
-	// never runs and so never calls registerForceKill — a second signal
-	// then behaves exactly like NewInterruptContext's, same as today.
+	// NewSchedulerInterruptContext is safe to use unconditionally here: a
+	// plain `run <spec>` (no --next) never calls runJobs and so never calls
+	// registerForceKill — a second signal then behaves exactly like
+	// NewInterruptContext's, same as today. Every `run --next` invocation,
+	// at any job count, does go through runJobs.
 	ctx, stop, registerForceKill := runner.NewSchedulerInterruptContext()
 	defer stop()
 

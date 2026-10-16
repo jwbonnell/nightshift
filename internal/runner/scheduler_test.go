@@ -128,34 +128,138 @@ func (w *scriptedChildWaiter) Wait() error {
 func (w *scriptedChildWaiter) Pid() int                   { return 0 }
 func (w *scriptedChildWaiter) Signal(sig os.Signal) error { return nil }
 
-// TestJobsOneIsNext: with the effective jobs count at its default of 1,
-// `run --next` must behave exactly like it did before --jobs existed —
-// never touching Options.Spawn at all.
-func TestJobsOneIsNext(t *testing.T) {
+// concurrencyTrackingSpawner wraps inner, counting how many of its Waiters
+// are outstanding (spawned but not yet Wait()-returned) at once, recording
+// the high-water mark in max. Used to prove a one-slot --next run never
+// has two children in flight together.
+func concurrencyTrackingSpawner(inner Spawner, cur, max *int64) Spawner {
+	return func(ctx context.Context, args []string, stdout, stderr *linePrefixWriter) (Waiter, error) {
+		w, err := inner(ctx, args, stdout, stderr)
+		if err != nil {
+			return w, err
+		}
+		n := atomic.AddInt64(cur, 1)
+		for {
+			m := atomic.LoadInt64(max)
+			if n <= m {
+				break
+			}
+			if atomic.CompareAndSwapInt64(max, m, n) {
+				break
+			}
+		}
+		return &concurrencyTrackingWaiter{inner: w, cur: cur}, nil
+	}
+}
+
+type concurrencyTrackingWaiter struct {
+	inner Waiter
+	cur   *int64
+}
+
+func (w *concurrencyTrackingWaiter) Wait() error {
+	err := w.inner.Wait()
+	atomic.AddInt64(w.cur, -1)
+	return err
+}
+func (w *concurrencyTrackingWaiter) Pid() int                   { return w.inner.Pid() }
+func (w *concurrencyTrackingWaiter) Signal(sig os.Signal) error { return w.inner.Signal(sig) }
+
+// tableRow returns the line of stdout's --jobs table starting with "<slug> "
+// (the tabwriter-padded SLUG column), or "" if no such line exists.
+func tableRow(stdout, slug string) string {
+	for _, line := range strings.Split(stdout, "\n") {
+		if strings.HasPrefix(line, slug+" ") {
+			return line
+		}
+	}
+	return ""
+}
+
+// TestNextLoopsAtOneSlot: at the default effective --jobs count of 1, a
+// `run --next` invocation must still loop — running every eligible spec in
+// a dependency chain one after another, in one invocation, never two at
+// once — rather than stopping after the first spec the way the old
+// jobs<=1-is-runNext equivalence did.
+func TestNextLoopsAtOneSlot(t *testing.T) {
 	repo := newSourceRepo(t)
 	homeDir := t.TempDir()
-	writeReadySpec(t, homeDir, "solo", "", repo)
+	writeReadySpec(t, homeDir, "a", "", repo)
+	writeReadySpec(t, homeDir, "b", "depends_on: a\n", repo)
+	writeReadySpec(t, homeDir, "c", "depends_on: b\n", repo)
 	stateRoot := home.RunsDir(homeDir)
 
-	sb := newStubSandbox()
-	sb.agent = completingAgent(t)
-	sb.verify = alwaysGreenVerify
+	var calls []string
+	var callsMu sync.Mutex
+	var cur, max int64
+	spawn := concurrencyTrackingSpawner(fakeSchedulerSpawner(t, stateRoot, nil, &calls, &callsMu), &cur, &max)
 
-	spawnCalled := false
+	var stdout strings.Builder
 	opts := Options{
-		Next: true, Home: homeDir, StateRoot: stateRoot, Sandbox: sb,
-		Stdout: io.Discard, Stderr: io.Discard, Stdin: strings.NewReader(""), Notifier: noopNotifierForTest{},
-		Spawn: func(ctx context.Context, args []string, stdout, stderr *linePrefixWriter) (Waiter, error) {
-			spawnCalled = true
-			return nil, fmt.Errorf("Spawn must not be called when the effective --jobs count is 1")
-		},
+		Next: true, Home: homeDir, StateRoot: stateRoot,
+		Stdout: &stdout, Stderr: io.Discard, Stdin: strings.NewReader(""), Spawn: spawn,
 	}
 	status, err := Run(opts)
-	if err != nil || status != StatusComplete {
-		t.Fatalf("status=%v err=%v, want Complete/nil", status, err)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
 	}
-	if spawnCalled {
-		t.Fatal("jobs<=1 must behave exactly like plain --next")
+	if status != statusJobsDone {
+		t.Fatalf("status = %v, want jobs-done", status)
+	}
+
+	want := []string{"a", "b", "c"}
+	if len(calls) != len(want) {
+		t.Fatalf("calls = %v, want %v", calls, want)
+	}
+	for i, slug := range want {
+		if calls[i] != slug {
+			t.Fatalf("calls[%d] = %q, want %q (full: %v)", i, calls[i], slug, calls)
+		}
+	}
+	if max > 1 {
+		t.Fatalf("max concurrent running = %d, want at most 1", max)
+	}
+	for _, slug := range want {
+		if row := tableRow(stdout.String(), slug); !strings.Contains(row, "complete") {
+			t.Fatalf("table row for %s = %q, want it to show complete", slug, row)
+		}
+	}
+}
+
+// TestNextDoesNotRestartCapped: a spec that ends "capped" must not be
+// restarted within the same --next invocation, and a dependent gated on it
+// must stay waiting — the invocation still ends cleanly (exit 0), with the
+// capped spec's own status recorded in the table.
+func TestNextDoesNotRestartCapped(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "a", "", repo)
+	writeReadySpec(t, homeDir, "b", "depends_on: a\n", repo)
+	stateRoot := home.RunsDir(homeDir)
+
+	scripts := map[string]childScript{"a": {exit: 5, runStatus: "capped"}}
+	var calls []string
+	var callsMu sync.Mutex
+	spawn := fakeSchedulerSpawner(t, stateRoot, scripts, &calls, &callsMu)
+
+	var stdout strings.Builder
+	opts := Options{
+		Next: true, Home: homeDir, StateRoot: stateRoot,
+		Stdout: &stdout, Stderr: io.Discard, Stdin: strings.NewReader(""), Spawn: spawn,
+	}
+	status, err := Run(opts)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if ExitCode(status) != 0 {
+		t.Fatalf("ExitCode(%v) = %d, want 0", status, ExitCode(status))
+	}
+	if len(calls) != 1 || calls[0] != "a" {
+		t.Fatalf("calls = %v, want exactly [a]", calls)
+	}
+	row := tableRow(stdout.String(), "a")
+	if !strings.Contains(row, "capped") || !strings.Contains(row, "5") {
+		t.Fatalf("table row for a = %q, want capped/5", row)
 	}
 }
 

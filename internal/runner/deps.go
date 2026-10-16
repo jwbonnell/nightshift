@@ -114,7 +114,7 @@ func firstUnmet(opts Options, deps []string) (d, state string, ok bool) {
 	return "", "", false
 }
 
-// checkDeps is the graph + satisfaction check Run()/runNext() run on a
+// checkDeps is the graph + satisfaction check Run() runs on a
 // resolved spec before anything is created: an unknown dependency or a
 // cycle is always an error; an unsatisfied dependency is an error unless
 // opts.IgnoreDeps.
