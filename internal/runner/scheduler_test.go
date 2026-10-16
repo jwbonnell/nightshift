@@ -2,6 +2,8 @@ package runner
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -335,14 +337,62 @@ func TestJobsBusyRecorded(t *testing.T) {
 	}
 }
 
-// TestJobsExitCodes covers the scheduler's exit-code mapping: 7 when
-// nothing was started, 1 when any child exited 1, else 0.
+// TestJobsExitCodes covers the scheduler's exit-code mapping: 0 when no
+// candidate was ever available, 7 when a candidate existed but the
+// --until window had closed or the usage-limit marker was active (so
+// nothing started), 1 when any child exited 1, else 0.
 func TestJobsExitCodes(t *testing.T) {
 	repo := newSourceRepo(t)
 
 	t.Run("nothing eligible", func(t *testing.T) {
 		homeDir := t.TempDir()
 		stateRoot := home.RunsDir(homeDir)
+		opts := Options{Home: homeDir, StateRoot: stateRoot, Stdout: io.Discard, Stderr: io.Discard}
+		status, err := runJobs(opts, 2, "test", 2)
+		if err != nil {
+			t.Fatalf("runJobs: %v", err)
+		}
+		if ExitCode(status) != 0 {
+			t.Fatalf("ExitCode(%v) = %d, want 0", status, ExitCode(status))
+		}
+	})
+
+	t.Run("window closed with a candidate", func(t *testing.T) {
+		homeDir := t.TempDir()
+		writeReadySpec(t, homeDir, "a", "", repo)
+		stateRoot := home.RunsDir(homeDir)
+
+		ref := time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)
+		deadline := parseUntil("09:00", ref)
+		calls := 0
+		clock := func() time.Time {
+			calls++
+			if calls == 1 {
+				return ref
+			}
+			return deadline.Add(time.Minute)
+		}
+
+		opts := Options{Home: homeDir, StateRoot: stateRoot, Stdout: io.Discard, Stderr: io.Discard, Until: "09:00"}
+		opts.clock = clock
+		status, err := runJobs(opts, 2, "test", 2)
+		if err != nil {
+			t.Fatalf("runJobs: %v", err)
+		}
+		if ExitCode(status) != 7 {
+			t.Fatalf("ExitCode(%v) = %d, want 7", status, ExitCode(status))
+		}
+	})
+
+	t.Run("limit marker active", func(t *testing.T) {
+		homeDir := t.TempDir()
+		writeReadySpec(t, homeDir, "a", "", repo)
+		stateRoot := home.RunsDir(homeDir)
+		hit := limitHit{ResetAt: time.Now().Add(time.Hour)}
+		if err := writeLimitMarker(stateRoot, hit, time.Now(), "x", time.Hour); err != nil {
+			t.Fatalf("writeLimitMarker: %v", err)
+		}
+
 		opts := Options{Home: homeDir, StateRoot: stateRoot, Stdout: io.Discard, Stderr: io.Discard}
 		status, err := runJobs(opts, 2, "test", 2)
 		if err != nil {
@@ -388,6 +438,109 @@ func TestJobsExitCodes(t *testing.T) {
 			t.Fatalf("ExitCode(%v) = %d, want 0", status, ExitCode(status))
 		}
 	})
+}
+
+// noSpawn fails the test if Spawn is ever called — used by the "nothing
+// eligible" tests below, where no child should ever start.
+func noSpawn(t *testing.T) Spawner {
+	t.Helper()
+	return func(ctx context.Context, args []string, stdout, stderr *linePrefixWriter) (Waiter, error) {
+		t.Fatalf("Spawn must not be called when nothing is eligible")
+		return nil, nil
+	}
+}
+
+// TestNextNothingEligibleExit0 covers runJobs's "no candidate was ever
+// available" empty outcome, at an effective jobs count of 2 (so it goes
+// through the scheduler, not runNext): it prints the "nothing to do"
+// message and returns statusNothing (exit 0), spawning nothing, whether
+// the ready dir is empty or every ready spec is already complete.
+func TestNextNothingEligibleExit0(t *testing.T) {
+	t.Run("empty ready dir", func(t *testing.T) {
+		homeDir := t.TempDir()
+		var stdout strings.Builder
+		opts := Options{
+			Next: true, Jobs: 2, Home: homeDir, StateRoot: home.RunsDir(homeDir),
+			Stdout: &stdout, Stderr: io.Discard, Stdin: strings.NewReader(""), Spawn: noSpawn(t),
+		}
+		status, err := Run(opts)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if status != statusNothing {
+			t.Fatalf("status = %v, want nothing-eligible", status)
+		}
+		if ExitCode(status) != 0 {
+			t.Fatalf("ExitCode(%v) = %d, want 0", status, ExitCode(status))
+		}
+		if !strings.Contains(stdout.String(), "no eligible spec in specs/ready/ — nothing to do") {
+			t.Fatalf("stdout = %q", stdout.String())
+		}
+	})
+
+	t.Run("every ready spec already complete", func(t *testing.T) {
+		repo := newSourceRepo(t)
+		homeDir := t.TempDir()
+		path := writeReadySpec(t, homeDir, "a", "", repo)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read spec: %v", err)
+		}
+		sum := sha256.Sum256(data)
+		hash := hex.EncodeToString(sum[:])
+		stateRoot := home.RunsDir(homeDir)
+		stDir := filepath.Join(stateRoot, "a")
+		if err := os.MkdirAll(stDir, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		runJSON := fmt.Sprintf(`{"slug":"a","spec_hash":%q,"status":"complete"}`, hash)
+		if err := os.WriteFile(filepath.Join(stDir, "run.json"), []byte(runJSON), 0o644); err != nil {
+			t.Fatalf("write run.json: %v", err)
+		}
+
+		var stdout strings.Builder
+		opts := Options{
+			Next: true, Jobs: 2, Home: homeDir, StateRoot: stateRoot,
+			Stdout: &stdout, Stderr: io.Discard, Stdin: strings.NewReader(""), Spawn: noSpawn(t),
+		}
+		status, err := Run(opts)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if status != statusNothing {
+			t.Fatalf("status = %v, want nothing-eligible", status)
+		}
+		if !strings.Contains(stdout.String(), "no eligible spec in specs/ready/ — nothing to do") {
+			t.Fatalf("stdout = %q", stdout.String())
+		}
+	})
+}
+
+// TestNextWaitingOnlyPrintsSkips covers the same empty outcome when the
+// only ready spec is waiting on an unmet dependency: the "skip" line
+// prints before the "nothing to do" message, and nothing is spawned.
+func TestNextWaitingOnlyPrintsSkips(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "b", "depends_on: a\n", repo)
+	stateRoot := home.RunsDir(homeDir)
+
+	var stdout strings.Builder
+	opts := Options{
+		Next: true, Jobs: 2, Home: homeDir, StateRoot: stateRoot,
+		Stdout: &stdout, Stderr: io.Discard, Stdin: strings.NewReader(""), Spawn: noSpawn(t),
+	}
+	status, err := Run(opts)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if status != statusNothing {
+		t.Fatalf("status = %v, want nothing-eligible", status)
+	}
+	want := "skip  b: waits on a (not started)\nno eligible spec in specs/ready/ — nothing to do\n"
+	if stdout.String() != want {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+	}
 }
 
 // waitForSchedulerCalls polls calls (guarded by callsMu) until it holds at

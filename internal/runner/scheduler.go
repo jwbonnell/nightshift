@@ -206,19 +206,21 @@ func runJobs(opts Options, limit int, capSrc string, jobs int) (Status, error) {
 	// to the next day instead of reporting the window closed.
 	deadline := parseUntil(opts.Until, opts.clockFn()())
 
+	// blocked records that a candidate existed but was held back by the
+	// --until deadline or the usage-limit marker, not that none was ever
+	// eligible — it distinguishes the two empty outcomes below. lastWaits
+	// is the most recent selection's wait list, printed as "skip" lines
+	// only in the "never eligible" outcome.
+	blocked := false
+	var lastWaits []waitSkip
+
 	startEligible := func() {
 		for running < jobs && !opts.interrupted() {
-			now := opts.clockFn()()
-			if !deadline.IsZero() && !now.Before(deadline) {
-				return
-			}
-			if readActiveLimit(opts.StateRoot, now, true) != nil {
-				return
-			}
-			cands, _, err := selectNextCandidates(opts)
+			cands, waits, err := selectNextCandidates(opts)
 			if err != nil {
 				return
 			}
+			lastWaits = waits
 			var next *nextCandidate
 			for i := range cands {
 				if !started[cands[i].slug] {
@@ -227,6 +229,15 @@ func runJobs(opts Options, limit int, capSrc string, jobs int) (Status, error) {
 				}
 			}
 			if next == nil {
+				return
+			}
+			now := opts.clockFn()()
+			if !deadline.IsZero() && !now.Before(deadline) {
+				blocked = true
+				return
+			}
+			if readActiveLimit(opts.StateRoot, now, true) != nil {
+				blocked = true
 				return
 			}
 			slug := next.slug
@@ -277,6 +288,14 @@ func runJobs(opts Options, limit int, capSrc string, jobs int) (Status, error) {
 		}
 		resultOf[r.slug] = r
 		startEligible()
+	}
+
+	if len(order) == 0 && !blocked && !opts.interrupted() {
+		for _, w := range lastWaits {
+			fmt.Fprintf(opts.Stdout, "skip  %s: waits on %s (%s)\n", w.slug, w.dep, w.state)
+		}
+		fmt.Fprint(opts.Stdout, "no eligible spec in specs/ready/ — nothing to do\n")
+		return statusNothing, nil
 	}
 
 	printJobsTable(opts, order, resultOf)
