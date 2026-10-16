@@ -1,7 +1,7 @@
 #!/bin/sh
 # nightshift nightly runner — invoked by systemd (nightshift.timer) after hours.
-# Runs the OLDEST eligible spec in ~/.nightshift/specs/ready/ through the sandboxed
-# Ralph loop, stopping at 06:00 if unfinished (the run resumes the next night).
+# Runs ready specs overnight, one after another, through the sandboxed Ralph
+# loop, stopping at 06:00 if unfinished (the run resumes the next night).
 # Install: cp to ~/.local/bin/nightshift-nightly.sh && chmod +x
 # DO NOT enable the timer until you have hand-run several specs and reviewed their diffs.
 set -u

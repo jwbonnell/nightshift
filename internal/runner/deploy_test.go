@@ -55,6 +55,37 @@ func TestDeployFilesByteIdenticalToSpec(t *testing.T) {
 				t.Fatalf("expected exactly one occurrence of the old comment line, got %d", n)
 			}
 			want = strings.Replace(want, old, updated, 1)
+
+			// nightshift-next-loop (another sanctioned deviation): --next
+			// now loops through every eligible spec instead of running
+			// just the oldest one, so the header comment says so, without
+			// touching SPEC.md itself.
+			old = "# Runs the OLDEST eligible spec in ~/.nightshift/specs/ready/ through the sandboxed\n# Ralph loop, stopping at 06:00 if unfinished (the run resumes the next night).\n"
+			updated = "# Runs ready specs overnight, one after another, through the sandboxed Ralph\n# loop, stopping at 06:00 if unfinished (the run resumes the next night).\n"
+			if n := strings.Count(want, old); n != 1 {
+				t.Fatalf("expected exactly one occurrence of the old header comment, got %d", n)
+			}
+			want = strings.Replace(want, old, updated, 1)
+		}
+		if name == "nightshift.service" {
+			// nightshift-next-loop (sanctioned deviation): Description=
+			// reflects --next looping over every eligible spec.
+			old := "Description=nightshift: run one ready spec overnight\n"
+			updated := "Description=nightshift: run ready specs overnight, one after another\n"
+			if n := strings.Count(want, old); n != 1 {
+				t.Fatalf("expected exactly one occurrence of the old Description=, got %d", n)
+			}
+			want = strings.Replace(want, old, updated, 1)
+		}
+		if name == "nightshift.timer" {
+			// nightshift-next-loop (sanctioned deviation): Description=
+			// reflects --next looping over every eligible spec.
+			old := "Description=nightshift nightly run at 22:00\n"
+			updated := "Description=nightshift nightly run at 22:00 — run ready specs overnight, one after another\n"
+			if n := strings.Count(want, old); n != 1 {
+				t.Fatalf("expected exactly one occurrence of the old Description=, got %d", n)
+			}
+			want = strings.Replace(want, old, updated, 1)
 		}
 
 		got, err := os.ReadFile(filepath.Join("..", "..", "deploy", name))

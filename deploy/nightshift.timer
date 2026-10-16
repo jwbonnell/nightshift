@@ -1,5 +1,5 @@
 [Unit]
-Description=nightshift nightly run at 22:00
+Description=nightshift nightly run at 22:00 — run ready specs overnight, one after another
 
 [Timer]
 OnCalendar=*-*-* 22:00:00

@@ -58,7 +58,7 @@ nightshift ready <slug> [--no-verify] [--no-lint]
 nightshift lint <spec> [--no-verify]  check a draft or ready spec (verify runs on the base commit in sbx)
 nightshift done <slug>                move a ready spec to specs/done/
 nightshift run <spec> [flags]         run one ready spec (nightshift run -h for flags)
-nightshift run --next [flags]         run the oldest eligible ready spec
+nightshift run --next [flags]         run eligible ready specs, one after another
 nightshift status [<slug>]            list runs, or show one run in detail
 nightshift review <slug> [--model M]  sandboxed Claude review of a run's work
 nightshift pr <url>|<repo> <n> [flags] pre-review one PR/MR (nightshift pr -h for flags)
@@ -228,6 +228,16 @@ Resolving outside `specs/ready/` is refused: a path still in `specs/draft/`
 says so and names the `ready` command to fix it; anywhere else says `spec
 must live under <ready-dir> (got <path>)`.
 
+`--next` always runs through the scheduler (see `run --next --jobs N`
+below), at every `--jobs` count including the default of 1: it keeps
+starting eligible specs, one after another (or N at a time), starting a
+dependent the moment its dependencies finish, until nothing is eligible,
+the `--until` window closes, the usage limit trips, or it's interrupted.
+A single invocation never starts the same spec twice — a spec that ends
+anything other than `complete` (e.g. `capped`) just sits there for the
+rest of that invocation, and its dependents keep waiting; the *next*
+`--next` invocation is what picks it back up.
+
 A spec with `depends_on:` won't run until each dependency is complete, and
 `--ignore-deps` skips that check and the integrated base it builds — see
 [Multi-spec projects](#multi-spec-projects) for the refusal text, the
@@ -261,6 +271,16 @@ sync ref from your source repo too) and starts clean.
 `rate-limited` are all resumable — just run the same spec again (or let
 `--next` pick it up; `--next` only skips a spec whose *last* status was
 `blocked` or `complete` with an unchanged content hash).
+
+`--next` itself always exits with the scheduler's own codes — `0` (every
+started spec is accounted for, or nothing was eligible), `1` (some child
+exited `1`), `7` (a candidate existed but the `--until` window or an
+active usage limit kept anything from starting), or the interrupt code —
+never one spec's own exit code. Each spec's actual status lives in the
+`SLUG STATUS EXIT` table `--next` prints at the end, and in `nightshift
+status`. So a `--next` run whose only spec ends `capped` exits `0` (with
+`capped`/`5` in that table), where running that same spec directly
+(`nightshift run <slug>`, no `--next`) exits `5`.
 
 A Claude usage limit is detected at the first iteration (worker or
 planning) whose agent result reports a 429 or a message matching `hit
@@ -1134,8 +1154,8 @@ the moment every one of its dependencies finishes — so a whole
 night. It's only valid with `--next`; `--jobs 0` or negative is a usage
 error (`--jobs %d: want 1 or more`, exit `2`). The count comes from the
 flag, else `NIGHTSHIFT_JOBS` (env, then config, then default `1`), capped
-by `max_concurrent` — so `--jobs 1` (or no flag at all) is exactly
-today's single `--next`.
+by `max_concurrent` — the count is how many specs run side by side;
+`--jobs 1` (or no flag at all) runs them one after another instead.
 
 Each slot is a real child `nightshift run` process —
 `<nightshift binary> run <spec> [--until HH:MM] [--max-concurrent N]` with
@@ -1214,9 +1234,10 @@ Two independent lock layers, both under `~/.nightshift/runs/.locks/`:
 
 Stale locks (holder process gone, or from a different boot of the machine)
 are reclaimed automatically on the next attempt — you should never need to
-remove a lock file by hand. `nightshift run --next` additionally takes a
-short-lived selection lock while picking a candidate, so concurrent
-`--next` invocations never race onto the same spec.
+remove a lock file by hand. There's no separate selection lock for
+`--next`: two concurrent invocations can both pick the same candidate,
+and whichever loses the per-spec lock exits `busy` — see the known
+limitation under [Scheduling](#scheduling).
 
 Raising `max_concurrent` doesn't raise how many diffs you can actually
 review overnight — it only governs how many iteration loops may be
@@ -1252,11 +1273,19 @@ Two things that are easy to miss:
   DBUS_SESSION_BUS_ADDRESS` (or equivalent) in your session startup.
 
 The wrapper logs to `~/.nightshift/logs/nightly.log` and treats exit `7`
-(busy — nothing started) as a non-failure; only exit `1` (a genuine runner
-error) marks the systemd unit failed. `blocked`/`red`/`stalled`/`capped`/
-`window-closed`/`interrupted`/`rate-limited` are all outcomes, not
-failures — they're resumable, and the next night's run picks the same
-spec back up via `--next`.
+(nothing started — the window was already closed, or a usage limit was
+active) as a non-failure; only exit `1` (a genuine runner error) marks the
+systemd unit failed. `blocked`/`red`/`stalled`/`capped`/`window-closed`/
+`interrupted`/`rate-limited` are all outcomes, not failures: a spec
+ending any of those is resumable, but `--next` never restarts it within
+the same invocation — it's the *next* invocation of `--next` that picks
+it, and that spec's dependents, back up.
+
+Known limitation: two `--next` invocations started at the same moment can
+both select the same eligible spec. The second one to actually acquire
+that spec's lock exits `busy` (7) and is recorded `busy` in its own
+table, so that spec's dependents just wait for a later invocation — there
+is no cross-invocation selection lock preventing the race itself.
 
 ## Recovery
 

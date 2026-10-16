@@ -80,7 +80,9 @@ same `specrun`-shaped split, plus `owns.go` (path-ownership checking) and
 `scheduler.go`/`jobs.go` (the `--jobs` scheduler and its config
 resolution) on top; `--jobs` children are separate `nightshift run`
 processes, never goroutines, so each keeps its own lock, signal handling,
-and exit code.
+and exit code. `run --next` always goes through the scheduler in
+`scheduler.go`, at every `--jobs` count including the default of 1 —
+there is no separate single-spec `--next` path.
 
 `runner.log` (built in `state.go` via `logx.NewText`) is plain-text lines,
 `<date> <time> <LEVEL> <message>`, with no attrs and no source location —

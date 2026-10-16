@@ -1,5 +1,5 @@
 [Unit]
-Description=nightshift: run one ready spec overnight
+Description=nightshift: run ready specs overnight, one after another
 Wants=network-online.target
 After=network-online.target
 
