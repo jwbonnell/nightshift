@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -338,5 +339,126 @@ func TestResumeStaleCompleteSymlinkNotFollowed(t *testing.T) {
 	}
 	if !strings.Contains(string(logData), "SECURITY") {
 		t.Fatalf("runner.log missing a SECURITY line: %s", logData)
+	}
+}
+
+// TestResumeDepAlreadyInBase covers scenario (a): a dependency already
+// merged into the base before the run ever started must not block a
+// resume. Before this fix, integrateDeps left such a tip out of
+// st.DepTips entirely, so checkDepTipsResume saw a resolved tip with no
+// recorded entry and refused as if it were a newly added dependency.
+func TestResumeDepAlreadyInBase(t *testing.T) {
+	repo := newSourceRepo(t)
+	mustGit(t, repo, "checkout", "-b", "spec/dep")
+	commitFile(t, repo, "dep.go", "package dep\n", "dep work")
+	depTip := mustGit(t, repo, "rev-parse", "HEAD")
+	mustGit(t, repo, "checkout", "main")
+	mustGit(t, repo, "merge", "--no-ff", "-m", "merge dep", "spec/dep")
+
+	homeDir := t.TempDir()
+	if err := os.MkdirAll(home.DoneDir(homeDir), 0o755); err != nil {
+		t.Fatalf("mkdir done: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home.DoneDir(homeDir), "dep.md"), []byte("done"), 0o644); err != nil {
+		t.Fatalf("write done dep: %v", err)
+	}
+	writeReadySpec(t, homeDir, "demo", "max_iter: 1\ndepends_on: dep\n", repo)
+	stateRoot := home.RunsDir(homeDir)
+
+	sb1 := newStubSandbox()
+	sb1.verify = alwaysGreenVerify
+	opts := Options{
+		SpecArg: "demo", Home: homeDir, StateRoot: stateRoot, Sandbox: sb1,
+		Stdout: io.Discard, Stderr: io.Discard, Stdin: strings.NewReader(""), Notifier: noopNotifierForTest{},
+	}
+	status1, err1 := Run(opts)
+	if err1 != nil || status1 != StatusCapped {
+		t.Fatalf("run1: status=%v err=%v, want Capped/nil", status1, err1)
+	}
+	if got := loadPriorState(opts, "demo").DepTips["dep"]; got != depTip {
+		t.Fatalf("after run1, DepTips[dep] = %q, want %q (recorded even though already in base)", got, depTip)
+	}
+
+	sb2 := newStubSandbox()
+	sb2.agent = func(ctx context.Context, iter int, dir string) error {
+		if iter == 1 {
+			commitFile(t, dir, "work.go", "package main\n", "work")
+			touchComplete(t, dir)
+		}
+		return nil
+	}
+	sb2.verify = alwaysGreenVerify
+	opts2 := opts
+	opts2.Sandbox = sb2
+	status2, err2 := Run(opts2)
+	if err2 != nil || status2 != StatusComplete {
+		t.Fatalf("resume: status=%v err=%v, want Complete/nil", status2, err2)
+	}
+}
+
+// TestResumeDepAlreadyInBaseOldState is TestResumeDepAlreadyInBase with
+// run.json's dep_tips wiped to nil before the resume, simulating a run
+// started before this fix. checkDepTipsResume's ancestor check must
+// tolerate this old-format state too, not just the newly-recorded one.
+func TestResumeDepAlreadyInBaseOldState(t *testing.T) {
+	repo := newSourceRepo(t)
+	mustGit(t, repo, "checkout", "-b", "spec/dep")
+	commitFile(t, repo, "dep.go", "package dep\n", "dep work")
+	mustGit(t, repo, "checkout", "main")
+	mustGit(t, repo, "merge", "--no-ff", "-m", "merge dep", "spec/dep")
+
+	homeDir := t.TempDir()
+	if err := os.MkdirAll(home.DoneDir(homeDir), 0o755); err != nil {
+		t.Fatalf("mkdir done: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home.DoneDir(homeDir), "dep.md"), []byte("done"), 0o644); err != nil {
+		t.Fatalf("write done dep: %v", err)
+	}
+	writeReadySpec(t, homeDir, "demo", "max_iter: 1\ndepends_on: dep\n", repo)
+	stateRoot := home.RunsDir(homeDir)
+
+	sb1 := newStubSandbox()
+	sb1.verify = alwaysGreenVerify
+	opts := Options{
+		SpecArg: "demo", Home: homeDir, StateRoot: stateRoot, Sandbox: sb1,
+		Stdout: io.Discard, Stderr: io.Discard, Stdin: strings.NewReader(""), Notifier: noopNotifierForTest{},
+	}
+	status1, err1 := Run(opts)
+	if err1 != nil || status1 != StatusCapped {
+		t.Fatalf("run1: status=%v err=%v, want Capped/nil", status1, err1)
+	}
+
+	statePath := filepath.Join(stateRoot, "demo", "run.json")
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read run.json: %v", err)
+	}
+	var st runState
+	if err := json.Unmarshal(data, &st); err != nil {
+		t.Fatalf("parse run.json: %v", err)
+	}
+	st.DepTips = nil
+	out, err := json.MarshalIndent(&st, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal run.json: %v", err)
+	}
+	if err := os.WriteFile(statePath, append(out, '\n'), 0o644); err != nil {
+		t.Fatalf("write run.json: %v", err)
+	}
+
+	sb2 := newStubSandbox()
+	sb2.agent = func(ctx context.Context, iter int, dir string) error {
+		if iter == 1 {
+			commitFile(t, dir, "work.go", "package main\n", "work")
+			touchComplete(t, dir)
+		}
+		return nil
+	}
+	sb2.verify = alwaysGreenVerify
+	opts2 := opts
+	opts2.Sandbox = sb2
+	status2, err2 := Run(opts2)
+	if err2 != nil || status2 != StatusComplete {
+		t.Fatalf("resume: status=%v err=%v, want Complete/nil", status2, err2)
 	}
 }
