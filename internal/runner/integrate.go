@@ -34,29 +34,35 @@ func (r *run) conflictPaths() []string {
 // integrateDeps brings each depends_on tip into the clone's base, before
 // any agent iteration runs: a fast-forward when the tip already descends
 // from the base, a --no-ff merge otherwise, then one verify of the result
-// if anything was merged. It returns "" to let runSpec continue into
-// loop(), or a terminal Status (StatusBlocked on a conflict or a red
-// combined base, StatusInterrupted, or whatever r.fail records).
+// if anything was merged. A tip that's already an ancestor of the base is
+// recorded in st.DepTips too (only a missing spec/<dep> stays unrecorded),
+// but whether a verify runs still depends only on whether anything was
+// actually merged or fast-forwarded in. It returns "" to let runSpec
+// continue into loop(), or a terminal Status (StatusBlocked on a conflict
+// or a red combined base, StatusInterrupted, or whatever r.fail records).
 func (r *run) integrateDeps() Status {
 	sp := r.spec
 	st := r.st
 	clock := r.opts.clockFn()
 	base := st.Base
 
-	applied := map[string]string{}
+	tips := map[string]string{}
+	merged := 0
 	for _, t := range sp.depTips {
 		if t.sha == "" {
 			r.logf("dep %s: spec/%s missing, skipped", t.slug, t.slug)
 			continue
 		}
 		if _, err := r.git("merge-base", "--is-ancestor", t.sha, "HEAD"); err == nil {
+			tips[t.slug] = t.sha
 			continue // already in the base
 		}
 		if _, err := r.git("merge-base", "--is-ancestor", "HEAD", t.sha); err == nil {
 			if out, err := r.git("merge", "--ff-only", t.sha); err != nil {
 				return r.fail(fmt.Errorf("fast-forward to dep %s tip %s: %v: %s", t.slug, short(t.sha), err, out))
 			}
-			applied[t.slug] = t.sha
+			tips[t.slug] = t.sha
+			merged++
 			continue
 		}
 
@@ -70,10 +76,11 @@ func (r *run) integrateDeps() Status {
 				strings.Join(paths, ", ")))
 			return StatusBlocked
 		}
-		applied[t.slug] = t.sha
+		tips[t.slug] = t.sha
+		merged++
 	}
 
-	if len(applied) > 0 {
+	if merged > 0 {
 		if err := r.sb.ResetVerify(); err != nil {
 			r.logf("integrate: reset verify sandbox: %v", err)
 		}
@@ -106,10 +113,10 @@ func (r *run) integrateDeps() Status {
 	}
 
 	st.BaseResolved = base
-	if len(applied) == 0 {
+	if len(tips) == 0 {
 		st.DepTips = nil
 	} else {
-		st.DepTips = applied
+		st.DepTips = tips
 	}
 	if err := r.saveState(); err != nil {
 		return r.fail(err)

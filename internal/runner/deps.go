@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/jwbonnell/nightshift/internal/gitx"
 	"github.com/jwbonnell/nightshift/internal/home"
 )
 
@@ -142,7 +143,11 @@ func checkDeps(opts Options, sp *Spec) error {
 // runSpec retries integrateDeps with freshly resolved tips. Otherwise it
 // refuses if a recorded tip has moved, or a newly added dependency now
 // resolves to one — the agent's own commits may already sit on top of the
-// old integrated base and can't be rebased mechanically.
+// old integrated base and can't be rebased mechanically. A tip that's an
+// ancestor of the run's recorded base is tolerated even without a matching
+// DepTips entry: it was already in the base before the run started, which
+// integrateDeps records today but older run.json files (and the case where
+// the owner has since deleted the branch) may not — see D11.
 func checkDepTipsResume(r *run, sp *Spec) error {
 	if len(sp.DependsOn) == 0 || r.opts.IgnoreDeps {
 		return nil
@@ -156,6 +161,12 @@ func checkDepTipsResume(r *run, sp *Spec) error {
 		if old == t.sha {
 			continue
 		}
+		if t.sha != "" && inBase(sp.Repo, t.sha, r.st.Base, r.st.BaseResolved) {
+			continue
+		}
+		if t.sha == "" && existed && inBase(sp.Repo, old, r.st.Base, r.st.BaseResolved) {
+			continue
+		}
 		oldDisp, newDisp := "(none)", "(none)"
 		if existed {
 			oldDisp = short(old)
@@ -166,6 +177,26 @@ func checkDepTipsResume(r *run, sp *Spec) error {
 		return fmt.Errorf("dependency %s changed since this run started (%s → %s); re-run with --fresh", t.slug, oldDisp, newDisp)
 	}
 	return nil
+}
+
+// inBase reports whether sha is an ancestor of any of bases (empty entries
+// skipped), checked read-only in repo via git. BaseResolved is checked
+// alongside Base because a --no-ff merge of some other dependency makes
+// Base a merge commit that exists only in the clone, not in the source
+// repo; BaseResolved is the plain pre-integration base, which always
+// exists in repo and is itself an ancestor of Base, so checking it is
+// sound. A git error (sha or base not found, or not an ancestor) counts
+// as false.
+func inBase(repo, sha string, bases ...string) bool {
+	for _, b := range bases {
+		if b == "" {
+			continue
+		}
+		if _, err := gitx.Run(repo, "merge-base", "--is-ancestor", sha, b); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // depsCheck runs the lint depends check for one spec: an unknown

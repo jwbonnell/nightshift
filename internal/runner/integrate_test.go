@@ -2,6 +2,7 @@ package runner
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -142,6 +143,7 @@ func TestDepAlreadyMergedOrDeletedSkipped(t *testing.T) {
 		sb := newStubSandbox()
 		r := newTestRun(t, repo, "depends_on: dep\n", Options{}, sb)
 		baseBefore := r.st.Base
+		depTip := mustGit(t, repo, "rev-parse", "spec/dep")
 
 		if status := r.integrateDeps(); status != "" {
 			t.Fatalf("integrateDeps() = %q, want \"\" (continue)", status)
@@ -152,8 +154,8 @@ func TestDepAlreadyMergedOrDeletedSkipped(t *testing.T) {
 		if r.st.Base != baseBefore {
 			t.Fatalf("st.Base = %s, want unchanged %s", r.st.Base, baseBefore)
 		}
-		if r.st.DepTips != nil {
-			t.Fatalf("st.DepTips = %v, want nil", r.st.DepTips)
+		if got := r.st.DepTips["dep"]; got != depTip {
+			t.Fatalf("st.DepTips[dep] = %q, want %q (recorded even though already in base)", got, depTip)
 		}
 		if r.st.BaseResolved != baseBefore {
 			t.Fatalf("st.BaseResolved = %s, want %s", r.st.BaseResolved, baseBefore)
@@ -352,5 +354,79 @@ func TestResumeDepMovedRefuses(t *testing.T) {
 	}
 	if st2.Base != savedBase {
 		t.Fatalf("st.Base = %s, want unchanged %s", st2.Base, savedBase)
+	}
+}
+
+// TestResumeDepAlreadyInBaseThenMovedRefuses covers scenario (c): a
+// dependency that was already an ancestor of the base when the run
+// started (so it's tolerated on resume per checkDepTipsResume's inBase
+// check) must still refuse once the owner pushes a *new* commit to
+// spec/dep after the run started — the new tip is no longer an ancestor
+// of the recorded base, so it falls through to today's refusal. Run with
+// a nil DepTips (the pre-fix on-disk format) too, to prove the
+// ancestor-tolerance added for D-h doesn't accidentally mask a real move.
+func TestResumeDepAlreadyInBaseThenMovedRefuses(t *testing.T) {
+	for _, nilDepTips := range []bool{false, true} {
+		t.Run(fmt.Sprintf("nilDepTips=%v", nilDepTips), func(t *testing.T) {
+			repo := newSourceRepo(t)
+			mustGit(t, repo, "checkout", "-b", "spec/dep")
+			commitFile(t, repo, "dep.go", "package dep\n", "dep work v1")
+			depV1 := mustGit(t, repo, "rev-parse", "HEAD")
+			mustGit(t, repo, "checkout", "main")
+			mustGit(t, repo, "merge", "--no-ff", "-m", "merge dep", "spec/dep")
+
+			sb := newStubSandbox()
+			r := newTestRun(t, repo, "depends_on: dep\n", Options{}, sb)
+			if status := r.integrateDeps(); status != "" {
+				t.Fatalf("integrateDeps() = %q, want \"\" (continue)", status)
+			}
+			savedBase := r.st.Base
+			if nilDepTips {
+				r.st.DepTips = nil
+				if err := r.saveState(); err != nil {
+					t.Fatalf("saveState: %v", err)
+				}
+			}
+			if r.logFile != nil {
+				r.logFile.Close()
+			}
+			if r.agentLog != nil {
+				r.agentLog.Close()
+			}
+
+			mustGit(t, repo, "checkout", "spec/dep")
+			commitFile(t, repo, "dep2.go", "package dep\n", "dep work v2")
+			depV2 := mustGit(t, repo, "rev-parse", "HEAD")
+			mustGit(t, repo, "checkout", "main")
+
+			sp, err := resolveSpec(r.opts)
+			if err != nil {
+				t.Fatalf("resolveSpec: %v", err)
+			}
+			sha, err := resolveBase(sp.Repo, sp.Base)
+			if err != nil {
+				t.Fatalf("resolveBase: %v", err)
+			}
+			sp.BaseSHA = sha
+
+			wantOld := short(depV1)
+			if nilDepTips {
+				wantOld = "(none)"
+			}
+			wantMsg := fmt.Sprintf("dependency dep changed since this run started (%s → %s); re-run with --fresh", wantOld, short(depV2))
+			if _, err := setup(r.opts, sp); err == nil {
+				t.Fatalf("setup() = nil, want refusal error")
+			} else if err.Error() != wantMsg {
+				t.Fatalf("err = %q, want %q", err.Error(), wantMsg)
+			}
+
+			st2 := loadPriorState(r.opts, "demo")
+			if st2 == nil {
+				t.Fatalf("run.json missing")
+			}
+			if st2.Base != savedBase {
+				t.Fatalf("st.Base = %s, want unchanged %s", st2.Base, savedBase)
+			}
+		})
 	}
 }
