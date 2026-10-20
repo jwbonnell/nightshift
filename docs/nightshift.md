@@ -1098,16 +1098,21 @@ the base before the first agent iteration, right after the plain base
    - **Green** becomes this run's `run.json` `base` and `last_green` —
      the agent's first iteration starts from a base it knows passes
      verify.
-6. `run.json` also gets `dep_tips` (a `slug: sha` map of every dependency
-   actually applied) and `base_resolved` (the plain base `B`, before any
-   merge) — `status <slug>`'s own review command still uses `base`, so it
-   only ever shows this spec's own commits, not its dependencies'.
+6. `run.json` also gets `dep_tips` (a `slug: sha` map of every resolved
+   dependency tip, including one already an ancestor of the base — only
+   a missing `spec/<d>` stays unrecorded) and `base_resolved` (the plain
+   base `B`, before any merge) — `status <slug>`'s own review command
+   still uses `base`, so it only ever shows this spec's own commits, not
+   its dependencies'.
 
 Resuming a run recomputes every tip. If a recorded one moved, or a
 dependency added since the run started now has one, the resume refuses
 rather than silently re-merging: `nightshift: dependency <d> changed
 since this run started (<old> → <new>); re-run with --fresh` (short shas,
-`(none)` for a brand-new dependency) — state is left untouched.
+`(none)` for a brand-new dependency) — state is left untouched. A
+dependency that was already in the base when the run started never
+blocks a resume, even with a `run.json` from before this was recorded, or
+if its branch has since been deleted.
 
 ### Path ownership
 
