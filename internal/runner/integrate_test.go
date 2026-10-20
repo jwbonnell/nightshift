@@ -430,3 +430,49 @@ func TestResumeDepAlreadyInBaseThenMovedRefuses(t *testing.T) {
 		})
 	}
 }
+
+// TestResumeDepDeletedAfterRecordedInBase covers the extra guard 1a needs:
+// a dependency already an ancestor of the base gets a recorded DepTips
+// entry now, so if the owner deletes spec/<dep> *after* that recording,
+// resolveDepTips on resume sees sha "" where DepTips has the old sha —
+// without tolerating this, that would look like a newly-moved dependency.
+// It must still resume, exactly as it did before 1a started recording
+// already-in-base tips at all (both sides were "" then).
+func TestResumeDepDeletedAfterRecordedInBase(t *testing.T) {
+	repo := newSourceRepo(t)
+	mustGit(t, repo, "checkout", "-b", "spec/dep")
+	commitFile(t, repo, "dep.go", "package dep\n", "dep work")
+	mustGit(t, repo, "checkout", "main")
+	mustGit(t, repo, "merge", "--no-ff", "-m", "merge dep", "spec/dep")
+
+	sb := newStubSandbox()
+	r := newTestRun(t, repo, "depends_on: dep\n", Options{}, sb)
+	if status := r.integrateDeps(); status != "" {
+		t.Fatalf("integrateDeps() = %q, want \"\" (continue)", status)
+	}
+	if r.st.DepTips["dep"] == "" {
+		t.Fatalf("st.DepTips[dep] should be recorded before the branch is deleted")
+	}
+	if r.logFile != nil {
+		r.logFile.Close()
+	}
+	if r.agentLog != nil {
+		r.agentLog.Close()
+	}
+
+	mustGit(t, repo, "branch", "-D", "spec/dep")
+
+	sp, err := resolveSpec(r.opts)
+	if err != nil {
+		t.Fatalf("resolveSpec: %v", err)
+	}
+	sha, err := resolveBase(sp.Repo, sp.Base)
+	if err != nil {
+		t.Fatalf("resolveBase: %v", err)
+	}
+	sp.BaseSHA = sha
+
+	if _, err := setup(r.opts, sp); err != nil {
+		t.Fatalf("setup() = %v, want nil (deleted branch tolerated once already recorded in base)", err)
+	}
+}
