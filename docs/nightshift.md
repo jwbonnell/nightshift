@@ -205,6 +205,9 @@ usage: nightshift run <spec-name|path> [--fresh [--yes]] [--max-iter N] [--until
         branch/ref/sha the run starts from (default: spec base:/NIGHTSHIFT_BASE/origin HEAD)
   -dry-run
         resolve, validate, and print the plan; run nothing
+  -f	follow: show runner.log and the rendered agent.log live (prefixed per spec under --next --jobs)
+  -follow
+        alias for -f
   -fresh
         discard prior state for this spec and start over
   -ignore-deps
@@ -596,8 +599,9 @@ runs (`--jobs`), it follows all of them with each line prefixed `[<slug>] `.
 `run -f` runs the same follower in-process: `runner.log` lines (prefixed
 `runner · `) and the rendered `agent.log` interleaved in arrival order.
 With `--next --jobs N` it follows every spec as it starts, prefixing lines
-with `[<slug>] `. The run's normal final output follows, and the exit code is
-the run's own. `-f` with `--dry-run` is a usage error.
+with `[<slug>] `. It keeps showing lines through the automatic review and
+the result-note write; the run's normal final output follows, and the exit
+code is the run's own. `-f` with `--dry-run` is a usage error.
 
 The agent view shows one line per action, e.g. `iter 4 · Edit
 internal/runner/status.go` or `iter 4 · Bash go test ./...`: assistant text

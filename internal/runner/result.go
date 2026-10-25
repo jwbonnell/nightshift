@@ -310,17 +310,19 @@ func (r *run) finish(status Status) (Status, error) {
 
 	r.prChecks = r.postRunChecks()
 
-	if r.opts.followDrain != nil {
-		r.opts.followDrain()
-	}
-	r.printSummary(status)
-
 	r.scaffoldRemove(r.reviewPath())
 	if r.spec.Review && status == StatusComplete && len(r.reviewRounds) == 0 {
 		r.runAutoReview()
 	}
 
 	notePath, err := r.writeResultNote(status)
+
+	// Drain the follower only now, so `run -f` keeps showing lines through
+	// the automatic review and the note write; the summary comes after.
+	if r.opts.followDrain != nil {
+		r.opts.followDrain()
+	}
+	r.printSummary(status)
 	if err != nil {
 		return status, err
 	}

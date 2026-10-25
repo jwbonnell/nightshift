@@ -68,6 +68,9 @@ func (f *follower) add(slug, prefix string) {
 	f.mu.Unlock()
 }
 
+// emit prints what arrived since the last poll. Lines that arrive within one
+// poll are grouped by file (runner.log lines first, then agent.log), so the
+// interleaving of the two logs is exact only at poll granularity.
 func (f *follower) emit(r *followed) {
 	for _, l := range r.runner.poll() {
 		io.WriteString(f.out, r.prefix+"runner · "+l+"\n")
