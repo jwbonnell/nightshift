@@ -1,0 +1,20 @@
+── iter 1 (session 1) opus 14:05 · planning ──
+iter 1 · Planning the work.
+iter 1 · Read internal/a.go
+iter 1 · result: success · $0.12 · 3 turns
+── iter 2 (session 2) sonnet 14:35 ──
+iter 2 · Bash go test ./...
+iter 2 · Grep foo
+iter 2 · Task explore
+iter 2 · WebFetch
+iter 2 ·   ↳ error: boom
+iter 2 · result: error — ran out of turns
+── iter 3 (session 1) sonnet 15:00 ──
+iter 3 · result: success · $0.50 · 7 turns
+iter 3 · sbx: warming up sandbox
+── iter 4 (session 1) opencode/x/y 16:00 ──
+iter 4 · hello from opencode
+iter 4 · bash
+iter 4 · edit x.go
+iter 4 · error: rate limited
+iter 4 · {"type":"assistant","message":{"content":[{"type":"text","text":"cut
