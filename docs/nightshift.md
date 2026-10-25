@@ -56,10 +56,11 @@ nightshift refine <slug>              reopen the interview on a draft
 nightshift ready <slug> [--no-verify] [--no-lint]
                                       lint a draft, then move it to specs/ready/
 nightshift lint <spec> [--no-verify]  check a draft or ready spec (verify runs on the base commit in sbx)
-nightshift done <slug>                move a ready spec to specs/done/
+nightshift done <slug>... | --complete move ready spec(s) to specs/done/
 nightshift run <spec> [flags]         run one ready spec (nightshift run -h for flags)
 nightshift run --next [flags]         run eligible ready specs, one after another
-nightshift status [<slug>]            list runs, or show one run in detail
+nightshift status [--all | --since <dur>] [--repo <name>] | <slug>
+                                      list every spec, or show one run in detail
 nightshift review <slug> [--model M]  sandboxed Claude review of a run's work
 nightshift pr <url>|<repo> <n> [flags] pre-review one PR/MR (nightshift pr -h for flags)
 nightshift pr --pending [flags]       pre-review every open PR/MR awaiting your review
@@ -180,11 +181,19 @@ you just want the static checks); it's also skipped if the frontmatter
 or base checks already failed, since there's nothing valid to verify
 against.
 
-### `done <slug>`
+### `done <slug>... | --complete`
 
 Moves `specs/ready/<slug>.md` to `specs/done/<slug>.md`, refusing while that
 spec's lock is held (i.e. it's running) or a done spec with that slug
-already exists. Run state under `runs/` is never touched or moved.
+already exists. Run state under `runs/` is never touched or moved. Before
+the move it stamps a `done:` frontmatter key (RFC 3339, local offset; added
+after `created:` if missing; a spec with no frontmatter moves unchanged).
+
+With several slugs, each is processed in order and prints `done: <slug>`; a
+failure prints `nightshift: <err>` and the rest still run (exit 1 if any
+failed). `--complete` marks done every ready spec whose run is `complete`
+and whose lock isn't held, in slug order, then prints `marked N done` (or
+`nothing to mark done`). `--complete` with slugs is a usage error (exit 2).
 
 ### `run <spec-name|path> [flags]` / `run --next [flags]`
 
@@ -344,13 +353,39 @@ without the wasted verify run.
 
 ### `status`
 
-With no argument: one table, columns `SLUG STATUS ITER COMMITS UPDATED
-BRANCH`, over every run under `~/.nightshift/runs/`. `STATUS` shows `running
-(pid N)` while that spec's lock is actually held, regardless of what
-`run.json` last recorded. After the table, two more lines appear when
-non-empty: `ready, not started: <slugs>` (specs in `specs/ready/` that have
-never been run) and `drafts: <slugs>`. With nothing at all yet, it prints a
-one-line hint to run `nightshift new`.
+With no argument: one table of every spec — runs, ready specs and drafts —
+columns `SLUG STATUS ITER COMMITS UPDATED REPO REVIEW`. Each slug gets one
+display status, first match wins:
+
+1. `done` — the spec is in `specs/done/`, whatever `run.json` says.
+2. `running (pid N)` / `waiting (until 15:04)` — the spec lock is held.
+3. the run's own status (`complete`, `capped`, `red`, …; empty is `new`).
+4. `ready` / `ready (waits on <dep>)` — in `specs/ready/` with no run.
+5. `draft`.
+
+`complete` (finished, not yet marked done) and `done` (moved to
+`specs/done/`) are distinct. `UPDATED` is local time: for done, the spec's
+`done:` stamp (else the last history entry, else file mtime); for runs, the
+last history entry (else `started`); for ready/draft, the file mtime.
+`ITER`/`COMMITS` are `-` with no run. `REPO` is the basename of the run's
+`repo` (or the spec's `repo:`), `REVIEW` the newest review note's verdict
+(`-` none, `unknown` no verdict).
+
+Rows are grouped: active (running/waiting), needs attention (any run status
+but `complete`), complete, ready, draft, done; newest `UPDATED` first within
+a group, ties by slug.
+
+Done rows older than 72h are hidden by default; every other status always
+shows. `--since <dur>` (`3d` or any Go duration) replaces the window, `--all`
+shows everything (not with `--since`), `--repo <name>` keeps only rows whose
+`REPO` matches exactly. Flags are not accepted with a slug. When rows are
+hidden a footer reads `+N done more than <window> ago (--all to show)`
+(counting only rows `--repo` keeps); if nothing remains only the footer
+prints. After the table (and any `usage limit: until …` line), if complete
+rows are shown: `N complete — review and merge, then nightshift done <slug>
+(or nightshift done --complete)`. With no specs or runs at all it prints a
+one-line hint to run `nightshift new`. `status <slug>`'s `status:` line uses
+the display status.
 
 With a slug: every `run.json` field, then `state dir`, `clone`, `runner
 log`, `agent log`, the newest result note (or `none`), `latest review:
@@ -1197,8 +1232,7 @@ one round away, from the graph.
 
 ### Status
 
-`status`'s `ready, not started:` trailer annotates a waiting spec, e.g.
-`b (waits on a), c`. `status <slug>` prints `depends_on`, `owns`,
+`status` shows a waiting spec as `ready (waits on a)`. `status <slug>` prints `depends_on`, `owns`,
 `dep_tips`, and `base_resolved` whenever they're set.
 
 ### Worked example

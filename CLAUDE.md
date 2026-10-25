@@ -70,7 +70,7 @@ versa — see `TestPackageBoundaries` in `internal/agent` and in
 and clone management, `sandbox.go`/`prompt.go` the sbx backend and prompts,
 `loop.go` the Ralph loop, `result.go` the result note, `locks.go`/`next.go`/
 `specrun.go` the top-level `Run`/concurrency, `signal.go` D8 interrupts,
-`status.go` the `status` command, `lint.go` the `lint` checks and the
+`status.go` the `status` command (one unified table of runs/ready/drafts/done), `lint.go` the `lint` checks and the
 `BaseVerifier` interface behind check 9's sandboxed verify-on-base) — see
 `PROGRESS.md` (local, gitignored) for exactly how each piece arrived,
 including a few deliberate forward-declarations that got relocated once
