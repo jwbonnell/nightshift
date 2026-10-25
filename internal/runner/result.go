@@ -310,6 +310,9 @@ func (r *run) finish(status Status) (Status, error) {
 
 	r.prChecks = r.postRunChecks()
 
+	if r.opts.followDrain != nil {
+		r.opts.followDrain()
+	}
 	r.printSummary(status)
 
 	r.scaffoldRemove(r.reviewPath())

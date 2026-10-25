@@ -83,6 +83,7 @@ type Options struct {
 	MaxIter       int    // 0 = unset
 	Until         string // "HH:MM" local deadline, or ""
 	DryRun        bool
+	Follow        bool    // -f: show runner.log and the rendered agent.log live on Stdout
 	Base          string  // "" = fall through to frontmatter/env/config/default
 	MaxConcurrent string  // raw flag value ("" = unset)
 	Jobs          int     // --jobs flag value, 0 = unset; only valid with Next (resolveJobsCount)
@@ -109,6 +110,7 @@ type Options struct {
 	Ctx               context.Context                                  // D8: cancellation source; nil = context.Background()
 	Version           string                                           // the running binary's version; "" is recorded as "dev"
 	Sleep             func(ctx context.Context, d time.Duration) error // injectable waiter for Task 3's usage-limit wait; nil = a real timer that returns ctx.Err() early on cancellation
+	followDrain       func()                                           // unexported: set by Run when Follow; flushes the follower before the final summary
 	clock             func() time.Time                                 // unexported: wall clock for --until and log stamps; nil = time.Now
 	limits            limitConfig                                      // unexported: resolved by Run() via resolveLimitConfig; zero fields mean "use limitCfg()'s defaults"
 }
@@ -211,6 +213,10 @@ func resolveCap(opts Options) (int, string, error) {
 func Run(opts Options) (Status, error) {
 	opts.fill()
 
+	if opts.Follow && !opts.DryRun {
+		opts.Stdout = &syncWriter{w: opts.Stdout}
+	}
+
 	limit, capSrc, err := resolveCap(opts)
 	if err != nil {
 		return StatusError, err
@@ -284,6 +290,13 @@ func Run(opts Options) (Status, error) {
 			return StatusBusy, nil
 		}
 		return StatusError, err
+	}
+
+	if opts.Follow {
+		fw := newFollower(opts.Stdout, opts.StateRoot)
+		fw.add(sp.Slug, "")
+		defer fw.close()
+		opts.followDrain = fw.close
 	}
 
 	return runLocked(opts, sp, limit, capSrc, specLock)

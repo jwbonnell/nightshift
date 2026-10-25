@@ -605,11 +605,13 @@ func cmdRun(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 	base := fs.String("base", "", "branch/ref/sha the run starts from (default: spec base:/NIGHTSHIFT_BASE/origin HEAD)")
 	maxConcurrent := fs.String("max-concurrent", "", "max simultaneous runs (default: NIGHTSHIFT_MAX_CONCURRENT/2)")
 	ignoreDeps := fs.Bool("ignore-deps", false, "skip dependency satisfaction and the integrated base")
+	follow := fs.Bool("f", false, "follow: show runner.log and the rendered agent.log live (prefixed per spec under --next --jobs)")
+	fs.BoolVar(follow, "follow", false, "alias for -f")
 	jobs := fs.Int("jobs", -1, "with --next, run up to N eligible specs at once (default: NIGHTSHIFT_JOBS/1, capped by max-concurrent)")
 
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: nightshift run <spec-name|path> [--fresh [--yes]] [--max-iter N] [--until HH:MM] [--base REF] [--max-concurrent N] [--ignore-deps] [--dry-run]")
-		fmt.Fprintln(stderr, "       nightshift run --next [--until HH:MM] [--max-concurrent N] [--jobs N] [--dry-run]")
+		fmt.Fprintln(stderr, "usage: nightshift run <spec-name|path> [--fresh [--yes]] [--max-iter N] [--until HH:MM] [--base REF] [--max-concurrent N] [--ignore-deps] [-f] [--dry-run]")
+		fmt.Fprintln(stderr, "       nightshift run --next [--until HH:MM] [--max-concurrent N] [--jobs N] [-f] [--dry-run]")
 		fs.PrintDefaults()
 	}
 
@@ -635,6 +637,11 @@ func cmdRun(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 	} else if len(positional) != 1 {
 		fs.Usage()
 		return 1
+	}
+
+	if *follow && *dryRun {
+		fmt.Fprintln(stderr, "nightshift: -f can't be used with --dry-run")
+		return 2
 	}
 
 	if *ignoreDeps && *next {
@@ -682,6 +689,7 @@ func cmdRun(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 		MaxIter:           *maxIter,
 		Until:             *until,
 		DryRun:            *dryRun,
+		Follow:            *follow,
 		Base:              *base,
 		MaxConcurrent:     *maxConcurrent,
 		IgnoreDeps:        *ignoreDeps,
