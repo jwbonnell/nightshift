@@ -206,7 +206,7 @@ func TestRunAgentArgvAndStdin(t *testing.T) {
 		t.Fatalf("RunAgent: %v", err)
 	}
 
-	wantArgv := []string{"exec -w " + mountDir + " nightshift-demo claude -p --model sonnet --output-format json --permission-mode bypassPermissions"}
+	wantArgv := []string{"exec -w " + mountDir + " nightshift-demo claude -p --model sonnet --output-format stream-json --verbose --permission-mode bypassPermissions"}
 	if got := readLog(t, logPath); !equalLines(got, wantArgv) {
 		t.Fatalf("RunAgent argv = %q, want %q", got, wantArgv)
 	}
