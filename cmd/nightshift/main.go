@@ -69,7 +69,8 @@ usage:
   nightshift ready <slug> [--no-verify] [--no-lint]
                                         lint a draft, then move it to specs/ready/
   nightshift lint <spec> [--no-verify]  check a draft or ready spec (verify runs on the base commit in sbx)
-  nightshift done <slug>                move a ready spec to specs/done/
+  nightshift done <slug>... | --complete
+                                        move ready specs to specs/done/
   nightshift run <spec> [flags]         run one ready spec (nightshift run -h for flags)
   nightshift run --next [flags]         run the oldest eligible ready spec
   nightshift status [<slug>]            list runs, or show one run in detail
@@ -493,16 +494,41 @@ func cmdReady(args []string, stdout, stderr io.Writer) int {
 }
 
 func cmdDone(args []string, stdout, stderr io.Writer) int {
-	if len(args) != 1 {
-		fmt.Fprintln(stderr, "usage: nightshift done <slug>")
+	complete := false
+	var slugs []string
+	for _, a := range args {
+		if a == "--complete" {
+			complete = true
+		} else {
+			slugs = append(slugs, a)
+		}
+	}
+	if (complete && len(slugs) > 0) || (!complete && len(slugs) == 0) {
+		fmt.Fprintln(stderr, "usage: nightshift done <slug>... | --complete")
 		return 2
 	}
 	h, ok := resolveHome(stderr)
 	if !ok {
 		return 1
 	}
-	if err := home.Done(h, args[0], time.Now(), stdout); err != nil {
-		fmt.Fprintf(stderr, "nightshift: %v\n", err)
+	if complete {
+		slugs = runner.CompleteReadySlugs(h, home.RunsDir(h))
+	}
+	failed := 0
+	for _, s := range slugs {
+		if err := home.Done(h, s, time.Now(), stdout); err != nil {
+			fmt.Fprintf(stderr, "nightshift: %v\n", err)
+			failed++
+		}
+	}
+	if complete {
+		if n := len(slugs) - failed; n > 0 {
+			fmt.Fprintf(stdout, "marked %d done\n", n)
+		} else if failed == 0 {
+			fmt.Fprintln(stdout, "nothing to mark done")
+		}
+	}
+	if failed > 0 {
 		return 1
 	}
 	return 0

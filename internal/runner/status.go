@@ -302,3 +302,36 @@ func PrintStatusDetail(w io.Writer, homeDir, stateRoot, slug string) error {
 	fmt.Fprintf(w, "review: git -C %s log --oneline %s..%s\n", st.Repo, short(st.Base), reviewRefFor(&st, slug))
 	return nil
 }
+
+// CompleteReadySlugs returns, in slug order, the ready specs whose run.json
+// status is "complete" and whose spec lock is not held — the set
+// `nightshift done --complete` marks done.
+func CompleteReadySlugs(homeDir, stateRoot string) []string {
+	entries, err := os.ReadDir(home.ReadyDir(homeDir))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.EqualFold(filepath.Ext(e.Name()), ".md") {
+			continue
+		}
+		slug := slugFromFilename(e.Name())
+		data, err := os.ReadFile(filepath.Join(stateRoot, slug, "run.json"))
+		if err != nil {
+			continue
+		}
+		var st struct {
+			Status string `json:"status"`
+		}
+		if json.Unmarshal(data, &st) != nil || st.Status != "complete" {
+			continue
+		}
+		if _, held := lock.Probe(specLockPath(stateRoot, slug)); held {
+			continue
+		}
+		out = append(out, slug)
+	}
+	sort.Strings(out)
+	return out
+}

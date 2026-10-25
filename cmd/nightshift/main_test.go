@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jwbonnell/nightshift/internal/home"
+	"github.com/jwbonnell/nightshift/internal/lock"
 	"github.com/jwbonnell/nightshift/internal/runner"
 	"github.com/jwbonnell/nightshift/internal/testenv"
 )
@@ -759,4 +760,97 @@ func withStubVerifier(t *testing.T) {
 	old := newBaseVerifier
 	newBaseVerifier = func(bin string) runner.BaseVerifier { return stubVerifier{} }
 	t.Cleanup(func() { newBaseVerifier = old })
+}
+
+func doneFixture(t *testing.T) string {
+	t.Helper()
+	h := t.TempDir()
+	t.Setenv("NIGHTSHIFT_HOME", h)
+	for _, d := range []string{home.ReadyDir(h), home.DoneDir(h), home.RunsDir(h)} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return h
+}
+
+func doneSpec(t *testing.T, h, slug, status string) {
+	t.Helper()
+	body := "---\ntype: spec\ncreated: 2026-01-01T00:00:00Z\n---\n# x\n"
+	if err := os.WriteFile(filepath.Join(home.ReadyDir(h), slug+".md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if status != "" {
+		d := filepath.Join(home.RunsDir(h), slug)
+		os.MkdirAll(d, 0o755)
+		os.WriteFile(filepath.Join(d, "run.json"), []byte(`{"slug":"`+slug+`","status":"`+status+`"}`), 0o644)
+	}
+}
+
+func runDone(args ...string) (int, string, string) {
+	var stdout, stderr bytes.Buffer
+	code := dispatch(append([]string{"done"}, args...), &stdout, &stderr, strings.NewReader(""))
+	return code, stdout.String(), stderr.String()
+}
+
+func TestDoneMultipleSlugs(t *testing.T) {
+	h := doneFixture(t)
+	doneSpec(t, h, "a", "")
+	doneSpec(t, h, "c", "")
+	code, out, errOut := runDone("a", "bad", "c")
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
+	}
+	if out != "done: a\ndone: c\n" {
+		t.Errorf("stdout = %q", out)
+	}
+	if !strings.Contains(errOut, "nightshift: ") || !strings.Contains(errOut, "bad") {
+		t.Errorf("stderr = %q", errOut)
+	}
+	for _, s := range []string{"a", "c"} {
+		if _, err := os.Stat(filepath.Join(home.DoneDir(h), s+".md")); err != nil {
+			t.Errorf("%s not moved: %v", s, err)
+		}
+	}
+}
+
+func TestDoneComplete(t *testing.T) {
+	h := doneFixture(t)
+	code, out, _ := runDone("--complete")
+	if code != 0 || out != "nothing to mark done\n" {
+		t.Fatalf("empty: code=%d out=%q", code, out)
+	}
+	doneSpec(t, h, "capped", "capped")
+	doneSpec(t, h, "norun", "")
+	doneSpec(t, h, "locked", "complete")
+	doneSpec(t, h, "b", "complete")
+	doneSpec(t, h, "a", "complete")
+	l, err := lock.TryAcquire(home.SpecLockPath(h, "locked"), "locked")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Release()
+
+	code, out, errOut := runDone("--complete")
+	if code != 0 {
+		t.Fatalf("exit = %d stderr=%s", code, errOut)
+	}
+	if out != "done: a\ndone: b\nmarked 2 done\n" {
+		t.Errorf("stdout = %q", out)
+	}
+	for _, s := range []string{"capped", "norun", "locked"} {
+		if _, err := os.Stat(filepath.Join(home.ReadyDir(h), s+".md")); err != nil {
+			t.Errorf("%s should stay ready: %v", s, err)
+		}
+	}
+}
+
+func TestDoneCompleteWithSlugsIsUsageError(t *testing.T) {
+	doneFixture(t)
+	if code, _, _ := runDone("--complete", "x"); code != 2 {
+		t.Errorf("exit = %d, want 2", code)
+	}
+	if code, _, _ := runDone(); code != 2 {
+		t.Errorf("no args exit = %d, want 2", code)
+	}
 }
