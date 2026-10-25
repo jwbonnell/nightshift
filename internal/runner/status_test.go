@@ -601,6 +601,19 @@ func TestStatusTableUnified(t *testing.T) {
 	if err := os.WriteFile(note, []byte("---\nverdict: approve\n---\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Same group as capd but a smaller slug and a later Updated: Updated desc wins.
+	writeReadySpec(t, homeDir, "abc", "", "/src/beta")
+	writeRunState(t, stateRoot, "abc", &runState{
+		Slug: "abc", Repo: "/src/beta", Status: "red", Iterations: 2, Commits: 1,
+		Started: "2026-10-01T00:00:00Z", History: []string{"2026-10-24 10:30 red"},
+	})
+	// Two ready rows with equal Updated: slug breaks the tie.
+	for _, s := range []string{"rdyb", "rdya"} {
+		p := writeReadySpec(t, homeDir, s, "", "/src/alpha")
+		if err := os.Chtimes(p, now.Add(-4*time.Hour), now.Add(-4*time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	got := statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now})
 	pid := os.Getpid()
 	// Golden is whitespace-aligned by tabwriter; compare field-wise per line.
@@ -614,8 +627,11 @@ func TestStatusTableUnified(t *testing.T) {
 	wantLines := []string{
 		"SLUG STATUS ITER COMMITS UPDATED REPO REVIEW",
 		fmt.Sprintf("busy running (pid %d) 2 1 2026-10-24 11:00 alpha -", pid),
+		"abc red 2 1 2026-10-24 10:30 beta -",
 		"capd capped 2 1 2026-10-24 09:30 beta -",
 		"fin complete 2 1 2026-10-23 08:15 alpha approve",
+		"rdya ready - - 2026-10-24 08:00 alpha -",
+		"rdyb ready - - 2026-10-24 08:00 alpha -",
 		"fresh ready - - 2026-10-24 07:00 alpha -",
 		"waity ready (waits on fresh) - - 2026-10-24 06:00 beta -",
 		"drafty draft - - 2026-10-24 10:00 beta -",
@@ -669,14 +685,25 @@ func TestStatusUpdatedSources(t *testing.T) {
 	// run with no history: falls back to started (UTC → Detroit local).
 	writeReadySpec(t, homeDir, "nohist", "", "/src/alpha")
 	writeRunState(t, stateRoot, "nohist", &runState{Slug: "nohist", Status: "red", Started: "2026-10-24T14:00:00Z"})
+	// done spec with no done: key: Updated falls back to run.json history,
+	// not the file's mtime.
+	dp := filepath.Join(home.DoneDir(homeDir), "donehist.md")
+	if err := os.WriteFile(dp, []byte("---\nrepo: /src/alpha\nverify: true\n---\n\n# s\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(dp, now.Add(-10*24*time.Hour), now.Add(-10*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	writeRunState(t, stateRoot, "donehist", &runState{Slug: "donehist", Status: "complete", History: []string{"2026-10-22 09:00 complete"}})
 	out := statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now, All: true})
 	for slug, want := range map[string]string{
-		"busy":   "2026-10-24 11:00", // history, local
-		"fresh":  "2026-10-24 07:00", // mtime (12:00-5h)
-		"drafty": "2026-10-24 10:00", // mtime
-		"old1":   "2026-10-23 12:00", // done: frontmatter
-		"nodone": "2026-10-16 12:00", // no done:, no run: mtime
-		"nohist": "2026-10-24 10:00", // started 14:00Z == 10:00 EDT
+		"donehist": "2026-10-22 09:00",
+		"busy":     "2026-10-24 11:00", // history, local
+		"fresh":    "2026-10-24 07:00", // mtime (12:00-5h)
+		"drafty":   "2026-10-24 10:00", // mtime
+		"old1":     "2026-10-23 12:00", // done: frontmatter
+		"nodone":   "2026-10-16 12:00", // no done:, no run: mtime
+		"nohist":   "2026-10-24 10:00", // started 14:00Z == 10:00 EDT
 	} {
 		if !statusLineHas(out, slug, want) {
 			t.Errorf("%s: want %q in:\n%s", slug, want, out)
