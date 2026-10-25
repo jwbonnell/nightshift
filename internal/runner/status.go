@@ -277,6 +277,7 @@ func PrintStatusDetail(w io.Writer, homeDir, stateRoot, slug string) error {
 	fmt.Fprintf(w, "clone: %s\n", filepath.Join(dir, "repo"))
 	fmt.Fprintf(w, "runner log: %s\n", filepath.Join(dir, "runner.log"))
 	fmt.Fprintf(w, "agent log: %s\n", filepath.Join(dir, "agent.log"))
+	fmt.Fprintf(w, "logs: nightshift logs %s [-f] [--agent]\n", slug)
 
 	resultsDir := home.ResultsDir(homeDir)
 

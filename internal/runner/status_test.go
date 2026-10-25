@@ -252,6 +252,7 @@ func TestStatusDetail(t *testing.T) {
 		"clone: " + filepath.Join(stateRoot, "demo", "repo"),
 		"runner log: " + filepath.Join(stateRoot, "demo", "runner.log"),
 		"agent log: " + filepath.Join(stateRoot, "demo", "agent.log"),
+		"logs: nightshift logs demo [-f] [--agent]",
 		"latest result: " + newPath,
 		"review: git -C /path/to/repo log --oneline",
 	} {
