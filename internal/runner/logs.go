@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -32,7 +33,31 @@ type LogsOptions struct {
 	Sleep  func(ctx context.Context, d time.Duration) error // nil = real timer
 	Active func(slug string) bool                           // nil = spec lock held
 	Loc    *time.Location
+
+	open func(path string) (logFile, error) // nil = os.Open; tests count bytes read
 }
+
+// logFile is the part of *os.File the log streams use.
+type logFile interface {
+	io.Reader
+	io.ReaderAt
+	io.Seeker
+	io.Closer
+	Stat() (os.FileInfo, error)
+}
+
+func osOpen(path string) (logFile, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
+const (
+	tailChunk      = 64 << 10 // read-back step for tail
+	headerScanSpan = 1 << 20  // how far startAtEnd looks back for a header
+)
 
 func realSleep(ctx context.Context, d time.Duration) error {
 	t := time.NewTimer(d)
@@ -65,13 +90,17 @@ type logStream struct {
 	iter    int
 	rend    *Renderer
 	rawIter int
-	f       *os.File
+	open    func(string) (logFile, error)
+	f       logFile
 	off     int64
 	partial []byte
 }
 
 func (o *LogsOptions) newStream(slug string, prefix string) *logStream {
-	s := &logStream{slug: slug, prefix: prefix, agent: o.Agent, raw: o.Raw, iter: o.Iter}
+	s := &logStream{slug: slug, prefix: prefix, agent: o.Agent, raw: o.Raw, iter: o.Iter, open: o.open}
+	if s.open == nil {
+		s.open = osOpen
+	}
 	name := "runner.log"
 	if o.Agent {
 		name = "agent.log"
@@ -130,10 +159,11 @@ func (s *logStream) poll() []string {
 			if s.agent && !s.raw {
 				s.rend = &Renderer{Roots: s.rend.Roots, Loc: s.rend.Loc}
 			}
+			s.rawIter = 0
 		}
 	}
 	if s.f == nil {
-		f, err := os.Open(s.path)
+		f, err := s.open(s.path)
 		if err != nil {
 			return nil
 		}
@@ -162,30 +192,242 @@ func lastN(lines []string, n int) []string {
 	return lines
 }
 
-// tail prints the last N display lines of the file and, when following,
-// positions the stream just after the last complete line.
-func (s *logStream) tail(n int, w io.Writer, follow bool) error {
-	data, err := os.ReadFile(s.path)
-	if err != nil && !os.IsNotExist(err) {
-		return err
+func readRange(f logFile, off, n int64) ([]byte, error) {
+	b := make([]byte, n)
+	got, err := f.ReadAt(b, off)
+	if int64(got) == n {
+		return b, nil
 	}
-	lines, rest := splitLines(data)
+	if err == nil || err == io.EOF {
+		err = io.ErrUnexpectedEOF
+	}
+	return nil, err
+}
+
+// lastHeader returns the last agent.log header line among whole lines.
+func lastHeader(region []byte) (string, bool) {
+	lines := bytes.Split(bytes.TrimRight(region, "\n"), []byte("\n"))
+	for i := len(lines) - 1; i >= 0; i-- {
+		if bytes.HasPrefix(lines[i], []byte("=== iter ")) {
+			if _, ok := headerIter(string(lines[i])); ok {
+				return string(lines[i]), true
+			}
+		}
+	}
+	return "", false
+}
+
+// seed primes the stream's iteration state from a header line without
+// producing output.
+func (s *logStream) seed(header string) {
+	if s.raw {
+		s.rawIter, _ = headerIter(header)
+		return
+	}
+	s.rend.Line(header)
+}
+
+func (s *logStream) resetIter() {
+	s.rawIter = 0
+	if s.agent && !s.raw {
+		s.rend = &Renderer{Roots: s.rend.Roots, Loc: s.rend.Loc}
+	}
+}
+
+// headerBefore finds the nearest header line among the whole lines ending at
+// pos (which must be a line boundary), reading backwards in chunks.
+func (s *logStream) headerBefore(f logFile, pos int64) (string, bool, error) {
+	var frag []byte
+	for end := pos; end > 0; {
+		start := max(0, end-tailChunk)
+		c, err := readRange(f, start, end-start)
+		if err != nil {
+			return "", false, err
+		}
+		buf := append(c, frag...)
+		region := buf
+		if start > 0 {
+			i := bytes.IndexByte(buf, '\n')
+			if i < 0 {
+				frag = buf
+				end = start
+				continue
+			}
+			frag = buf[:i]
+			region = buf[i+1:]
+		}
+		if h, ok := lastHeader(region); ok {
+			return h, true, nil
+		}
+		end = start
+	}
+	return "", false, nil
+}
+
+// countDisplay counts the display lines raw lines produce, without touching
+// the stream's own state.
+func (s *logStream) countDisplay(cnt *Renderer, lines [][]byte) int {
+	n := 0
+	for _, l := range lines {
+		if cnt != nil {
+			n += len(cnt.Line(string(l)))
+		} else {
+			n++
+		}
+	}
+	return n
+}
+
+// tailBack renders the last n display lines of the first size bytes of f by
+// reading backwards from the end. It returns them plus the unterminated
+// bytes after the last newline.
+func (s *logStream) tailBack(f logFile, size int64, n int, follow bool) ([]string, []byte, error) {
+	var cnt *Renderer
+	if s.agent && !s.raw {
+		cnt = &Renderer{Roots: s.rend.Roots, Loc: s.rend.Loc}
+	}
+	var (
+		chunks   [][]byte // newest first
+		frag     []byte   // incomplete first line of what has been read
+		rest     []byte
+		haveRest bool
+		count    int
+		start    = size
+	)
+	for start > 0 {
+		end := start
+		start = max(0, end-tailChunk)
+		c, err := readRange(f, start, end-start)
+		if err != nil {
+			return nil, nil, err
+		}
+		chunks = append(chunks, c)
+		t := append(c[:len(c):len(c)], frag...)
+		if !haveRest {
+			i := bytes.LastIndexByte(t, '\n')
+			if i < 0 {
+				frag = t
+				continue
+			}
+			rest = append([]byte(nil), t[i+1:]...)
+			t = t[:i+1]
+			haveRest = true
+			if !follow && len(rest) > 0 {
+				count += s.countDisplay(cnt, [][]byte{rest})
+			}
+		}
+		t = bytes.TrimSuffix(t, []byte("\n"))
+		parts := bytes.Split(t, []byte("\n"))
+		if start > 0 {
+			frag = parts[0]
+			parts = parts[1:]
+		}
+		count += s.countDisplay(cnt, parts)
+		if count >= n {
+			break
+		}
+	}
+	if !haveRest {
+		rest = frag // no newline anywhere: the whole file is one partial line
+		frag = nil
+		chunks = nil
+	}
+	var data []byte
+	for i := len(chunks) - 1; i >= 0; i-- {
+		data = append(data, chunks[i]...)
+	}
+	regionStart := start
+	if start > 0 {
+		i := bytes.IndexByte(data, '\n')
+		data = data[i+1:]
+		regionStart += int64(i) + 1
+	}
+	data = data[:len(data)-len(rest)]
+	var lines []string
+	if len(data) > 0 {
+		lines = strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	}
 	if !follow && len(rest) > 0 {
 		lines = append(lines, string(rest))
-		rest = nil
 	}
-	for _, l := range lastN(s.feed(lines), n) {
+	s.resetIter()
+	if s.agent && regionStart > 0 {
+		first := -1
+		for i, l := range lines {
+			if _, ok := headerIter(l); ok {
+				first = i
+				break
+			}
+		}
+		if first > 0 {
+			// Lines before the first header only matter if the ones after
+			// it don't already fill n.
+			if out := s.feed(lines[first:]); len(out) >= n {
+				return out, rest, nil
+			}
+			s.resetIter()
+		}
+		if first != 0 {
+			h, ok, err := s.headerBefore(f, regionStart)
+			if err != nil {
+				return nil, nil, err
+			}
+			if ok {
+				s.seed(h)
+			}
+		}
+	}
+	return s.feed(lines), rest, nil
+}
+
+// tail prints the last N display lines of the file and, when following,
+// positions the stream just after the last complete line. The file is
+// opened once and that handle is kept for following.
+func (s *logStream) tail(n int, w io.Writer, follow bool) error {
+	f, err := s.open(s.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	keep := false
+	defer func() {
+		if !keep {
+			f.Close()
+		}
+	}()
+	st, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	size := st.Size()
+	var out []string
+	var rest []byte
+	if n == 0 || s.iter != 0 || size == 0 {
+		data, err := readRange(f, 0, size)
+		if err != nil {
+			return err
+		}
+		lines, r := splitLines(data)
+		rest = r
+		if !follow && len(rest) > 0 {
+			lines = append(lines, string(rest))
+			rest = nil
+		}
+		out = s.feed(lines)
+	} else if out, rest, err = s.tailBack(f, size, n, follow); err != nil {
+		return err
+	}
+	for _, l := range lastN(out, n) {
 		fmt.Fprintln(w, s.prefix+l)
 	}
 	if follow {
-		if f, err := os.Open(s.path); err == nil {
-			s.f = f
-			s.off = int64(len(data))
-			if _, err := f.Seek(s.off, io.SeekStart); err != nil {
-				return err
-			}
-			s.partial = append([]byte(nil), rest...)
+		if _, err := f.Seek(size, io.SeekStart); err != nil {
+			return err
 		}
+		s.f, s.off, keep = f, size, true
+		s.partial = append([]byte(nil), rest...)
 	}
 	return nil
 }

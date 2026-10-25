@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"io"
 	"sync"
 	"time"
@@ -23,11 +24,51 @@ func (s *syncWriter) Write(p []byte) (int, error) {
 }
 
 // startAtEnd positions the stream at the current end of its file, so an
-// already-existing log (a resume) isn't replayed.
+// already-existing log (a resume) isn't replayed. It never renders existing
+// content: for agent.log it only reads back at most headerScanSpan bytes to
+// find the last header, so later lines carry the right iteration.
 func (s *logStream) startAtEnd() {
-	_ = s.tail(1, io.Discard, true)
-	// tail printed at most one line into Discard; the position is what matters.
+	f, err := s.open(s.path)
+	if err != nil {
+		return // not there yet; poll opens it from the start
+	}
+	st, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return
+	}
+	size := st.Size()
+	start := max(0, size-headerScanSpan)
+	buf, err := readRange(f, start, size-start)
+	if err != nil {
+		f.Close()
+		return
+	}
 	s.partial = nil
+	if i := bytes.LastIndexByte(buf, '\n'); i >= 0 {
+		s.partial = append([]byte(nil), buf[i+1:]...)
+		buf = buf[:i+1]
+	} else if start == 0 {
+		s.partial = append([]byte(nil), buf...)
+		buf = nil
+	}
+	if s.agent {
+		if start > 0 {
+			if i := bytes.IndexByte(buf, '\n'); i >= 0 {
+				buf = buf[i+1:]
+			} else {
+				buf = nil
+			}
+		}
+		if h, ok := lastHeader(buf); ok {
+			s.seed(h)
+		}
+	}
+	if _, err := f.Seek(size, io.SeekStart); err != nil {
+		f.Close()
+		return
+	}
+	s.f, s.off = f, size
 }
 
 type followed struct {

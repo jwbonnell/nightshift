@@ -19,7 +19,9 @@ func TestRenderAgentLog(t *testing.T) {
 	}
 	gotS := strings.Join(got, "\n") + "\n"
 	if os.Getenv("UPDATE_GOLDEN") != "" {
-		os.WriteFile("testdata/logview/agent.golden", []byte(gotS), 0o644)
+		if err := os.WriteFile("testdata/logview/agent.golden", []byte(gotS), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	want, err := os.ReadFile("testdata/logview/agent.golden")
 	if err != nil {

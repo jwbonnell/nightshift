@@ -169,7 +169,11 @@ func userErrors(ev map[string]any) []string {
 
 func resultLine(ev map[string]any) []string {
 	if ev["is_error"] == true {
-		return []string{"result: error — " + firstLineCut(str(ev["result"]), 160)}
+		msg := firstLineCut(str(ev["result"]), 160)
+		if msg == "" {
+			return []string{"result: error"}
+		}
+		return []string{"result: error — " + msg}
 	}
 	var parts []string
 	if s := str(ev["subtype"]); s != "" {

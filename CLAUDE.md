@@ -147,6 +147,9 @@ test -z "$(gofmt -l cmd internal)" && go vet ./... && go test ./...
 That's the exact verify command from `SPEC.md`'s frontmatter — run it,
 green, before any commit.
 
+`UPDATE_GOLDEN=1 go test -run TestRenderAgentLog ./internal/runner`
+rewrites `testdata/logview/agent.golden`; review the diff before committing.
+
 Also run `make test-hermetic` before any commit that touches a test
 spawning git: it re-runs the suite with a throwaway `$HOME` and
 `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_NOSYSTEM` pointed at nothing, catching
