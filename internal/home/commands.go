@@ -207,6 +207,90 @@ func replaceFrontmatterValue(content, key, value string) string {
 	return strings.Join(lines, "\n")
 }
 
+// upsertFrontmatterValue sets key to value in content's frontmatter,
+// replacing an existing key in place, else inserting after created: (or just
+// before the closing ---). ok is false, with content unchanged, when there is
+// no complete frontmatter block.
+func upsertFrontmatterValue(content, key, value string) (string, bool) {
+	lines := strings.Split(content, "\n")
+	if len(lines) == 0 || lines[0] != "---" {
+		return content, false
+	}
+	end := -1
+	for i := 1; i < len(lines); i++ {
+		if lines[i] == "---" {
+			end = i
+			break
+		}
+	}
+	if end < 0 {
+		return content, false
+	}
+	created := -1
+	for i := 1; i < end; i++ {
+		k, _, found := strings.Cut(lines[i], ":")
+		if !found {
+			continue
+		}
+		switch strings.TrimSpace(k) {
+		case key:
+			lines[i] = key + ": " + value
+			return strings.Join(lines, "\n"), true
+		case "created":
+			created = i
+		}
+	}
+	at := end
+	if created >= 0 {
+		at = created + 1
+	}
+	line := key + ": " + value
+	lines = append(lines[:at], append([]string{line}, lines[at:]...)...)
+	return strings.Join(lines, "\n"), true
+}
+
+// stampDone rewrites the ready spec at src with done: set to now, via a temp
+// file and rename so a failure never leaves a half-written spec.
+func stampDone(home, src, slug string, now time.Time) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	out, ok := upsertFrontmatterValue(string(data), "done", now.Format(time.RFC3339))
+	if !ok {
+		return nil
+	}
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(ReadyDir(home), "."+slug+".*.tmp")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	fail := func(err error) error {
+		tmp.Close()
+		os.Remove(name)
+		return err
+	}
+	if _, err := tmp.WriteString(out); err != nil {
+		return fail(err)
+	}
+	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
+		return fail(err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(name)
+		return err
+	}
+	if err := os.Rename(name, src); err != nil {
+		os.Remove(name)
+		return err
+	}
+	return nil
+}
+
 // New starts a draft spec at specs/draft/<slug>.md from home's template
 // (or the embedded default), stamping created: to now and substituting
 // repo/verify when given. repo and verify of "" leave the template's
@@ -283,8 +367,10 @@ func Ready(home, slug string, stdout io.Writer) error {
 }
 
 // Done moves a ready spec to specs/done/, refusing while its spec lock is
-// held or a same-named done spec already exists. Run state is untouched.
-func Done(home, slug string, stdout io.Writer) error {
+// held or a same-named done spec already exists. It stamps a done: key
+// (RFC 3339, local offset) into the spec's frontmatter first; a spec with no
+// frontmatter is moved unchanged. Run state is untouched.
+func Done(home, slug string, now time.Time, stdout io.Writer) error {
 	src := filepath.Join(ReadyDir(home), slug+".md")
 	if !fileExists(src) {
 		return fmt.Errorf("no ready spec named %s in %s", slug, ReadyDir(home))
@@ -300,6 +386,9 @@ func Done(home, slug string, stdout io.Writer) error {
 	}
 
 	if err := ensureLayout(home); err != nil {
+		return err
+	}
+	if err := stampDone(home, src, slug, now); err != nil {
 		return err
 	}
 	if err := os.Rename(src, dst); err != nil {

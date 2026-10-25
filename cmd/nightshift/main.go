@@ -501,7 +501,7 @@ func cmdDone(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return 1
 	}
-	if err := home.Done(h, args[0], stdout); err != nil {
+	if err := home.Done(h, args[0], time.Now(), stdout); err != nil {
 		fmt.Fprintf(stderr, "nightshift: %v\n", err)
 		return 1
 	}

@@ -435,7 +435,7 @@ func TestDoneRefusesRunning(t *testing.T) {
 		}
 		defer l.Release()
 
-		err = Done(home, "demo", &bytes.Buffer{})
+		err = Done(home, "demo", time.Now(), &bytes.Buffer{})
 		if err == nil {
 			t.Fatalf("expected an error")
 		}
@@ -453,7 +453,7 @@ func TestDoneRefusesRunning(t *testing.T) {
 		writeReady(t, home, "demo")
 
 		var stdout bytes.Buffer
-		if err := Done(home, "demo", &stdout); err != nil {
+		if err := Done(home, "demo", time.Now(), &stdout); err != nil {
 			t.Fatalf("Done: %v", err)
 		}
 		if stdout.String() != "done: demo\n" {
@@ -473,9 +473,64 @@ func TestDoneRefusesRunning(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(DoneDir(home), "demo.md"), []byte("x"), 0o644); err != nil {
 			t.Fatalf("seed done: %v", err)
 		}
-		err := Done(home, "demo", &bytes.Buffer{})
+		err := Done(home, "demo", time.Now(), &bytes.Buffer{})
 		if err == nil {
 			t.Fatalf("expected an error")
+		}
+	})
+}
+
+func TestDoneStampsTime(t *testing.T) {
+	now := time.Date(2026, 10, 25, 9, 30, 0, 0, time.FixedZone("EDT", -4*3600))
+	stamp := "done: 2026-10-25T09:30:00-04:00"
+
+	run := func(t *testing.T, content string) string {
+		t.Helper()
+		home := filepath.Join(t.TempDir(), "nightshift-home")
+		if err := ensureLayout(home); err != nil {
+			t.Fatalf("ensureLayout: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(ReadyDir(home), "demo.md"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := Done(home, "demo", now, &bytes.Buffer{}); err != nil {
+			t.Fatalf("Done: %v", err)
+		}
+		got, err := os.ReadFile(filepath.Join(DoneDir(home), "demo.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ents, _ := os.ReadDir(ReadyDir(home)); len(ents) != 0 {
+			t.Fatalf("leftover files in ready/: %v", ents)
+		}
+		return string(got)
+	}
+
+	t.Run("key added after created", func(t *testing.T) {
+		got := run(t, "---\ntype: spec\ncreated: 2026-10-24\nrepo: x\n---\nbody\n")
+		want := "---\ntype: spec\ncreated: 2026-10-24\n" + stamp + "\nrepo: x\n---\nbody\n"
+		if got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+	})
+	t.Run("key added at end without created", func(t *testing.T) {
+		got := run(t, "---\ntype: spec\n---\nbody\n")
+		want := "---\ntype: spec\n" + stamp + "\n---\nbody\n"
+		if got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+	})
+	t.Run("existing done replaced", func(t *testing.T) {
+		got := run(t, "---\ncreated: a\ndone: old\n---\nbody\n")
+		want := "---\ncreated: a\n" + stamp + "\n---\nbody\n"
+		if got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+	})
+	t.Run("no frontmatter unchanged", func(t *testing.T) {
+		in := "just a body\nwith lines\n"
+		if got := run(t, in); got != in {
+			t.Fatalf("got %q, want %q", got, in)
 		}
 	})
 }
