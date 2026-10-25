@@ -43,7 +43,7 @@ func (a claudeAgent) Argv(inv Invocation) []string {
 	if inv.ReadOnly {
 		argv = append(argv, "--tools", "Read,Grep,Glob", "--disallowedTools", "mcp__*", "--output-format", "json")
 	} else {
-		argv = append(argv, "--output-format", "json", "--permission-mode", "bypassPermissions")
+		argv = append(argv, "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions")
 	}
 	if inv.MaxTurns > 0 {
 		argv = append(argv, "--max-turns", strconv.Itoa(inv.MaxTurns))

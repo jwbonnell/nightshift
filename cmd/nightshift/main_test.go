@@ -78,6 +78,12 @@ func TestRunHelpMatchesD4(t *testing.T) {
 	want = strings.ReplaceAll(want, "  -max-concurrent string\n    \tmax simultaneous runs (default: NIGHTSHIFT_MAX_CONCURRENT/2)\n",
 		"  -jobs int\n    \twith --next, run up to N eligible specs at once (default: NIGHTSHIFT_JOBS/1, capped by max-concurrent) (default -1)\n  -max-concurrent string\n    \tmax simultaneous runs (default: NIGHTSHIFT_MAX_CONCURRENT/2)\n")
 
+	// nightshift-logs adds -f/--follow the same way.
+	want = strings.ReplaceAll(want, "[--ignore-deps] [--dry-run]\n", "[--ignore-deps] [-f] [--dry-run]\n")
+	want = strings.ReplaceAll(want, "[--jobs N] [--dry-run]\n", "[--jobs N] [-f] [--dry-run]\n")
+	want = strings.ReplaceAll(want, "  -fresh\n",
+		"  -f\tfollow: show runner.log and the rendered agent.log live (prefixed per spec under --next --jobs)\n  -follow\n    \talias for -f\n  -fresh\n")
+
 	bin := buildNightshiftBinary(t)
 	cmd := exec.Command(bin, "run", "-h")
 	var stderr bytes.Buffer
@@ -894,4 +900,18 @@ func statusRowHas(out, slug string, fields ...string) bool {
 		return true
 	}
 	return false
+}
+
+func TestRunFollowDryRunIsUsageError(t *testing.T) {
+	t.Setenv("NIGHTSHIFT_HOME", t.TempDir())
+	oldRunFn := runFn
+	t.Cleanup(func() { runFn = oldRunFn })
+	runFn = func(runner.Options) (runner.Status, error) {
+		t.Fatal("runFn must not be called")
+		return runner.StatusComplete, nil
+	}
+	var stdout, stderr bytes.Buffer
+	if got := dispatch([]string{"run", "demo", "-f", "--dry-run"}, &stdout, &stderr, strings.NewReader("")); got != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%s", got, stderr.String())
+	}
 }

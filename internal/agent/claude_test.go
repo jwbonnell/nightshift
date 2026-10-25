@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -132,7 +134,7 @@ func TestClaudeArgv(t *testing.T) {
 	a := claudeAgent{bin: "claude"}
 
 	code := a.Argv(Invocation{Role: RoleCode, Model: "sonnet"})
-	wantCode := []string{"claude", "-p", "--model", "sonnet", "--output-format", "json", "--permission-mode", "bypassPermissions"}
+	wantCode := []string{"claude", "-p", "--model", "sonnet", "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions"}
 	if !equalStrings(code, wantCode) {
 		t.Errorf("code Argv = %q, want %q", code, wantCode)
 	}
@@ -169,7 +171,7 @@ func TestClaudeArgvHardened(t *testing.T) {
 	// Hardened without ReadOnly is ignored: a coding invocation stays the
 	// ordinary bypassPermissions argv.
 	code := a.Argv(Invocation{Role: RoleCode, Model: "sonnet", Hardened: true})
-	wantCode := []string{"claude", "-p", "--model", "sonnet", "--output-format", "json", "--permission-mode", "bypassPermissions"}
+	wantCode := []string{"claude", "-p", "--model", "sonnet", "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions"}
 	if !equalStrings(code, wantCode) {
 		t.Errorf("hardened-but-not-read-only Argv = %q, want %q", code, wantCode)
 	}
@@ -223,5 +225,59 @@ func TestClaudeTransient(t *testing.T) {
 				t.Errorf("Transient() = %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+func readClaudeFixture(t *testing.T, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", "claude", name))
+	if err != nil {
+		t.Fatalf("read testdata %s: %v", name, err)
+	}
+	return string(b)
+}
+
+func TestClaudeParseStreamJSON(t *testing.T) {
+	res := claudeAgent{}.Parse(readClaudeFixture(t, "stream.jsonl"))
+	if !res.Found || res.IsError || res.Text != "All done." || !res.CostKnown || res.CostUSD != 0.42 {
+		t.Errorf("Parse = %+v", res)
+	}
+}
+
+func TestClaudeStreamRateLimited(t *testing.T) {
+	a := claudeAgent{}
+	res := a.Parse(readClaudeFixture(t, "stream429.jsonl"))
+	if !res.Found || !a.RateLimited(res) || a.Transient(res) {
+		t.Errorf("429 stream: res=%+v rl=%v transient=%v", res, a.RateLimited(res), a.Transient(res))
+	}
+}
+
+func TestClaudeStreamTransient(t *testing.T) {
+	a := claudeAgent{}
+	res := a.Parse(readClaudeFixture(t, "stream529.jsonl"))
+	if !res.Found || a.RateLimited(res) || !a.Transient(res) {
+		t.Errorf("529 stream: res=%+v rl=%v transient=%v", res, a.RateLimited(res), a.Transient(res))
+	}
+}
+
+func TestClaudeStreamNoResult(t *testing.T) {
+	if res := (claudeAgent{}).Parse(readClaudeFixture(t, "stream_noresult.jsonl")); res.Found {
+		t.Errorf("Found = true for a stream with no result: %+v", res)
+	}
+}
+
+func TestClaudeReviewArgvUnchanged(t *testing.T) {
+	a := claudeAgent{bin: "claude"}
+	got := a.Argv(Invocation{Role: RoleReview, Model: "opus", ReadOnly: true})
+	want := []string{"claude", "-p", "--model", "opus", "--tools", "Read,Grep,Glob", "--disallowedTools", "mcp__*", "--output-format", "json"}
+	if !equalStrings(got, want) {
+		t.Errorf("read-only Argv = %q, want %q", got, want)
+	}
+	got = a.Argv(Invocation{Role: RoleReview, Model: "sonnet", ReadOnly: true, MaxTurns: 30, Hardened: true})
+	want = []string{"claude", "-p", "--output-format", "json", "--model", "sonnet", "--max-turns", "30",
+		"--tools", "Read,Grep,Glob", "--permission-mode", "dontAsk", "--no-session-persistence",
+		"--setting-sources", "user", "--disable-slash-commands"}
+	if !equalStrings(got, want) {
+		t.Errorf("hardened Argv = %q, want %q", got, want)
 	}
 }

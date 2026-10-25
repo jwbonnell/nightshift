@@ -70,7 +70,9 @@ versa — see `TestPackageBoundaries` in `internal/agent` and in
 and clone management, `sandbox.go`/`prompt.go` the sbx backend and prompts,
 `loop.go` the Ralph loop, `result.go` the result note, `locks.go`/`next.go`/
 `specrun.go` the top-level `Run`/concurrency, `signal.go` D8 interrupts,
-`status.go` the `status` command (one unified table of runs/ready/drafts/done), `lint.go` the `lint` checks and the
+`status.go` the `status` command (one unified table of runs/ready/drafts/done),
+`logs.go`/`follow.go`/`logview.go` the `logs` command, the `run -f` follower, and the
+agent.log renderer, `lint.go` the `lint` checks and the
 `BaseVerifier` interface behind check 9's sandboxed verify-on-base) — see
 `PROGRESS.md` (local, gitignored) for exactly how each piece arrived,
 including a few deliberate forward-declarations that got relocated once
@@ -83,6 +85,9 @@ processes, never goroutines, so each keeps its own lock, signal handling,
 and exit code. `run --next` always goes through the scheduler in
 `scheduler.go`, at every `--jobs` count including the default of 1 —
 there is no separate single-spec `--next` path.
+
+`agent.log` is the agent's raw stream and is never rewritten or reformatted;
+formatting happens only at display time (`logview.go`).
 
 `runner.log` (built in `state.go` via `logx.NewText`) is plain-text lines,
 `<date> <time> <LEVEL> <message>`, with no attrs and no source location —

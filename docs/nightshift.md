@@ -61,6 +61,7 @@ nightshift run <spec> [flags]         run one ready spec (nightshift run -h for 
 nightshift run --next [flags]         run eligible ready specs, one after another
 nightshift status [--all | --since <dur>] [--repo <name>] | <slug>
                                       list every spec, or show one run in detail
+nightshift logs [<slug>] [flags]      show or follow a run's logs (nightshift logs -h)
 nightshift review <slug> [--model M]  sandboxed Claude review of a run's work
 nightshift pr <url>|<repo> <n> [flags] pre-review one PR/MR (nightshift pr -h for flags)
 nightshift pr --pending [flags]       pre-review every open PR/MR awaiting your review
@@ -198,8 +199,8 @@ and whose lock isn't held, in slug order, then prints `marked N done` (or
 ### `run <spec-name|path> [flags]` / `run --next [flags]`
 
 ```
-usage: nightshift run <spec-name|path> [--fresh [--yes]] [--max-iter N] [--until HH:MM] [--base REF] [--max-concurrent N] [--ignore-deps] [--dry-run]
-       nightshift run --next [--until HH:MM] [--max-concurrent N] [--jobs N] [--dry-run]
+usage: nightshift run <spec-name|path> [--fresh [--yes]] [--max-iter N] [--until HH:MM] [--base REF] [--max-concurrent N] [--ignore-deps] [-f] [--dry-run]
+       nightshift run --next [--until HH:MM] [--max-concurrent N] [--jobs N] [-f] [--dry-run]
   -base string
         branch/ref/sha the run starts from (default: spec base:/NIGHTSHIFT_BASE/origin HEAD)
   -dry-run
@@ -565,7 +566,51 @@ written via `logx.NewText`. A `SECURITY:`-prefixed message logs at `WARN`;
 2026-10-05 21:52:05 INFO  iter 2 verify GREEN at cb9eef57
 ```
 
-`agent.log` holds the agent's raw output instead, unformatted.
+`agent.log` holds the agent's raw output instead, unformatted: for Claude
+that is the full stream-json (see [Watching a run](#watching-a-run)).
+
+## Watching a run
+
+```
+nightshift logs [<slug>] [-f] [--agent [--raw] [--iter N]] [--verify N] [-n N]
+nightshift run <spec> -f        # alias --follow
+```
+
+`logs` prints the last `-n` lines (default 40, `0` = all) of `runner.log`.
+`--agent` reads `agent.log` through a renderer instead and `-n` counts
+rendered lines; `--raw` skips the renderer, and `--iter N` keeps only the
+sections whose header says iteration N (every session and retry).
+`--verify N` prints `attempts/iter-N.log`; it errors (exit 1) if the
+iteration kept none (only red iterations do), and can't be combined with
+`--agent` or `-f` (usage error, exit 2). An unknown slug is `no run state
+for <slug>` (exit 1). With no slug, `logs` uses the active run, or the run
+whose `run.json` changed most recently; `no runs yet` (exit 1) if none.
+
+`-f` prints the tail, then polls every 500ms for new output, buffering
+partial lines and re-opening the file if it shrinks or is replaced (for
+example by `--fresh`). It stops once the run's lock is released, printing
+`— run ended: <status>`. If the run isn't active it prints the tail and
+`(not running)`, exit 0. Ctrl+C exits 0. With no slug and several active
+runs (`--jobs`), it follows all of them with each line prefixed `[<slug>] `.
+
+`run -f` runs the same follower in-process: `runner.log` lines (prefixed
+`runner · `) and the rendered `agent.log` interleaved in arrival order.
+With `--next --jobs N` it follows every spec as it starts, prefixing lines
+with `[<slug>] `. The run's normal final output follows, and the exit code is
+the run's own. `-f` with `--dry-run` is a usage error.
+
+The agent view shows one line per action, e.g. `iter 4 · Edit
+internal/runner/status.go` or `iter 4 · Bash go test ./...`: assistant text
+(first line), tool calls, failed tool results, the final result (subtype,
+cost, turns), errors, and non-JSON lines such as sbx banners, under a
+`── iter N (session S) model HH:MM ──` header per call. It hides system
+events, successful tool results, and opencode `step_finish`.
+
+Claude's planner and coder now run with `--output-format stream-json
+--verbose`, so `agent.log` grows as the agent works and holds the full
+stream, including every tool result — it is much larger than before. It is
+never rewritten; formatting happens only at display time, and `--raw` shows
+the stream as written. Older runs' single-object json logs render too.
 
 ## Configuration
 

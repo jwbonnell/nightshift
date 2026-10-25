@@ -143,6 +143,12 @@ func runJobs(opts Options, limit int, capSrc string, jobs int) (Status, error) {
 		spawn = defaultSpawner
 	}
 
+	var fw *follower
+	if opts.Follow {
+		fw = newFollower(opts.Stdout, opts.StateRoot)
+		defer fw.close()
+	}
+
 	var outMu, errMu sync.Mutex
 	stdoutWrite := func(p []byte) (int, error) { return opts.Stdout.Write(p) }
 	stderrWrite := func(p []byte) (int, error) { return opts.Stderr.Write(p) }
@@ -255,8 +261,14 @@ func runJobs(opts Options, limit int, capSrc string, jobs int) (Status, error) {
 			stdout := newLinePrefixWriter(&outMu, stdoutWrite, prefix)
 			stderr := newLinePrefixWriter(&errMu, stderrWrite, prefix)
 
+			if fw != nil {
+				fw.add(slug, prefix)
+			}
 			w, serr := spawn(ctx, args, stdout, stderr)
 			if serr != nil {
+				if fw != nil {
+					fw.drain(slug)
+				}
 				completions <- jobsResult{slug: slug, exit: -1, status: "error"}
 				continue
 			}
@@ -268,6 +280,9 @@ func runJobs(opts Options, limit int, capSrc string, jobs int) (Status, error) {
 				runningMu.Lock()
 				delete(runningWaiters, slug)
 				runningMu.Unlock()
+				if fw != nil {
+					fw.drain(slug)
+				}
 				stdout.flush()
 				stderr.flush()
 				completions <- jobsResult{slug: slug, exit: exitCodeOf(waitErr), status: ""}
@@ -298,6 +313,9 @@ func runJobs(opts Options, limit int, capSrc string, jobs int) (Status, error) {
 		return statusNothing, nil
 	}
 
+	if fw != nil {
+		fw.close()
+	}
 	printJobsTable(opts, order, resultOf)
 
 	switch {

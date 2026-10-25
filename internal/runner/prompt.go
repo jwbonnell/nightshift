@@ -90,7 +90,7 @@ func stateDirFor(opts Options, sp *Spec) string {
 // one claude sandbox serves both the planner and the coder, each with its
 // own real model, and this line is generic to either.
 func claudeExecPreview(claudeBin string) string {
-	return fmt.Sprintf("%s -p --model <model> --output-format json --permission-mode bypassPermissions", claudeBin)
+	return fmt.Sprintf("%s -p --model <model> --output-format stream-json --verbose --permission-mode bypassPermissions", claudeBin)
 }
 
 // opencodeExecPreview renders ag's real argv for inv, with the config

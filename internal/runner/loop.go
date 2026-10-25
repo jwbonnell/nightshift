@@ -266,7 +266,7 @@ func (r *run) loop() Status {
 		for {
 			ctx, cancel := r.iterCtx(deadline, clock)
 			r.writeAgentHeader(st.Iterations, session, model, planning, clock)
-			tail := &tailBuffer{max: 64 << 10}
+			tail := &tailBuffer{max: 1 << 20}
 			var w io.Writer = tail
 			if r.agentLog != nil {
 				w = io.MultiWriter(r.agentLog, tail)

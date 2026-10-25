@@ -58,7 +58,7 @@ func TestMixedAgentsPlanSandbox(t *testing.T) {
 		"create --name nightshift-demo opencode " + mountDir,
 		"create --name nightshift-demo-plan claude " + mountDir,
 		"create --name nightshift-demo-ctl claude " + mountDir,
-		"exec -w " + mountDir + " nightshift-demo-plan claude -p --model opus --output-format json --permission-mode bypassPermissions",
+		"exec -w " + mountDir + " nightshift-demo-plan claude -p --model opus --output-format stream-json --verbose --permission-mode bypassPermissions",
 		"exec -w " + mountDir + " nightshift-demo env OPENCODE_PERMISSION=" + codePermission + " opencode run --format json --auto -m openai/gpt-5",
 		"stop nightshift-demo",
 		"stop nightshift-demo-plan",
