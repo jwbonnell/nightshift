@@ -542,7 +542,7 @@ func cmdStatus(args []string, stdout, stderr io.Writer) int {
 	stateRoot := home.RunsDir(h)
 
 	if len(args) == 0 {
-		if err := runner.PrintStatusTable(stdout, h, stateRoot); err != nil {
+		if err := runner.PrintStatusTable(stdout, h, stateRoot, runner.StatusTableOptions{}); err != nil {
 			fmt.Fprintf(stderr, "nightshift: %v\n", err)
 			return 1
 		}

@@ -99,22 +99,138 @@ func formatDepTips(tips map[string]string) string {
 	return strings.Join(parts, ", ")
 }
 
-// PrintStatusTable prints the no-argument `status` table plus the
-// ready-not-started/drafts trailer lines, or the "no runs yet" line if
-// there is nothing at all to show.
-func PrintStatusTable(w io.Writer, homeDir, stateRoot string) error {
+// StatusTableOptions tunes PrintStatusTable. The zero value is the default
+// view with the real clock.
+type StatusTableOptions struct {
+	Now time.Time // zero means time.Now()
+}
+
+// Row groups, in display order.
+const (
+	groupActive = iota
+	groupAttention
+	groupComplete
+	groupReady
+	groupDraft
+	groupDone
+)
+
+const statusTimeLayout = "2006-01-02 15:04"
+
+// displayStatus applies the run-backed rules of the display status: done,
+// then running/waiting (lock held), then the run's own status ("new" when
+// empty). st may be nil (no run.json); the second result is false when no
+// rule fired and the caller must fall back to ready/draft.
+func displayStatus(stateRoot, slug string, st *runState, inDone bool) (string, bool) {
+	if inDone {
+		return "done", true
+	}
+	if st == nil {
+		return "", false
+	}
+	if info, held := lock.Probe(specLockPath(stateRoot, slug)); held {
+		status := fmt.Sprintf("running (pid %d)", info.PID)
+		if waitingUntil, err := time.Parse(time.RFC3339, st.WaitingUntil); err == nil {
+			status = fmt.Sprintf("waiting (until %s)", waitingUntil.Local().Format("15:04"))
+		}
+		return status, true
+	}
+	if st.Status == "" {
+		return "new", true
+	}
+	return st.Status, true
+}
+
+// lastHistoryTime parses the newest history entry's "2006-01-02 15:04"
+// prefix as local time.
+func lastHistoryTime(st *runState) (time.Time, bool) {
+	if st == nil || len(st.History) == 0 {
+		return time.Time{}, false
+	}
+	last := st.History[len(st.History)-1]
+	if len(last) < len(statusTimeLayout) {
+		return time.Time{}, false
+	}
+	t, err := time.ParseInLocation(statusTimeLayout, last[:len(statusTimeLayout)], time.Local)
+	return t, err == nil
+}
+
+// noteVerdict reads a review note's verdict, "unknown" when it has none.
+func noteVerdict(path string) string {
+	if data, err := os.ReadFile(path); err == nil {
+		fm := home.ParseFrontmatter(data)
+		if v := home.Unquote(strings.TrimSpace(fm["verdict"])); v != "" {
+			return v
+		}
+	}
+	return "unknown"
+}
+
+var reviewNoteRE = regexp.MustCompile(`^(.+)-\d{4}-\d{2}-\d{2}-review(-\d+)?\.md$`)
+
+// latestReviewNotes reads dir once and maps each slug to its newest review
+// note, with the same matching and tie rules as latestNote(…, true).
+func latestReviewNotes(dir string) map[string]string {
+	out := map[string]string{}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return out
+	}
+	mods := map[string]int64{}
+	for _, e := range entries {
+		m := reviewNoteRE.FindStringSubmatch(e.Name())
+		if e.IsDir() || m == nil {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		fi, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		mod := fi.ModTime().UnixNano()
+		if _, ok := out[m[1]]; !ok || mod > mods[m[1]] {
+			out[m[1]], mods[m[1]] = path, mod
+		}
+	}
+	return out
+}
+
+type specFile struct {
+	path    string
+	modTime time.Time
+}
+
+// listSpecs maps slug → spec file for the .md files directly in dir.
+func listSpecs(dir string) map[string]specFile {
+	out := map[string]specFile{}
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
+			continue
+		}
+		fi, err := e.Info()
+		if err != nil {
+			continue
+		}
+		out[slugFromFilename(e.Name())] = specFile{path: filepath.Join(dir, e.Name()), modTime: fi.ModTime()}
+	}
+	return out
+}
+
+// PrintStatusTable prints the no-argument `status` table: one row per slug
+// across runs, ready specs, drafts and done specs, or the "no runs yet"
+// line if there is nothing at all to show.
+func PrintStatusTable(w io.Writer, homeDir, stateRoot string, o StatusTableOptions) error {
+	now := o.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
 	matches, err := filepath.Glob(filepath.Join(stateRoot, "*", "run.json"))
 	if err != nil {
 		return err
 	}
-
-	type row struct {
-		slug, status, updated, branch string
-		iterations, commits           int
-	}
-	rows := map[string]row{}
+	runs := map[string]*runState{}
 	for _, m := range matches {
-		slug := filepath.Base(filepath.Dir(m))
 		data, err := os.ReadFile(m)
 		if err != nil {
 			continue
@@ -123,108 +239,142 @@ func PrintStatusTable(w io.Writer, homeDir, stateRoot string) error {
 		if err := json.Unmarshal(data, &st); err != nil {
 			continue
 		}
-
-		status := st.Status
-		if info, held := lock.Probe(specLockPath(stateRoot, slug)); held {
-			status = fmt.Sprintf("running (pid %d)", info.PID)
-			if waitingUntil, err := time.Parse(time.RFC3339, st.WaitingUntil); err == nil {
-				status = fmt.Sprintf("waiting (until %s)", waitingUntil.Local().Format("15:04"))
-			}
-		} else if status == "" {
-			status = "new"
-		}
-
-		updated := st.Started
-		if len(st.History) > 0 {
-			last := st.History[len(st.History)-1]
-			if len(last) >= 16 {
-				updated = last[:16]
-			} else {
-				updated = last
-			}
-		}
-
-		rows[slug] = row{slug: slug, status: status, updated: updated, branch: st.Branch, iterations: st.Iterations, commits: st.Commits}
+		runs[filepath.Base(filepath.Dir(m))] = &st
 	}
+	drafts := listSpecs(home.DraftDir(homeDir))
+	readys := listSpecs(home.ReadyDir(homeDir))
+	dones := listSpecs(home.DoneDir(homeDir))
 
-	readyDir := home.ReadyDir(homeDir)
-	readyEntries, _ := os.ReadDir(readyDir)
-	opts := Options{Home: homeDir, StateRoot: stateRoot}
-	type readyRow struct{ slug, display string }
-	var readyRows []readyRow
-	for _, e := range readyEntries {
-		if e.IsDir() {
-			continue
+	slugSet := map[string]bool{}
+	for _, set := range []map[string]specFile{drafts, readys, dones} {
+		for s := range set {
+			slugSet[s] = true
 		}
-		if !strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
-			continue
-		}
-		slug := slugFromFilename(e.Name())
-		if _, ok := rows[slug]; ok {
-			continue
-		}
-		display := slug
-		if data, err := os.ReadFile(filepath.Join(readyDir, e.Name())); err == nil {
-			fm := home.ParseFrontmatter(data)
-			if deps, derr := parseDependsOn(fm["depends_on"]); derr == nil && len(deps) > 0 {
-				if d, _, ok := firstUnmet(opts, deps); ok {
-					display = fmt.Sprintf("%s (waits on %s)", slug, d)
-				}
-			}
-		}
-		readyRows = append(readyRows, readyRow{slug: slug, display: display})
 	}
-	sort.Slice(readyRows, func(i, j int) bool { return readyRows[i].slug < readyRows[j].slug })
-	readyNotStarted := make([]string, len(readyRows))
-	for i, r := range readyRows {
-		readyNotStarted[i] = r.display
+	for s := range runs {
+		slugSet[s] = true
 	}
-
-	draftDir := home.DraftDir(homeDir)
-	draftEntries, _ := os.ReadDir(draftDir)
-	var drafts []string
-	for _, e := range draftEntries {
-		if e.IsDir() {
-			continue
-		}
-		if !strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
-			continue
-		}
-		drafts = append(drafts, slugFromFilename(e.Name()))
-	}
-	sort.Strings(drafts)
-
-	if len(rows) == 0 && len(readyNotStarted) == 0 && len(drafts) == 0 {
+	if len(slugSet) == 0 {
 		fmt.Fprint(w, "no runs yet — nightshift new <slug> to start a spec\n")
 		return nil
 	}
 
-	if len(rows) > 0 {
-		slugs := make([]string, 0, len(rows))
-		for slug := range rows {
-			slugs = append(slugs, slug)
-		}
-		sort.Strings(slugs)
+	reviews := latestReviewNotes(home.ResultsDir(homeDir))
+	opts := Options{Home: homeDir, StateRoot: stateRoot}
 
-		tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
-		fmt.Fprint(tw, "SLUG\tSTATUS\tITER\tCOMMITS\tUPDATED\tBRANCH\n")
-		for _, slug := range slugs {
-			r := rows[slug]
-			fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%s\t%s\n", r.slug, r.status, r.iterations, r.commits, r.updated, r.branch)
+	type row struct {
+		slug, status, iter, commits, repo, review string
+		updated                                   time.Time
+		group                                     int
+	}
+	var rows []row
+	for slug := range slugSet {
+		st := runs[slug]
+		r := row{slug: slug, iter: "-", commits: "-", repo: "-", review: "-"}
+
+		spec, haveSpec := readys[slug]
+		if !haveSpec {
+			spec, haveSpec = drafts[slug]
 		}
-		_ = tw.Flush()
+		doneSpec, inDone := dones[slug]
+		var fm map[string]string
+		if inDone {
+			spec, haveSpec = doneSpec, true
+		}
+		if haveSpec {
+			if data, err := os.ReadFile(spec.path); err == nil {
+				fm = home.ParseFrontmatter(data)
+			}
+		}
+
+		status, ok := displayStatus(stateRoot, slug, st, inDone)
+		_, isReady := readys[slug]
+		switch {
+		case ok:
+			r.status = status
+			switch {
+			case inDone:
+				r.group = groupDone
+			case strings.HasPrefix(status, "running") || strings.HasPrefix(status, "waiting"):
+				r.group = groupActive
+			case status == "complete":
+				r.group = groupComplete
+			default:
+				r.group = groupAttention
+			}
+		case isReady:
+			r.status, r.group = "ready", groupReady
+			if deps, derr := parseDependsOn(fm["depends_on"]); derr == nil && len(deps) > 0 {
+				if d, _, ok := firstUnmet(opts, deps); ok {
+					r.status = fmt.Sprintf("ready (waits on %s)", d)
+				}
+			}
+		default:
+			r.status, r.group = "draft", groupDraft
+		}
+
+		switch {
+		case inDone:
+			if t, err := time.Parse(time.RFC3339, home.Unquote(strings.TrimSpace(fm["done"]))); err == nil {
+				r.updated = t
+			} else if t, ok := lastHistoryTime(st); ok {
+				r.updated = t
+			} else {
+				r.updated = spec.modTime
+			}
+		case st != nil:
+			if t, ok := lastHistoryTime(st); ok {
+				r.updated = t
+			} else if t, err := time.Parse(time.RFC3339, st.Started); err == nil {
+				r.updated = t
+			}
+		default:
+			r.updated = spec.modTime
+		}
+
+		if st != nil {
+			r.iter, r.commits = fmt.Sprint(st.Iterations), fmt.Sprint(st.Commits)
+		}
+		if st != nil && st.Repo != "" {
+			r.repo = filepath.Base(st.Repo)
+		} else if st == nil {
+			if v := home.Unquote(strings.TrimSpace(fm["repo"])); v != "" {
+				if p, err := expandHome(v); err == nil {
+					r.repo = filepath.Base(p)
+				}
+			}
+		}
+		if note, ok := reviews[slug]; ok {
+			r.review = noteVerdict(note)
+		}
+		rows = append(rows, r)
 	}
 
-	if active := readActiveLimit(stateRoot, time.Now(), false); active != nil {
+	sort.Slice(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
+		if a.group != b.group {
+			return a.group < b.group
+		}
+		if !a.updated.Equal(b.updated) {
+			return a.updated.After(b.updated)
+		}
+		return a.slug < b.slug
+	})
+
+	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
+	fmt.Fprint(tw, "SLUG\tSTATUS\tITER\tCOMMITS\tUPDATED\tREPO\tREVIEW\n")
+	for _, r := range rows {
+		updated := "-"
+		if !r.updated.IsZero() {
+			updated = r.updated.Local().Format(statusTimeLayout)
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", r.slug, r.status, r.iter, r.commits, updated, r.repo, r.review)
+	}
+	_ = tw.Flush()
+
+	if active := readActiveLimit(stateRoot, now, false); active != nil {
 		resetAt, _ := time.Parse(time.RFC3339, active.ResetAt)
 		fmt.Fprintf(w, "usage limit: until %s\n", resetAt.Local().Format("Mon 15:04"))
-	}
-
-	if len(readyNotStarted) > 0 {
-		fmt.Fprintf(w, "ready, not started: %s\n", strings.Join(readyNotStarted, ", "))
-	}
-	if len(drafts) > 0 {
-		fmt.Fprintf(w, "drafts: %s\n", strings.Join(drafts, ", "))
 	}
 	return nil
 }
@@ -288,14 +438,7 @@ func PrintStatusDetail(w io.Writer, homeDir, stateRoot, slug string) error {
 
 	latestReview := "none"
 	if newest := latestNote(resultsDir, slug, true); newest != "" {
-		verdict := "unknown"
-		if data, err := os.ReadFile(newest); err == nil {
-			fm := home.ParseFrontmatter(data)
-			if v := home.Unquote(strings.TrimSpace(fm["verdict"])); v != "" {
-				verdict = v
-			}
-		}
-		latestReview = fmt.Sprintf("%s — %s", verdict, newest)
+		latestReview = fmt.Sprintf("%s — %s", noteVerdict(newest), newest)
 	}
 	fmt.Fprintf(w, "latest review: %s\n", latestReview)
 

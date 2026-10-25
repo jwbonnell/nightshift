@@ -396,8 +396,8 @@ func TestSmokeInitNewReadyDryRunStatus(t *testing.T) {
 	if exit != 0 {
 		t.Fatalf("status: exit=%d stderr=%s", exit, stderr)
 	}
-	if !strings.Contains(stdout, "ready, not started: demo") {
-		t.Fatalf("status output missing the ready-not-started line:\n%s", stdout)
+	if !statusRowHas(stdout, "demo", "ready") {
+		t.Fatalf("status output missing a ready demo row:\n%s", stdout)
 	}
 }
 
@@ -440,7 +440,7 @@ func TestStatusIgnoresReviewsDir(t *testing.T) {
 	if exit != 0 {
 		t.Fatalf("status: exit=%d stderr=%s", exit, stderr)
 	}
-	if !strings.Contains(stdout, "ready, not started: demo") {
+	if !statusRowHas(stdout, "demo", "ready", "-") {
 		t.Fatalf("status output changed by decoy reviews/ notes:\n%s", stdout)
 	}
 	if strings.Contains(stdout, "done") || strings.Contains(stdout, "2024-01-01") {
@@ -853,4 +853,20 @@ func TestDoneCompleteWithSlugsIsUsageError(t *testing.T) {
 	if code, _, _ := runDone(); code != 2 {
 		t.Errorf("no args exit = %d, want 2", code)
 	}
+}
+
+// statusRowHas reports whether the status table has a row for slug whose
+// second field is fields[0] (and, if given, whose last field is fields[1]).
+func statusRowHas(out, slug string, fields ...string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 || f[0] != slug || f[1] != fields[0] {
+			continue
+		}
+		if len(fields) > 1 && f[len(f)-1] != fields[1] {
+			continue
+		}
+		return true
+	}
+	return false
 }

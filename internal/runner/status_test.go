@@ -56,18 +56,20 @@ func TestStatusTable(t *testing.T) {
 	writeDraftSpec(t, homeDir, "draftonly", "", repo)
 
 	var buf bytes.Buffer
-	if err := PrintStatusTable(&buf, homeDir, stateRoot); err != nil {
+	if err := PrintStatusTable(&buf, homeDir, stateRoot, StatusTableOptions{}); err != nil {
 		t.Fatalf("PrintStatusTable: %v", err)
 	}
 	out := buf.String()
 
+	if strings.Contains(out, "BRANCH") || strings.Contains(out, "ready, not started") || strings.Contains(out, "drafts:") {
+		t.Fatalf("output has retired BRANCH column or trailer lines:\n%s", out)
+	}
 	for _, want := range []string{
-		"SLUG", "STATUS", "ITER", "COMMITS", "UPDATED", "BRANCH",
+		"SLUG", "STATUS", "ITER", "COMMITS", "UPDATED", "REPO", "REVIEW",
 		"blocked1", "blocked", "2026-01-02 00:01",
 		"done1", "complete", "2026-01-01 00:05",
 		"running1", fmt.Sprintf("running (pid %d)", os.Getpid()),
-		"ready, not started: readyonly",
-		"drafts: draftonly",
+		"readyonly", "draftonly",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output missing %q:\n%s", want, out)
@@ -91,7 +93,7 @@ func TestStatusShowsWaiting(t *testing.T) {
 	defer l.Release()
 
 	var buf bytes.Buffer
-	if err := PrintStatusTable(&buf, homeDir, stateRoot); err != nil {
+	if err := PrintStatusTable(&buf, homeDir, stateRoot, StatusTableOptions{}); err != nil {
 		t.Fatalf("PrintStatusTable: %v", err)
 	}
 	out := buf.String()
@@ -114,10 +116,9 @@ func TestStatusShowsWaiting(t *testing.T) {
 	}
 }
 
-// TestStatusShowsWaitsOn checks the `ready, not started:` trailer
-// annotates a spec waiting on an unmet dependency with "(waits on <d>)",
-// leaves specs with no dependency (or an already-satisfied one) bare, and
-// keeps the whole trailer sorted by slug.
+// TestStatusShowsWaitsOn checks a ready spec waiting on an unmet dependency
+// shows "ready (waits on <d>)", while specs with no dependency (or an
+// already-satisfied one) show a bare "ready".
 func TestStatusShowsWaitsOn(t *testing.T) {
 	homeDir := t.TempDir()
 	stateRoot := home.RunsDir(homeDir)
@@ -134,14 +135,19 @@ func TestStatusShowsWaitsOn(t *testing.T) {
 	})
 
 	var buf bytes.Buffer
-	if err := PrintStatusTable(&buf, homeDir, stateRoot); err != nil {
+	if err := PrintStatusTable(&buf, homeDir, stateRoot, StatusTableOptions{}); err != nil {
 		t.Fatalf("PrintStatusTable: %v", err)
 	}
-	out := buf.String()
-
-	want := "ready, not started: a, b (waits on a), c, d\n"
-	if !strings.Contains(out, want) {
-		t.Fatalf("output missing %q:\n%s", want, out)
+	cells := map[string]string{}
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if f := strings.Fields(line); len(f) > 1 {
+			cells[f[0]] = strings.Join(f[1:], " ")
+		}
+	}
+	for slug, want := range map[string]string{"a": "ready", "b": "ready (waits on a)", "c": "ready", "d": "ready"} {
+		if !strings.HasPrefix(cells[slug], want) || (want == "ready" && strings.HasPrefix(cells[slug], "ready (")) {
+			t.Fatalf("row %s = %q, want status %q:\n%s", slug, cells[slug], want, buf.String())
+		}
 	}
 }
 
@@ -161,7 +167,7 @@ func TestStatusShowsUsageLimitMarker(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := PrintStatusTable(&buf, homeDir, stateRoot); err != nil {
+	if err := PrintStatusTable(&buf, homeDir, stateRoot, StatusTableOptions{}); err != nil {
 		t.Fatalf("PrintStatusTable: %v", err)
 	}
 	out := buf.String()
@@ -177,7 +183,7 @@ func TestStatusTableEmpty(t *testing.T) {
 	stateRoot := home.RunsDir(homeDir)
 
 	var buf bytes.Buffer
-	if err := PrintStatusTable(&buf, homeDir, stateRoot); err != nil {
+	if err := PrintStatusTable(&buf, homeDir, stateRoot, StatusTableOptions{}); err != nil {
 		t.Fatalf("PrintStatusTable: %v", err)
 	}
 	want := "no runs yet — nightshift new <slug> to start a spec\n"
@@ -186,10 +192,8 @@ func TestStatusTableEmpty(t *testing.T) {
 	}
 }
 
-// TestStatusTableReadyOrDraftNoRuns is a regression test: with ready or
-// draft specs but no runs at all, the table header (SLUG/STATUS/...) must
-// not be printed above the trailer lines — there are no rows to put under
-// it.
+// TestStatusTableReadyOrDraftNoRuns: with ready and draft specs but no
+// runs at all, both are rows under the header, with "-" run cells.
 func TestStatusTableReadyOrDraftNoRuns(t *testing.T) {
 	homeDir := t.TempDir()
 	stateRoot := home.RunsDir(homeDir)
@@ -199,12 +203,13 @@ func TestStatusTableReadyOrDraftNoRuns(t *testing.T) {
 	writeDraftSpec(t, homeDir, "draftonly", "", repo)
 
 	var buf bytes.Buffer
-	if err := PrintStatusTable(&buf, homeDir, stateRoot); err != nil {
+	if err := PrintStatusTable(&buf, homeDir, stateRoot, StatusTableOptions{}); err != nil {
 		t.Fatalf("PrintStatusTable: %v", err)
 	}
-	want := "ready, not started: readyonly\ndrafts: draftonly\n"
-	if buf.String() != want {
-		t.Fatalf("output = %q, want %q (no empty table header)", buf.String(), want)
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 3 || !strings.HasPrefix(lines[0], "SLUG") ||
+		!strings.HasPrefix(lines[1], "readyonly") || !strings.HasPrefix(lines[2], "draftonly") {
+		t.Fatalf("output = %q, want header, ready row, draft row", buf.String())
 	}
 }
 
