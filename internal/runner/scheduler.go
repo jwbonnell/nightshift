@@ -229,10 +229,17 @@ func runJobs(opts Options, limit int, capSrc string, jobs int) (Status, error) {
 			lastWaits = waits
 			var next *nextCandidate
 			for i := range cands {
-				if !started[cands[i].slug] {
-					next = &cands[i]
-					break
+				if started[cands[i].slug] {
+					continue
 				}
+				// A dependency this scheduler started and hasn't reaped may
+				// be mid-write of run.json; its on-disk state is not yet
+				// trustworthy, so hold the dependent until it exits.
+				if dependsOnRunning(cands[i].deps, started, resultOf) {
+					continue
+				}
+				next = &cands[i]
+				break
 			}
 			if next == nil {
 				return
@@ -373,4 +380,15 @@ func printJobsTable(opts Options, order []string, resultOf map[string]jobsResult
 	}
 	_ = tw.Flush()
 	fmt.Fprintf(opts.Stdout, "started %d · complete %d · other %d\n", len(order), complete, len(order)-complete)
+}
+
+// dependsOnRunning reports whether any of deps was started by this
+// scheduler but has not yet completed.
+func dependsOnRunning(deps []string, started map[string]bool, resultOf map[string]jobsResult) bool {
+	for _, d := range deps {
+		if _, done := resultOf[d]; started[d] && !done {
+			return true
+		}
+	}
+	return false
 }

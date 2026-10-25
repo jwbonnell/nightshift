@@ -13,6 +13,8 @@ import (
 
 type nextCandidate struct {
 	path, slug string
+	// deps are the slugs from the spec's depends_on, for the scheduler.
+	deps []string
 }
 
 // waitSkip records a ready spec --next passed over because of an unmet
@@ -84,6 +86,7 @@ func selectNextCandidates(opts Options) (cands []nextCandidate, waits []waitSkip
 			name:    name,
 		}
 		if deps, derr := parseDependsOn(fm["depends_on"]); derr == nil && len(deps) > 0 {
+			s.cand.deps = deps
 			if d, state, ok := firstUnmet(opts, deps); ok {
 				s.wait = &waitSkip{slug: slug, dep: d, state: state}
 			}
