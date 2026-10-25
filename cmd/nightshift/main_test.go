@@ -788,8 +788,12 @@ func doneSpec(t *testing.T, h, slug, status string) {
 	}
 	if status != "" {
 		d := filepath.Join(home.RunsDir(h), slug)
-		os.MkdirAll(d, 0o755)
-		os.WriteFile(filepath.Join(d, "run.json"), []byte(`{"slug":"`+slug+`","status":"`+status+`"}`), 0o644)
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "run.json"), []byte(`{"slug":"`+slug+`","status":"`+status+`"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -848,6 +852,33 @@ func TestDoneComplete(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(home.ReadyDir(h), s+".md")); err != nil {
 			t.Errorf("%s should stay ready: %v", s, err)
 		}
+	}
+	for _, s := range []string{"a", "b"} {
+		if _, err := os.Stat(filepath.Join(home.DoneDir(h), s+".md")); err != nil {
+			t.Errorf("%s not moved to done: %v", s, err)
+		}
+		if _, err := os.Stat(filepath.Join(home.ReadyDir(h), s+".md")); !os.IsNotExist(err) {
+			t.Errorf("%s still in ready: %v", s, err)
+		}
+	}
+}
+
+func TestDoneCompleteSkipsAlreadyDone(t *testing.T) {
+	h := doneFixture(t)
+	doneSpec(t, h, "a", "complete")
+	doneSpec(t, h, "b", "complete")
+	if err := os.WriteFile(filepath.Join(home.DoneDir(h), "a.md"), []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := runDone("--complete")
+	if code != 0 {
+		t.Fatalf("exit = %d stderr=%s", code, errOut)
+	}
+	if want := "skip: a (already in specs/done/)\ndone: b\nmarked 1 done\n"; out != want {
+		t.Errorf("stdout = %q, want %q", out, want)
+	}
+	if _, err := os.Stat(filepath.Join(home.ReadyDir(h), "a.md")); err != nil {
+		t.Errorf("a should stay ready: %v", err)
 	}
 }
 

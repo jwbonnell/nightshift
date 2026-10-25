@@ -113,6 +113,8 @@ var sinceDaysRE = regexp.MustCompile(`^(\d+)d$`)
 
 // ParseStatusSince parses a --since value: "<N>d" (whole days) or any
 // time.ParseDuration value.
+// Only positive values are accepted; the day-count bound keeps n*24h from
+// overflowing time.Duration.
 func ParseStatusSince(s string) (time.Duration, error) {
 	if m := sinceDaysRE.FindStringSubmatch(s); m != nil {
 		var n int
@@ -511,33 +513,28 @@ func PrintStatusDetail(w io.Writer, homeDir, stateRoot, slug string) error {
 
 // CompleteReadySlugs returns, in slug order, the ready specs whose run.json
 // status is "complete" and whose spec lock is not held — the set
-// `nightshift done --complete` marks done.
-func CompleteReadySlugs(homeDir, stateRoot string) []string {
-	entries, err := os.ReadDir(home.ReadyDir(homeDir))
-	if err != nil {
-		return nil
+// `nightshift done --complete` marks done. Slugs that already have a spec in
+// specs/done/ come back in skipped instead, since marking them would fail.
+func CompleteReadySlugs(homeDir, stateRoot string) (slugs, skipped []string) {
+	ready := listSpecs(home.ReadyDir(homeDir))
+	keys := make([]string, 0, len(ready))
+	for slug := range ready {
+		keys = append(keys, slug)
 	}
-	var out []string
-	for _, e := range entries {
-		if e.IsDir() || !strings.EqualFold(filepath.Ext(e.Name()), ".md") {
-			continue
-		}
-		slug := slugFromFilename(e.Name())
-		data, err := os.ReadFile(filepath.Join(stateRoot, slug, "run.json"))
-		if err != nil {
-			continue
-		}
-		var st struct {
-			Status string `json:"status"`
-		}
-		if json.Unmarshal(data, &st) != nil || st.Status != "complete" {
+	sort.Strings(keys)
+	for _, slug := range keys {
+		st := loadPriorState(Options{StateRoot: stateRoot}, slug)
+		if st == nil || st.Status != "complete" {
 			continue
 		}
 		if _, held := lock.Probe(specLockPath(stateRoot, slug)); held {
 			continue
 		}
-		out = append(out, slug)
+		if _, exists := findCaseInsensitive(home.DoneDir(homeDir), slug+".md"); exists {
+			skipped = append(skipped, slug)
+			continue
+		}
+		slugs = append(slugs, slug)
 	}
-	sort.Strings(out)
-	return out
+	return slugs, skipped
 }

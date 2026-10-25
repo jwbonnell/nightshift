@@ -534,3 +534,61 @@ func TestDoneStampsTime(t *testing.T) {
 		}
 	})
 }
+
+func TestDoneCaseInsensitiveReadyFile(t *testing.T) {
+	h := filepath.Join(t.TempDir(), "nightshift-home")
+	if err := ensureLayout(h); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(ReadyDir(h), "x.MD")
+	if err := os.WriteFile(src, []byte("---\ntype: spec\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Done(h, "x", time.Now(), &bytes.Buffer{}); err != nil {
+		t.Fatalf("Done: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(DoneDir(h), "x.md"))
+	if err != nil {
+		t.Fatalf("done/x.md missing: %v", err)
+	}
+	if !strings.Contains(string(got), "done: ") {
+		t.Errorf("not stamped: %q", got)
+	}
+	if ents, _ := os.ReadDir(ReadyDir(h)); len(ents) != 0 {
+		t.Errorf("leftover files in ready/: %v", ents)
+	}
+}
+
+func TestDoneMoveFailureLeavesReadyUnstamped(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	h := filepath.Join(t.TempDir(), "nightshift-home")
+	if err := ensureLayout(h); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(ReadyDir(h), "demo.md")
+	orig := []byte("---\ntype: spec\ncreated: 2026-10-24\n---\nbody\n")
+	if err := os.WriteFile(src, orig, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(DoneDir(h), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(DoneDir(h), 0o755) })
+
+	if err := Done(h, "demo", time.Now(), &bytes.Buffer{}); err == nil {
+		t.Fatal("Done succeeded with an unwritable done dir")
+	}
+	got, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, orig) {
+		t.Errorf("ready spec changed: %q", got)
+	}
+	ents, _ := os.ReadDir(ReadyDir(h))
+	if len(ents) != 1 {
+		t.Errorf("ready/ should hold only the spec: %v", ents)
+	}
+}

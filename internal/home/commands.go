@@ -249,16 +249,18 @@ func upsertFrontmatterValue(content, key, value string) (string, bool) {
 	return strings.Join(lines, "\n"), true
 }
 
-// stampDone rewrites the ready spec at src with done: set to now, via a temp
-// file and rename so a failure never leaves a half-written spec.
-func stampDone(home, src, slug string, now time.Time) error {
+// stampDone moves the ready spec at src to dst with done: set to now. The
+// stamped content goes to a temp file in ReadyDir that is renamed straight
+// to dst, and only then is src removed, so a failed move never leaves a
+// stamped spec in ready/. A spec with no frontmatter is renamed unchanged.
+func stampDone(home, src, dst, slug string, now time.Time) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
 		return err
 	}
 	out, ok := upsertFrontmatterValue(string(data), "done", now.Format(time.RFC3339))
 	if !ok {
-		return nil
+		return os.Rename(src, dst)
 	}
 	info, err := os.Stat(src)
 	if err != nil {
@@ -284,11 +286,33 @@ func stampDone(home, src, slug string, now time.Time) error {
 		os.Remove(name)
 		return err
 	}
-	if err := os.Rename(name, src); err != nil {
+	if err := os.Rename(name, dst); err != nil {
 		os.Remove(name)
 		return err
 	}
+	if err := os.Remove(src); err != nil {
+		return fmt.Errorf("moved %s to %s but could not remove %s: %w", src, dst, src, err)
+	}
 	return nil
+}
+
+// findFold returns the path of the file in dir named name, matched
+// case-insensitively (an exact match wins).
+func findFold(dir, name string) (string, bool) {
+	exact := filepath.Join(dir, name)
+	if fileExists(exact) {
+		return exact, true
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", false
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.EqualFold(e.Name(), name) {
+			return filepath.Join(dir, e.Name()), true
+		}
+	}
+	return "", false
 }
 
 // New starts a draft spec at specs/draft/<slug>.md from home's template
@@ -367,12 +391,14 @@ func Ready(home, slug string, stdout io.Writer) error {
 }
 
 // Done moves a ready spec to specs/done/, refusing while its spec lock is
-// held or a same-named done spec already exists. It stamps a done: key
-// (RFC 3339, local offset) into the spec's frontmatter first; a spec with no
-// frontmatter is moved unchanged. Run state is untouched.
+// held or a same-named done spec already exists. The ready file is matched
+// case-insensitively; the destination is always <slug>.md. It stamps a done:
+// key (RFC 3339, local offset) into the spec's frontmatter as part of the
+// move; a spec with no frontmatter is moved unchanged. Run state is
+// untouched.
 func Done(home, slug string, now time.Time, stdout io.Writer) error {
-	src := filepath.Join(ReadyDir(home), slug+".md")
-	if !fileExists(src) {
+	src, found := findFold(ReadyDir(home), slug+".md")
+	if !found {
 		return fmt.Errorf("no ready spec named %s in %s", slug, ReadyDir(home))
 	}
 
@@ -381,17 +407,14 @@ func Done(home, slug string, now time.Time, stdout io.Writer) error {
 	}
 
 	dst := filepath.Join(DoneDir(home), slug+".md")
-	if fileExists(dst) {
-		return fmt.Errorf("spec %s already exists: %s", slug, dst)
+	if existing, exists := findFold(DoneDir(home), slug+".md"); exists {
+		return fmt.Errorf("spec %s already exists: %s", slug, existing)
 	}
 
 	if err := ensureLayout(home); err != nil {
 		return err
 	}
-	if err := stampDone(home, src, slug, now); err != nil {
-		return err
-	}
-	if err := os.Rename(src, dst); err != nil {
+	if err := stampDone(home, src, dst, slug, now); err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "done: %s\n", slug)

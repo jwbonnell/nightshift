@@ -189,12 +189,17 @@ spec's lock is held (i.e. it's running) or a done spec with that slug
 already exists. Run state under `runs/` is never touched or moved. Before
 the move it stamps a `done:` frontmatter key (RFC 3339, local offset; added
 after `created:` if missing; a spec with no frontmatter moves unchanged).
+The ready file is matched case-insensitively (`X.MD` for slug `x`); the
+destination is always `<slug>.md`. The stamped copy is written straight to
+`specs/done/` and the ready file is removed afterwards, so a failed move
+leaves the ready spec untouched.
 
 With several slugs, each is processed in order and prints `done: <slug>`; a
 failure prints `nightshift: <err>` and the rest still run (exit 1 if any
 failed). `--complete` marks done every ready spec whose run is `complete`
 and whose lock isn't held, in slug order, then prints `marked N done` (or
-`nothing to mark done`). `--complete` with slugs is a usage error (exit 2).
+`nothing to mark done`). A slug that already exists in `specs/done/` prints
+`skip: <slug> (already in specs/done/)` instead; a skip isn't a failure. `--complete` with slugs is a usage error (exit 2).
 
 ### `run <spec-name|path> [flags]` / `run --next [flags]`
 
@@ -380,7 +385,7 @@ but `complete`), complete, ready, draft, done; newest `UPDATED` first within
 a group, ties by slug.
 
 Done rows older than 72h are hidden by default; every other status always
-shows. `--since <dur>` (`3d` or any Go duration) replaces the window, `--all`
+shows. `--since <dur>` (`3d` or any positive Go duration) replaces the window, `--all`
 shows everything (not with `--since`), `--repo <name>` keeps only rows whose
 `REPO` matches exactly. Flags are not accepted with a slug. When rows are
 hidden a footer reads `+N done more than <window> ago (--all to show)`

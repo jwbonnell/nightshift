@@ -517,7 +517,11 @@ func cmdDone(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if complete {
-		slugs = runner.CompleteReadySlugs(h, home.RunsDir(h))
+		var skipped []string
+		slugs, skipped = runner.CompleteReadySlugs(h, home.RunsDir(h))
+		for _, s := range skipped {
+			fmt.Fprintf(stdout, "skip: %s (already in specs/done/)\n", s)
+		}
 	}
 	failed := 0
 	for _, s := range slugs {

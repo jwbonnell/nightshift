@@ -71,8 +71,8 @@ and clone management, `sandbox.go`/`prompt.go` the sbx backend and prompts,
 `loop.go` the Ralph loop, `result.go` the result note, `locks.go`/`next.go`/
 `specrun.go` the top-level `Run`/concurrency, `signal.go` D8 interrupts,
 `status.go` the `status` command (one unified table of runs/ready/drafts/done),
-`logs.go`/`follow.go`/`logview.go` the `logs` command, the `run -f` follower, and the
-agent.log renderer, `lint.go` the `lint` checks and the
+`logs.go`/`follow.go`/`logview.go` the `logs` command, the `run -f`
+follower, and the agent.log renderer, `lint.go` the `lint` checks and the
 `BaseVerifier` interface behind check 9's sandboxed verify-on-base) — see
 `PROGRESS.md` (local, gitignored) for exactly how each piece arrived,
 including a few deliberate forward-declarations that got relocated once
