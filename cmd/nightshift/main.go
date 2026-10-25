@@ -73,7 +73,8 @@ usage:
                                         move ready specs to specs/done/
   nightshift run <spec> [flags]         run one ready spec (nightshift run -h for flags)
   nightshift run --next [flags]         run the oldest eligible ready spec
-  nightshift status [<slug>]            list runs, or show one run in detail
+  nightshift status [--all | --since <dur>] [--repo <name>] | <slug>
+                                        list every spec, or show one run in detail
   nightshift pr <url>|<repo> <n> [flags] pre-review one PR/MR (nightshift pr -h for flags)
   nightshift pr --pending [flags]       pre-review every open PR/MR awaiting your review
   nightshift review <slug> [--model M] [--lens a,b]
@@ -541,17 +542,43 @@ func cmdStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	stateRoot := home.RunsDir(h)
 
-	if len(args) == 0 {
-		if err := runner.PrintStatusTable(stdout, h, stateRoot, runner.StatusTableOptions{}); err != nil {
+	const usage = "usage: nightshift status [--all | --since <dur>] [--repo <name>] | <slug>"
+	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	all := fs.Bool("all", false, "show every row")
+	since := fs.String("since", "", "done-row age window")
+	repo := fs.String("repo", "", "only rows for this repo")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(stderr, usage)
+		return 2
+	}
+	rest := fs.Args()
+	flagged := *all || *since != "" || *repo != ""
+	if len(rest) > 1 || (len(rest) == 1 && (flagged || strings.HasPrefix(rest[0], "-"))) {
+		fmt.Fprintln(stderr, usage)
+		return 2
+	}
+	if len(rest) == 0 {
+		opts := runner.StatusTableOptions{All: *all, Repo: *repo}
+		if *all && *since != "" {
+			fmt.Fprintln(stderr, usage)
+			return 2
+		}
+		if *since != "" {
+			d, err := runner.ParseStatusSince(*since)
+			if err != nil {
+				fmt.Fprintf(stderr, "nightshift status: %v\n", err)
+				return 2
+			}
+			opts.Since, opts.SinceText = d, *since
+		}
+		if err := runner.PrintStatusTable(stdout, h, stateRoot, opts); err != nil {
 			fmt.Fprintf(stderr, "nightshift: %v\n", err)
 			return 1
 		}
 		return 0
 	}
-	if len(args) != 1 {
-		fmt.Fprintln(stderr, "usage: nightshift status [<slug>]")
-		return 2
-	}
+	args = rest
 	if err := runner.PrintStatusDetail(stdout, h, stateRoot, args[0]); err != nil {
 		fmt.Fprintf(stderr, "nightshift: %v\n", err)
 		return 1

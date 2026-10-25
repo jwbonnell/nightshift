@@ -102,7 +102,27 @@ func formatDepTips(tips map[string]string) string {
 // StatusTableOptions tunes PrintStatusTable. The zero value is the default
 // view with the real clock.
 type StatusTableOptions struct {
-	Now time.Time // zero means time.Now()
+	Now       time.Time     // zero means time.Now()
+	All       bool          // show every row, however old
+	Since     time.Duration // done-row age window; zero means 72h
+	SinceText string        // the --since text as given, for the footer; empty means "3d"
+	Repo      string        // keep only rows whose REPO equals this
+}
+
+var sinceDaysRE = regexp.MustCompile(`^(\d+)d$`)
+
+// ParseStatusSince parses a --since value: "<N>d" (whole days) or any
+// time.ParseDuration value.
+func ParseStatusSince(s string) (time.Duration, error) {
+	if m := sinceDaysRE.FindStringSubmatch(s); m != nil {
+		var n int
+		if _, err := fmt.Sscan(m[1], &n); err == nil && n > 0 && n < 100000 {
+			return time.Duration(n) * 24 * time.Hour, nil
+		}
+	} else if d, err := time.ParseDuration(s); err == nil && d > 0 {
+		return d, nil
+	}
+	return 0, fmt.Errorf("--since %q: want a duration like 3d or 36h", s)
 }
 
 // Row groups, in display order.
@@ -361,8 +381,33 @@ func PrintStatusTable(w io.Writer, homeDir, stateRoot string, o StatusTableOptio
 		return a.slug < b.slug
 	})
 
+	window, windowText := 72*time.Hour, "3d"
+	if o.Since > 0 {
+		window = o.Since
+		if o.SinceText != "" {
+			windowText = o.SinceText
+		} else {
+			windowText = o.Since.String()
+		}
+	}
+	shown := rows[:0:0]
+	hidden := 0
+	for _, r := range rows {
+		if o.Repo != "" && r.repo != o.Repo {
+			continue
+		}
+		if !o.All && r.group == groupDone && now.Sub(r.updated) > window {
+			hidden++
+			continue
+		}
+		shown = append(shown, r)
+	}
+	rows = shown
+
 	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
-	fmt.Fprint(tw, "SLUG\tSTATUS\tITER\tCOMMITS\tUPDATED\tREPO\tREVIEW\n")
+	if len(rows) > 0 {
+		fmt.Fprint(tw, "SLUG\tSTATUS\tITER\tCOMMITS\tUPDATED\tREPO\tREVIEW\n")
+	}
 	for _, r := range rows {
 		updated := "-"
 		if !r.updated.IsZero() {
@@ -371,10 +416,22 @@ func PrintStatusTable(w io.Writer, homeDir, stateRoot string, o StatusTableOptio
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", r.slug, r.status, r.iter, r.commits, updated, r.repo, r.review)
 	}
 	_ = tw.Flush()
+	if hidden > 0 {
+		fmt.Fprintf(w, "+%d done more than %s ago (--all to show)\n", hidden, windowText)
+	}
 
 	if active := readActiveLimit(stateRoot, now, false); active != nil {
 		resetAt, _ := time.Parse(time.RFC3339, active.ResetAt)
 		fmt.Fprintf(w, "usage limit: until %s\n", resetAt.Local().Format("Mon 15:04"))
+	}
+	complete := 0
+	for _, r := range rows {
+		if r.group == groupComplete {
+			complete++
+		}
+	}
+	if complete > 0 {
+		fmt.Fprintf(w, "%d complete — review and merge, then nightshift done <slug> (or nightshift done --complete)\n", complete)
 	}
 	return nil
 }
@@ -415,7 +472,12 @@ func PrintStatusDetail(w io.Writer, homeDir, stateRoot, slug string) error {
 	fmt.Fprintf(w, "planned: %v\n", st.Planned)
 	fmt.Fprintf(w, "iterations: %d\n", st.Iterations)
 	fmt.Fprintf(w, "commits: %d\n", st.Commits)
-	fmt.Fprintf(w, "status: %s\n", st.Status)
+	_, inDone := findCaseInsensitive(home.DoneDir(homeDir), slug+".md")
+	status := st.Status
+	if ds, ok := displayStatus(stateRoot, slug, &st, inDone); ok {
+		status = ds
+	}
+	fmt.Fprintf(w, "status: %s\n", status)
 	if st.WaitingUntil != "" {
 		fmt.Fprintf(w, "waiting_until: %s\n", st.WaitingUntil)
 	}

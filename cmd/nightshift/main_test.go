@@ -855,6 +855,31 @@ func TestDoneCompleteWithSlugsIsUsageError(t *testing.T) {
 	}
 }
 
+func runStatus(args ...string) (int, string, string) {
+	var stdout, stderr bytes.Buffer
+	code := dispatch(append([]string{"status"}, args...), &stdout, &stderr, strings.NewReader(""))
+	return code, stdout.String(), stderr.String()
+}
+
+func TestStatusFlagsWithSlugIsUsageError(t *testing.T) {
+	doneFixture(t)
+	for _, args := range [][]string{
+		{"demo", "--all"}, {"--all", "demo"}, {"--repo", "x", "demo"}, {"--since", "3d", "demo"},
+		{"--all", "--since", "3d"}, {"a", "b"},
+	} {
+		if code, _, _ := runStatus(args...); code != 2 {
+			t.Errorf("status %v exit = %d, want 2", args, code)
+		}
+	}
+	code, _, errOut := runStatus("--since", "bogus")
+	if code != 2 || !strings.Contains(errOut, `nightshift status: --since "bogus": want a duration like 3d or 36h`) {
+		t.Errorf("bad --since: code=%d stderr=%q", code, errOut)
+	}
+	if code, _, errOut := runStatus("--all"); code != 0 {
+		t.Errorf("status --all exit = %d, stderr=%s", code, errOut)
+	}
+}
+
 // statusRowHas reports whether the status table has a row for slug whose
 // second field is fields[0] (and, if given, whose last field is fields[1]).
 func statusRowHas(out, slug string, fields ...string) bool {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -515,5 +516,298 @@ func TestLatestNoteIgnoresLongerSlugs(t *testing.T) {
 	}
 	if strings.Contains(out, "demo-extra") {
 		t.Fatalf("output matched demo-extra's notes:\n%s", out)
+	}
+}
+
+// statusFixture builds the spec's fixture home. Clock: 2026-10-24 12:00
+// America/Detroit.
+func statusFixture(t *testing.T) (homeDir, stateRoot string, now time.Time, release func()) {
+	t.Helper()
+	loc, err := time.LoadLocation("America/Detroit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TZ", "America/Detroit")
+	old := time.Local
+	time.Local = loc
+	t.Cleanup(func() { time.Local = old })
+	now = time.Date(2026, 10, 24, 12, 0, 0, 0, loc)
+
+	homeDir = t.TempDir()
+	stateRoot = home.RunsDir(homeDir)
+	mt := func(path string, t0 time.Time) {
+		if err := os.Chtimes(path, t0, t0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeDone := func(slug, fm string) {
+		if err := os.MkdirAll(home.DoneDir(homeDir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(home.DoneDir(homeDir), slug+".md")
+		if err := os.WriteFile(p, []byte("---\nrepo: /src/alpha\nverify: true\n"+fm+"---\n\n# s\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		mt(p, now.Add(-30*24*time.Hour))
+	}
+	run := func(slug, status, repo, hist string) {
+		writeRunState(t, stateRoot, slug, &runState{
+			Slug: slug, Repo: repo, Status: status, Iterations: 2, Commits: 1,
+			Started: "2026-10-01T00:00:00Z", History: []string{hist + " " + status},
+		})
+	}
+	p := writeDraftSpec(t, homeDir, "drafty", "", "/src/beta")
+	mt(p, now.Add(-2*time.Hour))
+	p = writeReadySpec(t, homeDir, "fresh", "", "/src/alpha")
+	mt(p, now.Add(-5*time.Hour))
+	p = writeReadySpec(t, homeDir, "waity", "depends_on: fresh\n", "/src/beta")
+	mt(p, now.Add(-6*time.Hour))
+	writeReadySpec(t, homeDir, "busy", "", "/src/alpha")
+	run("busy", "", "/src/alpha", "2026-10-24 11:00")
+	writeReadySpec(t, homeDir, "capd", "", "/src/beta")
+	run("capd", "capped", "/src/beta", "2026-10-24 09:30")
+	writeReadySpec(t, homeDir, "fin", "", "/src/alpha")
+	run("fin", "complete", "/src/alpha", "2026-10-23 08:15")
+	writeDone("old1", "done: 2026-10-23T12:00:00-04:00\n")
+	run("old1", "complete", "/src/alpha", "2026-10-20 08:00")
+	writeDone("old10", "done: 2026-10-14T12:00:00-04:00\n")
+	run("old10", "complete", "/src/beta", "2026-10-10 08:00")
+	writeDone("nodone", "")
+	mt(filepath.Join(home.DoneDir(homeDir), "nodone.md"), now.Add(-8*24*time.Hour))
+	l, err := lock.TryAcquire(specLockPath(stateRoot, "busy"), "busy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return homeDir, stateRoot, now, func() { _ = l.Release() }
+}
+
+func statusOut(t *testing.T, homeDir, stateRoot string, o StatusTableOptions) string {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := PrintStatusTable(&buf, homeDir, stateRoot, o); err != nil {
+		t.Fatal(err)
+	}
+	return buf.String()
+}
+
+func TestStatusTableUnified(t *testing.T) {
+	homeDir, stateRoot, now, release := statusFixture(t)
+	defer release()
+	if err := os.MkdirAll(home.ResultsDir(homeDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	note := filepath.Join(home.ResultsDir(homeDir), "fin-2026-10-23-review.md")
+	if err := os.WriteFile(note, []byte("---\nverdict: approve\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now})
+	pid := os.Getpid()
+	// Golden is whitespace-aligned by tabwriter; compare field-wise per line.
+	norm := func(s string) []string {
+		var out []string
+		for _, l := range strings.Split(strings.TrimSpace(s), "\n") {
+			out = append(out, strings.Join(strings.Fields(l), " "))
+		}
+		return out
+	}
+	wantLines := []string{
+		"SLUG STATUS ITER COMMITS UPDATED REPO REVIEW",
+		fmt.Sprintf("busy running (pid %d) 2 1 2026-10-24 11:00 alpha -", pid),
+		"capd capped 2 1 2026-10-24 09:30 beta -",
+		"fin complete 2 1 2026-10-23 08:15 alpha approve",
+		"fresh ready - - 2026-10-24 07:00 alpha -",
+		"waity ready (waits on fresh) - - 2026-10-24 06:00 beta -",
+		"drafty draft - - 2026-10-24 10:00 beta -",
+		"old1 done 2 1 2026-10-23 12:00 alpha -",
+		"+2 done more than 3d ago (--all to show)",
+		"1 complete — review and merge, then nightshift done <slug> (or nightshift done --complete)",
+	}
+	g := norm(got)
+	if strings.Join(g, "\n") != strings.Join(wantLines, "\n") {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, strings.Join(wantLines, "\n"))
+	}
+}
+
+func TestStatusDoneVsComplete(t *testing.T) {
+	homeDir := t.TempDir()
+	stateRoot := home.RunsDir(homeDir)
+	writeReadySpec(t, homeDir, "demo", "", "/src/alpha")
+	writeRunState(t, stateRoot, "demo", &runState{Slug: "demo", Status: "complete", History: []string{"2026-10-24 08:00 complete"}})
+	if out := statusOut(t, homeDir, stateRoot, StatusTableOptions{All: true}); !strings.Contains(out, "demo  complete") {
+		t.Fatalf("want complete:\n%s", out)
+	}
+	if err := home.Done(homeDir, "demo", time.Now(), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	out := statusOut(t, homeDir, stateRoot, StatusTableOptions{All: true})
+	if !strings.Contains(out, "demo  done") || strings.Contains(out, "complete") {
+		t.Fatalf("want done:\n%s", out)
+	}
+}
+
+func TestStatusDetailShowsDone(t *testing.T) {
+	homeDir := t.TempDir()
+	stateRoot := home.RunsDir(homeDir)
+	writeReadySpec(t, homeDir, "demo", "", "/src/alpha")
+	writeRunState(t, stateRoot, "demo", &runState{Slug: "demo", Status: "complete"})
+	if err := home.Done(homeDir, "demo", time.Now(), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := PrintStatusDetail(&buf, homeDir, stateRoot, "demo"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "status: done\n") {
+		t.Fatalf("detail:\n%s", buf.String())
+	}
+}
+
+func TestStatusUpdatedSources(t *testing.T) {
+	homeDir, stateRoot, now, release := statusFixture(t)
+	defer release()
+	// run with no history: falls back to started (UTC → Detroit local).
+	writeReadySpec(t, homeDir, "nohist", "", "/src/alpha")
+	writeRunState(t, stateRoot, "nohist", &runState{Slug: "nohist", Status: "red", Started: "2026-10-24T14:00:00Z"})
+	out := statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now, All: true})
+	for slug, want := range map[string]string{
+		"busy":   "2026-10-24 11:00", // history, local
+		"fresh":  "2026-10-24 07:00", // mtime (12:00-5h)
+		"drafty": "2026-10-24 10:00", // mtime
+		"old1":   "2026-10-23 12:00", // done: frontmatter
+		"nodone": "2026-10-16 12:00", // no done:, no run: mtime
+		"nohist": "2026-10-24 10:00", // started 14:00Z == 10:00 EDT
+	} {
+		if !statusLineHas(out, slug, want) {
+			t.Errorf("%s: want %q in:\n%s", slug, want, out)
+		}
+	}
+}
+
+func statusLineHas(out, slug, sub string) bool {
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(l, slug+" ") && strings.Contains(l, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestStatusSinceAndAll(t *testing.T) {
+	homeDir, stateRoot, now, release := statusFixture(t)
+	defer release()
+	d, text := 14*24*time.Hour, "14d"
+	out := statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now, Since: d, SinceText: text})
+	if !statusLineHas(out, "old10", "done") || strings.Contains(out, "more than") {
+		t.Fatalf("14d:\n%s", out)
+	}
+	out = statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now, Since: 5 * 24 * time.Hour, SinceText: "5d"})
+	if !strings.Contains(out, "+2 done more than 5d ago") {
+		t.Fatalf("5d:\n%s", out)
+	}
+	out = statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now, Since: 36 * time.Hour, SinceText: "36h"})
+	if !statusLineHas(out, "old1", "done") || !strings.Contains(out, "+2 done more than 36h ago") {
+		t.Fatalf("36h:\n%s", out)
+	}
+	out = statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now, All: true})
+	for _, s := range []string{"old1", "old10", "nodone"} {
+		if !statusLineHas(out, s, "done") {
+			t.Fatalf("--all missing %s:\n%s", s, out)
+		}
+	}
+	if strings.Contains(out, "more than") {
+		t.Fatalf("--all footer:\n%s", out)
+	}
+	for in, want := range map[string]time.Duration{"3d": 72 * time.Hour, "36h": 36 * time.Hour, "90m": 90 * time.Minute} {
+		if got, err := ParseStatusSince(in); err != nil || got != want {
+			t.Errorf("ParseStatusSince(%q) = %v, %v", in, got, err)
+		}
+	}
+	for _, bad := range []string{"", "x", "0d", "-1d", "3dd", "d"} {
+		if _, err := ParseStatusSince(bad); err == nil || !strings.Contains(err.Error(), "want a duration like 3d or 36h") {
+			t.Errorf("ParseStatusSince(%q) err = %v", bad, err)
+		}
+	}
+}
+
+func TestStatusRepoFilter(t *testing.T) {
+	homeDir, stateRoot, now, release := statusFixture(t)
+	defer release()
+	out := statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now, Repo: "beta"})
+	if strings.Contains(out, "alpha") || !statusLineHas(out, "capd", "beta") {
+		t.Fatalf("repo filter:\n%s", out)
+	}
+	// Hidden beta done rows: old10 only (old1/nodone are alpha).
+	if !strings.Contains(out, "+1 done more than 3d ago") {
+		t.Fatalf("footer count under --repo:\n%s", out)
+	}
+	if strings.Contains(out, "complete —") {
+		t.Fatalf("hint should be absent (no complete row kept):\n%s", out)
+	}
+}
+
+func TestStatusOnlyHidden(t *testing.T) {
+	homeDir := t.TempDir()
+	stateRoot := home.RunsDir(homeDir)
+	now := time.Now()
+	if err := os.MkdirAll(home.DoneDir(homeDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(home.DoneDir(homeDir), "old.md")
+	if err := os.WriteFile(p, []byte("---\ndone: 2020-01-01T00:00:00Z\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now})
+	if out != "+1 done more than 3d ago (--all to show)\n" {
+		t.Fatalf("got %q", out)
+	}
+}
+
+func TestStatusCompleteHint(t *testing.T) {
+	homeDir, stateRoot, now, release := statusFixture(t)
+	defer release()
+	writeReadySpec(t, homeDir, "fin2", "", "/src/alpha")
+	writeRunState(t, stateRoot, "fin2", &runState{Slug: "fin2", Status: "complete", Repo: "/src/alpha"})
+	out := statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now})
+	if !strings.Contains(out, "2 complete — review and merge, then nightshift done <slug> (or nightshift done --complete)\n") {
+		t.Fatalf("hint:\n%s", out)
+	}
+	out = statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now, Repo: "beta"})
+	if strings.Contains(out, "complete —") {
+		t.Fatalf("hint should be absent:\n%s", out)
+	}
+}
+
+func TestStatusReviewColumn(t *testing.T) {
+	homeDir := t.TempDir()
+	stateRoot := home.RunsDir(homeDir)
+	dir := home.ResultsDir(homeDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{"a", "b", "c", "d", "e"} {
+		writeReadySpec(t, homeDir, s, "", "/src/alpha")
+	}
+	base := time.Now().Add(-time.Hour)
+	note := func(name, body string, age time.Duration) {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		ts := base.Add(age)
+		if err := os.Chtimes(p, ts, ts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	note("a-2026-10-01-review.md", "---\nverdict: reject\n---\n", 0)
+	note("a-2026-10-02-review.md", "---\nverdict: approve\n---\n", time.Minute) // newest wins
+	note("b-2026-10-01-review.md", "---\nverdict: reject\n---\n", 0)
+	note("b-2026-10-01-review-2.md", "---\nverdict: approve\n---\n", time.Minute) // same-day -2
+	note("c-2026-10-01-review.md", "no frontmatter\n", 0)                         // unknown
+	note("d-extra-2026-10-01-review.md", "---\nverdict: approve\n---\n", 0)       // longer slug: d gets -
+	out := statusOut(t, homeDir, stateRoot, StatusTableOptions{All: true})
+	for slug, want := range map[string]string{"a": "approve", "b": "approve", "c": "unknown", "d": "-", "e": "-"} {
+		if !statusLineHas(out, slug, "alpha  "+want) {
+			t.Errorf("%s: want %s in:\n%s", slug, want, out)
+		}
 	}
 }
