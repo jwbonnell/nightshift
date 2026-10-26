@@ -930,6 +930,50 @@ func TestStatusFlagsWithSlugIsUsageError(t *testing.T) {
 	}
 }
 
+func TestStatusDoneZeroAndOne(t *testing.T) {
+	h := doneFixture(t)
+	doneSpec(t, h, "r1", "")
+	for i, slug := range []string{"d1", "d2"} {
+		body := fmt.Sprintf("---\nrepo: /src/alpha\nverify: true\ndone: 2026-02-0%dT00:00:00Z\n---\n", i+1)
+		if err := os.WriteFile(filepath.Join(home.DoneDir(h), slug+".md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	doneRows := func(out string) int {
+		n := 0
+		for _, line := range strings.Split(out, "\n") {
+			f := strings.Fields(line)
+			if len(f) > 1 && f[1] == "done" && !strings.HasPrefix(f[0], "+") {
+				n++
+			}
+		}
+		return n
+	}
+	code, out, errOut := runStatus("--done", "0")
+	if code != 0 {
+		t.Fatalf("status --done 0 exit = %d, stderr=%s", code, errOut)
+	}
+	if n := doneRows(out); n != 0 {
+		t.Errorf("--done 0 shows %d done rows, want 0:\n%s", n, out)
+	}
+	if !statusRowHas(out, "r1", "ready") {
+		t.Errorf("--done 0 missing ready row:\n%s", out)
+	}
+	if !strings.Contains(out, "+2 older done (--all to show)") {
+		t.Errorf("--done 0 footer missing:\n%s", out)
+	}
+	code, out, errOut = runStatus("--done", "1")
+	if code != 0 {
+		t.Fatalf("status --done 1 exit = %d, stderr=%s", code, errOut)
+	}
+	if n := doneRows(out); n != 1 {
+		t.Errorf("--done 1 shows %d done rows, want 1:\n%s", n, out)
+	}
+	if !strings.Contains(out, "+1 older done (--all to show)") {
+		t.Errorf("--done 1 footer missing:\n%s", out)
+	}
+}
+
 // statusRowHas reports whether the status table has a row for slug whose
 // second field is fields[0] (and, if given, whose last field is fields[1]).
 func statusRowHas(out, slug string, fields ...string) bool {
