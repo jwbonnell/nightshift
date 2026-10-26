@@ -38,18 +38,27 @@ func (s *logStream) startAtEnd() {
 		return
 	}
 	size := st.Size()
-	start := max(0, size-headerScanSpan)
+	span := int64(tailChunk)
+	if s.agent {
+		span = headerScanSpan
+	}
+	start := max(0, size-span)
 	buf, err := readRange(f, start, size-start)
 	if err != nil {
 		f.Close()
 		return
 	}
-	s.partial = nil
+	s.partial, s.skipLine = nil, false
 	if i := bytes.LastIndexByte(buf, '\n'); i >= 0 {
 		s.partial = append([]byte(nil), buf[i+1:]...)
 		buf = buf[:i+1]
 	} else if start == 0 {
 		s.partial = append([]byte(nil), buf...)
+		buf = nil
+	} else {
+		// A line longer than the read-back: what follows is its tail, so
+		// skip up to the next newline rather than print a fragment.
+		s.skipLine = true
 		buf = nil
 	}
 	if s.agent {

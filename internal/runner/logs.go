@@ -94,6 +94,9 @@ type logStream struct {
 	f       logFile
 	off     int64
 	partial []byte
+	// skipLine drops input up to the next newline: startAtEnd landed in
+	// the middle of a line longer than its read-back.
+	skipLine bool
 }
 
 func (o *LogsOptions) newStream(slug string, prefix string) *logStream {
@@ -155,11 +158,8 @@ func (s *logStream) poll() []string {
 		if fst, err := s.f.Stat(); err != nil || !os.SameFile(st, fst) || st.Size() < s.off {
 			s.f.Close()
 			s.f = nil
-			s.off, s.partial = 0, nil
-			if s.agent && !s.raw {
-				s.rend = &Renderer{Roots: s.rend.Roots, Loc: s.rend.Loc}
-			}
-			s.rawIter = 0
+			s.off, s.partial, s.skipLine = 0, nil, false
+			s.resetIter()
 		}
 	}
 	if s.f == nil {
@@ -174,7 +174,16 @@ func (s *logStream) poll() []string {
 		return nil
 	}
 	s.off += int64(len(buf))
-	lines, rest := splitLines(append(s.partial, buf...))
+	data := append(s.partial, buf...)
+	if s.skipLine {
+		i := bytes.IndexByte(data, '\n')
+		if i < 0 {
+			s.partial = nil
+			return nil
+		}
+		data, s.skipLine = data[i+1:], false
+	}
+	lines, rest := splitLines(data)
 	s.partial = append([]byte(nil), rest...)
 	return s.feed(lines)
 }

@@ -209,3 +209,58 @@ func TestLogsTailMatchesFullRender(t *testing.T) {
 		}
 	}
 }
+
+func TestFollowStartAtEndLongLine(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "s")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "runner.log")
+	if err := os.WriteFile(p, []byte("a\n"+strings.Repeat("x", 2<<20)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	o := LogsOptions{StateRoot: root}
+	s := o.newStream("s", "")
+	s.startAtEnd()
+	if got := s.poll(); len(got) != 0 {
+		t.Fatalf("existing content printed: %d lines", len(got))
+	}
+	f, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString("zzz"); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.poll(); len(got) != 0 {
+		t.Fatalf("fragment printed: %v", got)
+	}
+	if _, err := f.WriteString("yyy\nnext\n"); err != nil {
+		t.Fatal(err)
+	}
+	got := s.poll()
+	if len(got) != 1 || got[0] != "next" {
+		t.Fatalf("got %v, want [next]", got)
+	}
+}
+
+func TestFollowStartAtEndRunnerLogSmallRead(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "s")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	line := strings.Repeat("y", 99) + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "runner.log"), []byte(strings.Repeat(line, 20000)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var n atomic.Int64
+	o := LogsOptions{StateRoot: root, open: countingOpen(&n)}
+	s := o.newStream("s", "")
+	s.startAtEnd()
+	if n.Load() > tailChunk {
+		t.Fatalf("read %d bytes, want <= %d", n.Load(), tailChunk)
+	}
+}
