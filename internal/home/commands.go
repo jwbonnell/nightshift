@@ -253,6 +253,9 @@ func upsertFrontmatterValue(content, key, value string) (string, bool) {
 // stamped content goes to a temp file in ReadyDir that is renamed straight
 // to dst, and only then is src removed, so a failed move never leaves a
 // stamped spec in ready/. A spec with no frontmatter is renamed unchanged.
+// rename is os.Rename; tests swap it to inject a move failure.
+var rename = os.Rename
+
 func stampDone(home, src, dst, slug string, now time.Time) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
@@ -260,7 +263,7 @@ func stampDone(home, src, dst, slug string, now time.Time) error {
 	}
 	out, ok := upsertFrontmatterValue(string(data), "done", now.Format(time.RFC3339))
 	if !ok {
-		return os.Rename(src, dst)
+		return rename(src, dst)
 	}
 	info, err := os.Stat(src)
 	if err != nil {
@@ -286,7 +289,7 @@ func stampDone(home, src, dst, slug string, now time.Time) error {
 		os.Remove(name)
 		return err
 	}
-	if err := os.Rename(name, dst); err != nil {
+	if err := rename(name, dst); err != nil {
 		os.Remove(name)
 		return err
 	}
@@ -296,9 +299,9 @@ func stampDone(home, src, dst, slug string, now time.Time) error {
 	return nil
 }
 
-// findFold returns the path of the file in dir named name, matched
+// FindFold returns the path of the file in dir named name, matched (D11.6)
 // case-insensitively (an exact match wins).
-func findFold(dir, name string) (string, bool) {
+func FindFold(dir, name string) (string, bool) {
 	exact := filepath.Join(dir, name)
 	if fileExists(exact) {
 		return exact, true
@@ -397,7 +400,7 @@ func Ready(home, slug string, stdout io.Writer) error {
 // move; a spec with no frontmatter is moved unchanged. Run state is
 // untouched.
 func Done(home, slug string, now time.Time, stdout io.Writer) error {
-	src, found := findFold(ReadyDir(home), slug+".md")
+	src, found := FindFold(ReadyDir(home), slug+".md")
 	if !found {
 		return fmt.Errorf("no ready spec named %s in %s", slug, ReadyDir(home))
 	}
@@ -407,7 +410,7 @@ func Done(home, slug string, now time.Time, stdout io.Writer) error {
 	}
 
 	dst := filepath.Join(DoneDir(home), slug+".md")
-	if existing, exists := findFold(DoneDir(home), slug+".md"); exists {
+	if existing, exists := FindFold(DoneDir(home), slug+".md"); exists {
 		return fmt.Errorf("spec %s already exists: %s", slug, existing)
 	}
 

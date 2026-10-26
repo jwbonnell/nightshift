@@ -695,9 +695,9 @@ func Review(opts ReviewOptions) (Status, error) {
 	}
 
 	specPath := ""
-	if p, ok := findCaseInsensitive(home.ReadyDir(opts.Home), opts.Slug+".md"); ok {
+	if p, ok := home.FindFold(home.ReadyDir(opts.Home), opts.Slug+".md"); ok {
 		specPath = p
-	} else if p, ok := findCaseInsensitive(home.DoneDir(opts.Home), opts.Slug+".md"); ok {
+	} else if p, ok := home.FindFold(home.DoneDir(opts.Home), opts.Slug+".md"); ok {
 		specPath = p
 	}
 

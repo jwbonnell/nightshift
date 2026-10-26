@@ -88,10 +88,10 @@ func locateLintSpec(homeDir, arg string) (string, error) {
 	if st, err := os.Stat(arg); err == nil && !st.IsDir() {
 		return arg, nil
 	}
-	if p, ok := findCaseInsensitive(home.DraftDir(homeDir), arg+".md"); ok {
+	if p, ok := home.FindFold(home.DraftDir(homeDir), arg+".md"); ok {
 		return p, nil
 	}
-	if p, ok := findCaseInsensitive(home.ReadyDir(homeDir), arg+".md"); ok {
+	if p, ok := home.FindFold(home.ReadyDir(homeDir), arg+".md"); ok {
 		return p, nil
 	}
 	return "", fmt.Errorf("no spec named %s in specs/draft/ or specs/ready/", arg)

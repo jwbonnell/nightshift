@@ -199,7 +199,8 @@ failure prints `nightshift: <err>` and the rest still run (exit 1 if any
 failed). `--complete` marks done every ready spec whose run is `complete`
 and whose lock isn't held, in slug order, then prints `marked N done` (or
 `nothing to mark done`). A slug that already exists in `specs/done/` prints
-`skip: <slug> (already in specs/done/)` instead; a skip isn't a failure. `--complete` with slugs is a usage error (exit 2).
+`skip: <slug> (already in specs/done/)` instead; a skip isn't a failure. `--complete` with slugs is a usage
+error (exit 2).
 
 ### `run <spec-name|path> [flags]` / `run --next [flags]`
 

@@ -2,6 +2,7 @@ package home
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -560,35 +561,50 @@ func TestDoneCaseInsensitiveReadyFile(t *testing.T) {
 }
 
 func TestDoneMoveFailureLeavesReadyUnstamped(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root ignores directory permissions")
+	setup := func(t *testing.T) (string, string, []byte) {
+		h := filepath.Join(t.TempDir(), "nightshift-home")
+		if err := ensureLayout(h); err != nil {
+			t.Fatal(err)
+		}
+		src := filepath.Join(ReadyDir(h), "demo.md")
+		orig := []byte("---\ntype: spec\ncreated: 2026-10-24\n---\nbody\n")
+		if err := os.WriteFile(src, orig, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return h, src, orig
 	}
-	h := filepath.Join(t.TempDir(), "nightshift-home")
-	if err := ensureLayout(h); err != nil {
-		t.Fatal(err)
+	check := func(t *testing.T, h, src string, orig []byte) {
+		if err := Done(h, "demo", time.Now(), &bytes.Buffer{}); err == nil {
+			t.Fatal("Done succeeded despite a failing move")
+		}
+		got, err := os.ReadFile(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, orig) {
+			t.Errorf("ready spec changed: %q", got)
+		}
+		ents, _ := os.ReadDir(ReadyDir(h))
+		if len(ents) != 1 {
+			t.Errorf("ready/ should hold only the spec: %v", ents)
+		}
 	}
-	src := filepath.Join(ReadyDir(h), "demo.md")
-	orig := []byte("---\ntype: spec\ncreated: 2026-10-24\n---\nbody\n")
-	if err := os.WriteFile(src, orig, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(DoneDir(h), 0o555); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chmod(DoneDir(h), 0o755) })
-
-	if err := Done(h, "demo", time.Now(), &bytes.Buffer{}); err == nil {
-		t.Fatal("Done succeeded with an unwritable done dir")
-	}
-	got, err := os.ReadFile(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, orig) {
-		t.Errorf("ready spec changed: %q", got)
-	}
-	ents, _ := os.ReadDir(ReadyDir(h))
-	if len(ents) != 1 {
-		t.Errorf("ready/ should hold only the spec: %v", ents)
-	}
+	t.Run("injected", func(t *testing.T) {
+		h, src, orig := setup(t)
+		old := rename
+		rename = func(string, string) error { return errors.New("injected rename failure") }
+		t.Cleanup(func() { rename = old })
+		check(t, h, src, orig)
+	})
+	t.Run("permission", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores directory permissions")
+		}
+		h, src, orig := setup(t)
+		if err := os.Chmod(DoneDir(h), 0o555); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(DoneDir(h), 0o755) })
+		check(t, h, src, orig)
+	})
 }

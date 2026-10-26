@@ -93,7 +93,7 @@ func findCycle(edges map[string][]string, start string) []string {
 // run.json status otherwise (e.g. "blocked", "red", "rate-limited").
 // opts.Home and opts.StateRoot must both be set.
 func depState(opts Options, d string) string {
-	if _, ok := findCaseInsensitive(home.DoneDir(opts.Home), d+".md"); ok {
+	if _, ok := home.FindFold(home.DoneDir(opts.Home), d+".md"); ok {
 		return "complete"
 	}
 	st := loadPriorState(opts, d)

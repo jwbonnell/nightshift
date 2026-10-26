@@ -68,7 +68,7 @@ func reviewRefFor(st *runState, slug string) string {
 // doesn't parse.
 func specDepsOwns(homeDir, slug string) (dependsOn, owns []string) {
 	for _, dir := range []string{home.DraftDir(homeDir), home.ReadyDir(homeDir), home.DoneDir(homeDir)} {
-		p, ok := findCaseInsensitive(dir, slug+".md")
+		p, ok := home.FindFold(dir, slug+".md")
 		if !ok {
 			continue
 		}
@@ -497,7 +497,7 @@ func PrintStatusDetail(w io.Writer, homeDir, stateRoot, slug string) error {
 	fmt.Fprintf(w, "planned: %v\n", st.Planned)
 	fmt.Fprintf(w, "iterations: %d\n", st.Iterations)
 	fmt.Fprintf(w, "commits: %d\n", st.Commits)
-	_, inDone := findCaseInsensitive(home.DoneDir(homeDir), slug+".md")
+	_, inDone := home.FindFold(home.DoneDir(homeDir), slug+".md")
 	status := st.Status
 	if ds, ok := displayStatus(stateRoot, slug, &st, inDone); ok {
 		status = ds
@@ -553,7 +553,7 @@ func CompleteReadySlugs(homeDir, stateRoot string) (slugs, skipped []string) {
 		if _, held := lock.Probe(specLockPath(stateRoot, slug)); held {
 			continue
 		}
-		if _, exists := findCaseInsensitive(home.DoneDir(homeDir), slug+".md"); exists {
+		if _, exists := home.FindFold(home.DoneDir(homeDir), slug+".md"); exists {
 			skipped = append(skipped, slug)
 			continue
 		}

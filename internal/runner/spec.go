@@ -289,25 +289,6 @@ func slugFromFilename(name string) string {
 	return strings.TrimSuffix(name, filepath.Ext(name))
 }
 
-// findCaseInsensitive looks for a non-directory entry in dir whose name
-// matches name case-insensitively (D11.6), returning its real on-disk
-// path and name.
-func findCaseInsensitive(dir, name string) (string, bool) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return "", false
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		if strings.EqualFold(e.Name(), name) {
-			return filepath.Join(dir, e.Name()), true
-		}
-	}
-	return "", false
-}
-
 // isUnder reports whether path is strictly inside dir.
 func isUnder(path, dir string) bool {
 	rel, err := filepath.Rel(dir, path)
@@ -362,10 +343,10 @@ func locateSpec(opts Options) (string, error) {
 	if st, err := os.Stat(opts.SpecArg); err == nil && !st.IsDir() {
 		return applyReadinessGate(opts.Home, opts.SpecArg)
 	}
-	if p, ok := findCaseInsensitive(readyDir, opts.SpecArg); ok {
+	if p, ok := home.FindFold(readyDir, opts.SpecArg); ok {
 		return applyReadinessGate(opts.Home, p)
 	}
-	if p, ok := findCaseInsensitive(readyDir, opts.SpecArg+".md"); ok {
+	if p, ok := home.FindFold(readyDir, opts.SpecArg+".md"); ok {
 		return applyReadinessGate(opts.Home, p)
 	}
 
