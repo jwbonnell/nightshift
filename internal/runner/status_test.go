@@ -636,7 +636,8 @@ func TestStatusTableUnified(t *testing.T) {
 		"waity ready (waits on fresh) - - 2026-10-24 06:00 beta -",
 		"drafty draft - - 2026-10-24 10:00 beta -",
 		"old1 done 2 1 2026-10-23 12:00 alpha -",
-		"+2 done more than 3d ago (--all to show)",
+		"nodone done - - 2026-10-16 12:00 alpha -",
+		"old10 done 2 1 2026-10-14 12:00 beta -",
 		"1 complete — review and merge, then nightshift done <slug> (or nightshift done --complete)",
 	}
 	g := norm(got)
@@ -764,9 +765,9 @@ func TestStatusRepoFilter(t *testing.T) {
 	if strings.Contains(out, "alpha") || !statusLineHas(out, "capd", "beta") {
 		t.Fatalf("repo filter:\n%s", out)
 	}
-	// Hidden beta done rows: old10 only (old1/nodone are alpha).
-	if !strings.Contains(out, "+1 done more than 3d ago") {
-		t.Fatalf("footer count under --repo:\n%s", out)
+	// The only beta done row (old10) fits under the default count.
+	if !statusLineHas(out, "old10", "done") || strings.Contains(out, "older done") || strings.Contains(out, "more than") {
+		t.Fatalf("done rows under --repo:\n%s", out)
 	}
 	if strings.Contains(out, "complete —") {
 		t.Fatalf("hint should be absent (no complete row kept):\n%s", out)
@@ -784,8 +785,8 @@ func TestStatusOnlyHidden(t *testing.T) {
 	if err := os.WriteFile(p, []byte("---\ndone: 2020-01-01T00:00:00Z\n---\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	out := statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now})
-	if out != "+1 done more than 3d ago (--all to show)\n" {
+	out := statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now, DoneLimit: DoneNone})
+	if out != "+1 older done (--all to show)\n" {
 		t.Fatalf("got %q", out)
 	}
 }
@@ -837,5 +838,118 @@ func TestStatusReviewColumn(t *testing.T) {
 		if !statusLineHas(out, slug, "alpha  "+want) {
 			t.Errorf("%s: want %s in:\n%s", slug, want, out)
 		}
+	}
+}
+
+// doneCountFixture writes done specs d1..d5 (d1 newest, 4..8 days before
+// now; repos[i] names each one's repo, default alpha) plus a ready spec each
+// for a complete and a capped run, all older than 3 days.
+func doneCountFixture(t *testing.T, repos ...string) (homeDir, stateRoot string, now time.Time) {
+	t.Helper()
+	now = time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+	homeDir = t.TempDir()
+	stateRoot = home.RunsDir(homeDir)
+	if err := os.MkdirAll(home.DoneDir(homeDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 5; i++ {
+		repo := "/src/alpha"
+		if i-1 < len(repos) {
+			repo = "/src/" + repos[i-1]
+		}
+		stamp := now.Add(-time.Duration(3+i) * 24 * time.Hour).Format(time.RFC3339)
+		body := "---\nrepo: " + repo + "\nverify: true\ndone: " + stamp + "\n---\n"
+		if err := os.WriteFile(filepath.Join(home.DoneDir(homeDir), fmt.Sprintf("d%d.md", i)), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct{ slug, status string }{{"fin", "complete"}, {"capd", "capped"}} {
+		writeReadySpec(t, homeDir, c.slug, "", "/src/alpha")
+		writeRunState(t, stateRoot, c.slug, &runState{
+			Slug: c.slug, Repo: "/src/alpha", Status: c.status, Iterations: 1,
+			Started: "2026-10-01T00:00:00Z", History: []string{"2026-10-10 08:00 " + c.status},
+		})
+	}
+	return homeDir, stateRoot, now
+}
+
+func doneSlugs(out string) []string {
+	var got []string
+	for _, l := range strings.Split(out, "\n") {
+		if f := strings.Fields(l); len(f) > 2 && f[1] == "done" && !strings.HasPrefix(f[0], "+") {
+			got = append(got, f[0])
+		}
+	}
+	return got
+}
+
+func TestStatusDoneDefaultCount(t *testing.T) {
+	homeDir, stateRoot, now := doneCountFixture(t)
+	out := statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now})
+	if got := strings.Join(doneSlugs(out), ","); got != "d1,d2,d3" {
+		t.Fatalf("done rows %q:\n%s", got, out)
+	}
+	if !statusLineHas(out, "fin", "complete") || !statusLineHas(out, "capd", "capped") {
+		t.Fatalf("complete/capped rows must stay:\n%s", out)
+	}
+	if !strings.Contains(out, "+2 older done (--all to show)\n") || strings.Contains(out, "more than") {
+		t.Fatalf("footer:\n%s", out)
+	}
+}
+
+func TestStatusDoneFlag(t *testing.T) {
+	homeDir, stateRoot, now := doneCountFixture(t)
+	for _, c := range []struct {
+		limit  int
+		want   string
+		footer string
+	}{
+		{1, "d1", "+4 older done (--all to show)\n"},
+		{DoneNone, "", "+5 older done (--all to show)\n"},
+		{10, "d1,d2,d3,d4,d5", ""},
+	} {
+		out := statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now, DoneLimit: c.limit})
+		if got := strings.Join(doneSlugs(out), ","); got != c.want {
+			t.Errorf("limit %d: done rows %q:\n%s", c.limit, got, out)
+		}
+		if c.footer == "" {
+			if strings.Contains(out, "older done") {
+				t.Errorf("limit %d: unexpected footer:\n%s", c.limit, out)
+			}
+		} else if !strings.Contains(out, c.footer) {
+			t.Errorf("limit %d: footer:\n%s", c.limit, out)
+		}
+	}
+}
+
+func TestStatusDoneWithRepo(t *testing.T) {
+	// d1,d3,d4,d5 alpha; d2 beta.
+	homeDir, stateRoot, now := doneCountFixture(t, "alpha", "beta", "alpha", "alpha", "alpha")
+	out := statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now, Repo: "alpha"})
+	if got := strings.Join(doneSlugs(out), ","); got != "d1,d3,d4" {
+		t.Fatalf("done rows %q:\n%s", got, out)
+	}
+	if !strings.Contains(out, "+1 older done (--all to show)\n") {
+		t.Fatalf("footer counts only alpha rows:\n%s", out)
+	}
+	out = statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now, Repo: "beta"})
+	if got := strings.Join(doneSlugs(out), ","); got != "d2" || strings.Contains(out, "older done") {
+		t.Fatalf("beta:\n%s", out)
+	}
+}
+
+func TestStatusSinceIgnoresCount(t *testing.T) {
+	homeDir, stateRoot, now := doneCountFixture(t)
+	old := filepath.Join(home.DoneDir(homeDir), "ancient.md")
+	body := "---\nrepo: /src/alpha\nverify: true\ndone: " + now.Add(-30*24*time.Hour).Format(time.RFC3339) + "\n---\n"
+	if err := os.WriteFile(old, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now, Since: 14 * 24 * time.Hour, SinceText: "14d"})
+	if got := strings.Join(doneSlugs(out), ","); got != "d1,d2,d3,d4,d5" {
+		t.Fatalf("done rows %q:\n%s", got, out)
+	}
+	if !strings.Contains(out, "+1 done more than 14d ago (--all to show)\n") || strings.Contains(out, "older done") {
+		t.Fatalf("footer:\n%s", out)
 	}
 }

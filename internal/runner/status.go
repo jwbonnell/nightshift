@@ -104,10 +104,20 @@ func formatDepTips(tips map[string]string) string {
 type StatusTableOptions struct {
 	Now       time.Time     // zero means time.Now()
 	All       bool          // show every row, however old
-	Since     time.Duration // done-row age window; zero means 72h
-	SinceText string        // the --since text as given, for the footer; empty means "3d"
+	Since     time.Duration // done-row age window; applies only when > 0, with no count limit
+	SinceText string        // the --since text as given, for the footer; empty means Since.String()
 	Repo      string        // keep only rows whose REPO equals this
+	// DoneLimit is how many of the newest done rows to show when neither
+	// All nor Since is set. Zero means not set (DefaultDoneLimit); any
+	// negative value, conventionally DoneNone, shows no done rows.
+	DoneLimit int
 }
+
+// DefaultDoneLimit is how many done rows the default view shows.
+const DefaultDoneLimit = 3
+
+// DoneNone is the DoneLimit that hides every done row (--done 0).
+const DoneNone = -1
 
 var sinceDaysRE = regexp.MustCompile(`^(\d+)d$`)
 
@@ -383,24 +393,33 @@ func PrintStatusTable(w io.Writer, homeDir, stateRoot string, o StatusTableOptio
 		return a.slug < b.slug
 	})
 
-	window, windowText := 72*time.Hour, "3d"
-	if o.Since > 0 {
-		window = o.Since
-		if o.SinceText != "" {
-			windowText = o.SinceText
-		} else {
-			windowText = o.Since.String()
-		}
+	windowText := o.SinceText
+	if windowText == "" {
+		windowText = o.Since.String()
+	}
+	limit := o.DoneLimit
+	if limit == 0 {
+		limit = DefaultDoneLimit
+	} else if limit < 0 {
+		limit = 0
 	}
 	shown := rows[:0:0]
-	hidden := 0
+	hidden, doneKept := 0, 0
 	for _, r := range rows {
 		if o.Repo != "" && r.repo != o.Repo {
 			continue
 		}
-		if !o.All && r.group == groupDone && now.Sub(r.updated) > window {
-			hidden++
-			continue
+		if !o.All && r.group == groupDone {
+			if o.Since > 0 {
+				if now.Sub(r.updated) > o.Since {
+					hidden++
+					continue
+				}
+			} else if doneKept >= limit {
+				hidden++
+				continue
+			}
+			doneKept++
 		}
 		shown = append(shown, r)
 	}
@@ -419,7 +438,11 @@ func PrintStatusTable(w io.Writer, homeDir, stateRoot string, o StatusTableOptio
 	}
 	_ = tw.Flush()
 	if hidden > 0 {
-		fmt.Fprintf(w, "+%d done more than %s ago (--all to show)\n", hidden, windowText)
+		if o.Since > 0 {
+			fmt.Fprintf(w, "+%d done more than %s ago (--all to show)\n", hidden, windowText)
+		} else {
+			fmt.Fprintf(w, "+%d older done (--all to show)\n", hidden)
+		}
 	}
 
 	if active := readActiveLimit(stateRoot, now, false); active != nil {
