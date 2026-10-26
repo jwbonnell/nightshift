@@ -190,7 +190,8 @@ already exists. Run state under `runs/` is never touched or moved. Before
 the move it stamps a `done:` frontmatter key (RFC 3339, local offset; added
 after `created:` if missing; a spec with no frontmatter moves unchanged).
 The ready file is matched case-insensitively (`X.MD` for slug `x`); the
-destination is always `<slug>.md`. The stamped copy is written straight to
+destination is always `<slug>.md`. Lookup never leaves its folder: a name
+with a path separator, `.` or `..` matches nothing. The stamped copy is written straight to
 `specs/done/` and the ready file is removed afterwards, so a failed move
 leaves the ready spec untouched.
 
@@ -199,8 +200,8 @@ failure prints `nightshift: <err>` and the rest still run (exit 1 if any
 failed). `--complete` marks done every ready spec whose run is `complete`
 and whose lock isn't held, in slug order, then prints `marked N done` (or
 `nothing to mark done`). A slug that already exists in `specs/done/` prints
-`skip: <slug> (already in specs/done/)` instead; a skip isn't a failure. `--complete` with slugs is a usage
-error (exit 2).
+`skip: <slug> (already in specs/done/)` instead; a skip isn't a failure.
+`--complete` with slugs is a usage error (exit 2).
 
 ### `run <spec-name|path> [flags]` / `run --next [flags]`
 
@@ -395,12 +396,11 @@ everything. `--done`, `--since` and `--all` are mutually exclusive.
 not accepted with a slug. When done rows are hidden a footer reads `+N
 older done (--all to show)`, or with `--since` `+N done more than
 <window> ago (--all to show)` (counting only rows `--repo` keeps); if
-nothing remains only the footer
-prints. After the table (and any `usage limit: until …` line), if complete
-rows are shown: `N complete — review and merge, then nightshift done <slug>
-(or nightshift done --complete)`. With no specs or runs at all it prints a
-one-line hint to run `nightshift new`. `status <slug>`'s `status:` line uses
-the display status.
+nothing remains only the footer prints. After the table (and any `usage
+limit: until …` line), if complete rows are shown: `N complete — review
+and merge, then nightshift done <slug> (or nightshift done --complete)`.
+With no specs or runs at all it prints a one-line hint to run `nightshift
+new`. `status <slug>`'s `status:` line uses the display status.
 
 With a slug: every `run.json` field, then `state dir`, `clone`, `runner
 log`, `agent log`, the newest result note (or `none`), `latest review:

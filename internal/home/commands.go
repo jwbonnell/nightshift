@@ -249,13 +249,13 @@ func upsertFrontmatterValue(content, key, value string) (string, bool) {
 	return strings.Join(lines, "\n"), true
 }
 
+// rename is os.Rename; tests swap it to inject a move failure.
+var rename = os.Rename
+
 // stampDone moves the ready spec at src to dst with done: set to now. The
 // stamped content goes to a temp file in ReadyDir that is renamed straight
 // to dst, and only then is src removed, so a failed move never leaves a
 // stamped spec in ready/. A spec with no frontmatter is renamed unchanged.
-// rename is os.Rename; tests swap it to inject a move failure.
-var rename = os.Rename
-
 func stampDone(home, src, dst, slug string, now time.Time) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
@@ -299,9 +299,14 @@ func stampDone(home, src, dst, slug string, now time.Time) error {
 	return nil
 }
 
-// FindFold returns the path of the file in dir named name, matched (D11.6)
-// case-insensitively (an exact match wins).
+// FindFold returns the path of the file in dir named name, matched
+// case-insensitively (D11.6); an exact match wins. It never leaves dir: an
+// empty name, a name with a path separator, and "." or ".." all report not
+// found.
 func FindFold(dir, name string) (string, bool) {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`+string(filepath.Separator)) {
+		return "", false
+	}
 	exact := filepath.Join(dir, name)
 	if fileExists(exact) {
 		return exact, true

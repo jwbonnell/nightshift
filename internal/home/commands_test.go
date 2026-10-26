@@ -608,3 +608,32 @@ func TestDoneMoveFailureLeavesReadyUnstamped(t *testing.T) {
 		check(t, h, src, orig)
 	})
 }
+
+func TestFindFoldStaysInDir(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "dir")
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{filepath.Join(root, "x.md"), filepath.Join(dir, "sub", "x.md")} {
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"../x.md", "sub/x.md", "..", ".", ""} {
+		if p, ok := FindFold(dir, name); ok {
+			t.Errorf("FindFold(%q) = %q, want not found", name, p)
+		}
+	}
+	for _, n := range []string{"Twin.md", "twin.md", "Plain.MD"} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if p, ok := FindFold(dir, "twin.md"); !ok || filepath.Base(p) != "twin.md" {
+		t.Errorf("exact match: got %q, %v", p, ok)
+	}
+	if p, ok := FindFold(dir, "plain.md"); !ok || filepath.Base(p) != "Plain.MD" {
+		t.Errorf("fold match: got %q, %v", p, ok)
+	}
+}

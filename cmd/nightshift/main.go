@@ -580,7 +580,7 @@ func cmdStatus(args []string, stdout, stderr io.Writer) int {
 		}
 		if set["done"] {
 			n, err := strconv.Atoi(*done)
-			if err != nil || n < 0 || strings.TrimSpace(*done) != *done || strings.HasPrefix(*done, "+") {
+			if err != nil || !allDigits(*done) {
 				fmt.Fprintf(stderr, "nightshift status: --done %q: want a whole number, 0 or more\n", *done)
 				return 2
 			}
@@ -789,4 +789,17 @@ func cmdRun(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 		return runner.ExitCode(runner.StatusError)
 	}
 	return runner.ExitCode(status)
+}
+
+// allDigits reports whether s is a non-empty run of ASCII digits.
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }

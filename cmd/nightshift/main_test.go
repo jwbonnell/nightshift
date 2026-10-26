@@ -903,7 +903,8 @@ func TestStatusFlagsWithSlugIsUsageError(t *testing.T) {
 	for _, args := range [][]string{
 		{"demo", "--all"}, {"--all", "demo"}, {"--repo", "x", "demo"}, {"--since", "3d", "demo"},
 		{"--all", "--since", "3d"}, {"a", "b"},
-		{"--done", "-1"}, {"--done", "x"}, {"--done", "2", "--all"},
+		{"--done", "-1"}, {"--done", "x"}, {"--done", "-0"}, {"--done", "+1"},
+		{"--done", "99999999999999999999"}, {"--done", " 1"}, {"--done="}, {"--done", "2", "--all"},
 		{"--done", "2", "--since", "3d"}, {"demo", "--done", "2"},
 	} {
 		if code, _, _ := runStatus(args...); code != 2 {
