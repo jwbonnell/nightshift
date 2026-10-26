@@ -59,7 +59,7 @@ nightshift lint <spec> [--no-verify]  check a draft or ready spec (verify runs o
 nightshift done <slug>... | --complete move ready spec(s) to specs/done/
 nightshift run <spec> [flags]         run one ready spec (nightshift run -h for flags)
 nightshift run --next [flags]         run eligible ready specs, one after another
-nightshift status [--all | --since <dur>] [--repo <name>] | <slug>
+nightshift status [--all | --since <dur> | --done N] [--repo <name>] | <slug>
                                       list every spec, or show one run in detail
 nightshift logs [<slug>] [flags]      show or follow a run's logs (nightshift logs -h)
 nightshift review <slug> [--model M]  sandboxed Claude review of a run's work
@@ -384,12 +384,17 @@ Rows are grouped: active (running/waiting), needs attention (any run status
 but `complete`), complete, ready, draft, done; newest `UPDATED` first within
 a group, ties by slug.
 
-Done rows older than 72h are hidden by default; every other status always
-shows. `--since <dur>` (`3d` or any positive Go duration) replaces the window, `--all`
-shows everything (not with `--since`), `--repo <name>` keeps only rows whose
-`REPO` matches exactly. Flags are not accepted with a slug. When rows are
-hidden a footer reads `+N done more than <window> ago (--all to show)`
-(counting only rows `--repo` keeps); if nothing remains only the footer
+Only done rows are ever hidden; every other status always shows. By
+default the 3 newest done rows are shown. `--done N` shows the N newest
+instead (a whole number, 0 or more; 0 hides every done row). `--since
+<dur>` (`3d` or any positive Go duration) instead shows every done row
+updated inside that window, with no count limit. `--all` shows
+everything. `--done`, `--since` and `--all` are mutually exclusive.
+`--repo <name>` keeps only rows whose `REPO` matches exactly. Flags are
+not accepted with a slug. When done rows are hidden a footer reads `+N
+older done (--all to show)`, or with `--since` `+N done more than
+<window> ago (--all to show)` (counting only rows `--repo` keeps); if
+nothing remains only the footer
 prints. After the table (and any `usage limit: until …` line), if complete
 rows are shown: `N complete — review and merge, then nightshift done <slug>
 (or nightshift done --complete)`. With no specs or runs at all it prints a

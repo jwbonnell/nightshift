@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -73,7 +74,7 @@ usage:
                                         move ready specs to specs/done/
   nightshift run <spec> [flags]         run one ready spec (nightshift run -h for flags)
   nightshift run --next [flags]         run the oldest eligible ready spec
-  nightshift status [--all | --since <dur>] [--repo <name>] | <slug>
+  nightshift status [--all | --since <dur> | --done N] [--repo <name>] | <slug>
                                         list every spec, or show one run in detail
   nightshift logs [<slug>] [-f] [--agent [--raw] [--iter N]] [--verify N] [-n N]
                                         show or follow a run's runner.log / agent activity
@@ -550,27 +551,43 @@ func cmdStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	stateRoot := home.RunsDir(h)
 
-	const usage = "usage: nightshift status [--all | --since <dur>] [--repo <name>] | <slug>"
+	const usage = "usage: nightshift status [--all | --since <dur> | --done N] [--repo <name>] | <slug>"
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	all := fs.Bool("all", false, "show every row")
 	since := fs.String("since", "", "done-row age window")
+	done := fs.String("done", "", "number of newest done rows to show")
 	repo := fs.String("repo", "", "only rows for this repo")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(stderr, usage)
 		return 2
 	}
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
 	rest := fs.Args()
-	flagged := *all || *since != "" || *repo != ""
+	flagged := len(set) > 0
 	if len(rest) > 1 || (len(rest) == 1 && (flagged || strings.HasPrefix(rest[0], "-"))) {
 		fmt.Fprintln(stderr, usage)
 		return 2
 	}
 	if len(rest) == 0 {
 		opts := runner.StatusTableOptions{All: *all, Repo: *repo}
-		if *all && *since != "" {
-			fmt.Fprintln(stderr, usage)
-			return 2
+		for _, pair := range [][2]string{{"all", "since"}, {"done", "since"}, {"done", "all"}} {
+			if set[pair[0]] && set[pair[1]] {
+				fmt.Fprintf(stderr, "nightshift status: --%s and --%s can't be combined\n", pair[0], pair[1])
+				return 2
+			}
+		}
+		if set["done"] {
+			n, err := strconv.Atoi(*done)
+			if err != nil || n < 0 || strings.TrimSpace(*done) != *done || strings.HasPrefix(*done, "+") {
+				fmt.Fprintf(stderr, "nightshift status: --done %q: want a whole number, 0 or more\n", *done)
+				return 2
+			}
+			opts.DoneLimit = n
+			if n == 0 {
+				opts.DoneLimit = runner.DoneNone
+			}
 		}
 		if *since != "" {
 			d, err := runner.ParseStatusSince(*since)

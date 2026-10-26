@@ -903,6 +903,8 @@ func TestStatusFlagsWithSlugIsUsageError(t *testing.T) {
 	for _, args := range [][]string{
 		{"demo", "--all"}, {"--all", "demo"}, {"--repo", "x", "demo"}, {"--since", "3d", "demo"},
 		{"--all", "--since", "3d"}, {"a", "b"},
+		{"--done", "-1"}, {"--done", "x"}, {"--done", "2", "--all"},
+		{"--done", "2", "--since", "3d"}, {"demo", "--done", "2"},
 	} {
 		if code, _, _ := runStatus(args...); code != 2 {
 			t.Errorf("status %v exit = %d, want 2", args, code)
@@ -911,6 +913,17 @@ func TestStatusFlagsWithSlugIsUsageError(t *testing.T) {
 	code, _, errOut := runStatus("--since", "bogus")
 	if code != 2 || !strings.Contains(errOut, `nightshift status: --since "bogus": want a duration like 3d or 36h`) {
 		t.Errorf("bad --since: code=%d stderr=%q", code, errOut)
+	}
+	code, _, errOut = runStatus("--done", "x")
+	if !strings.Contains(errOut, `nightshift status: --done "x": want a whole number, 0 or more`) {
+		t.Errorf("bad --done stderr=%q", errOut)
+	}
+	_, _, errOut = runStatus("--done", "2", "--since", "3d")
+	if !strings.Contains(errOut, "nightshift status: --done and --since can't be combined") {
+		t.Errorf("combined stderr=%q", errOut)
+	}
+	if code, _, errOut := runStatus("--done", "0"); code != 0 {
+		t.Errorf("status --done 0 exit = %d, stderr=%s", code, errOut)
 	}
 	if code, _, errOut := runStatus("--all"); code != 0 {
 		t.Errorf("status --all exit = %d, stderr=%s", code, errOut)
