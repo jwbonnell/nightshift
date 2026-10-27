@@ -681,10 +681,11 @@ func cmdRun(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 	ignoreDeps := fs.Bool("ignore-deps", false, "skip dependency satisfaction and the integrated base")
 	follow := fs.Bool("f", false, "follow: show runner.log and the rendered agent.log live (prefixed per spec under --next --jobs)")
 	fs.BoolVar(follow, "follow", false, "alias for -f")
+	planOnly := fs.Bool("plan-only", false, "run only the planning pass, then stop")
 	jobs := fs.Int("jobs", -1, "with --next, run up to N eligible specs at once (default: NIGHTSHIFT_JOBS/1, capped by max-concurrent)")
 
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: nightshift run <spec-name|path> [--fresh [--yes]] [--max-iter N] [--until HH:MM] [--base REF] [--max-concurrent N] [--ignore-deps] [-f] [--dry-run]")
+		fmt.Fprintln(stderr, "usage: nightshift run <spec-name|path> [--fresh [--yes]] [--max-iter N] [--until HH:MM] [--base REF] [--max-concurrent N] [--ignore-deps] [--plan-only] [-f] [--dry-run]")
 		fmt.Fprintln(stderr, "       nightshift run --next [--until HH:MM] [--max-concurrent N] [--jobs N] [-f] [--dry-run]")
 		fs.PrintDefaults()
 	}
@@ -720,6 +721,11 @@ func cmdRun(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 
 	if *ignoreDeps && *next {
 		fmt.Fprintln(stderr, "nightshift: --ignore-deps can't be used with --next")
+		return 2
+	}
+
+	if *planOnly && *next {
+		fmt.Fprintln(stderr, "nightshift: --plan-only can't be used with --next")
 		return 2
 	}
 
@@ -767,6 +773,7 @@ func cmdRun(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 		Base:              *base,
 		MaxConcurrent:     *maxConcurrent,
 		IgnoreDeps:        *ignoreDeps,
+		PlanOnly:          *planOnly,
 		Home:              h,
 		Stdout:            stdout,
 		Stderr:            stderr,

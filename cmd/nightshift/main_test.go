@@ -84,6 +84,11 @@ func TestRunHelpMatchesD4(t *testing.T) {
 	want = strings.ReplaceAll(want, "  -fresh\n",
 		"  -f\tfollow: show runner.log and the rendered agent.log live (prefixed per spec under --next --jobs)\n  -follow\n    \talias for -f\n  -fresh\n")
 
+	// plan-ahead adds --plan-only.
+	want = strings.ReplaceAll(want, "[--ignore-deps] [-f] [--dry-run]\n", "[--ignore-deps] [--plan-only] [-f] [--dry-run]\n")
+	want = strings.ReplaceAll(want, "  -until string\n",
+		"  -plan-only\n    \trun only the planning pass, then stop\n  -until string\n")
+
 	bin := buildNightshiftBinary(t)
 	cmd := exec.Command(bin, "run", "-h")
 	var stderr bytes.Buffer
@@ -276,6 +281,47 @@ func TestIgnoreDeps(t *testing.T) {
 			t.Fatalf("exit = %d, want 2; stderr=%s", got, stderr.String())
 		}
 		if !strings.Contains(stderr.String(), "--ignore-deps can't be used with --next") {
+			t.Fatalf("stderr = %q, missing message", stderr.String())
+		}
+	})
+}
+
+// TestPlanOnlyWithNextIsUsageError: --plan-only with --next is exit 2 before
+// runFn is called; --plan-only alone reaches Options.PlanOnly.
+func TestPlanOnlyWithNextIsUsageError(t *testing.T) {
+	t.Setenv("NIGHTSHIFT_HOME", t.TempDir())
+
+	t.Run("flag reaches Options", func(t *testing.T) {
+		oldRunFn := runFn
+		t.Cleanup(func() { runFn = oldRunFn })
+		var captured runner.Options
+		runFn = func(opts runner.Options) (runner.Status, error) {
+			captured = opts
+			return runner.StatusPlanned, nil
+		}
+		var stdout, stderr bytes.Buffer
+		got := dispatch([]string{"run", "demo", "--plan-only"}, &stdout, &stderr, strings.NewReader(""))
+		if got != 0 {
+			t.Fatalf("exit = %d, want 0; stderr=%s", got, stderr.String())
+		}
+		if !captured.PlanOnly {
+			t.Fatalf("Options.PlanOnly = false, want true")
+		}
+	})
+
+	t.Run("with --next", func(t *testing.T) {
+		oldRunFn := runFn
+		t.Cleanup(func() { runFn = oldRunFn })
+		runFn = func(opts runner.Options) (runner.Status, error) {
+			t.Fatal("runFn should not be called")
+			return runner.StatusError, nil
+		}
+		var stdout, stderr bytes.Buffer
+		got := dispatch([]string{"run", "--next", "--plan-only"}, &stdout, &stderr, strings.NewReader(""))
+		if got != 2 {
+			t.Fatalf("exit = %d, want 2; stderr=%s", got, stderr.String())
+		}
+		if !strings.Contains(stderr.String(), "nightshift: --plan-only can't be used with --next") {
 			t.Fatalf("stderr = %q, missing message", stderr.String())
 		}
 	})
