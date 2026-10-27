@@ -38,6 +38,9 @@ func (r *run) printSummary(status Status) {
 	fmt.Fprintf(r.opts.Stdout, "\nspec %s: %s after %d iteration(s), %d commit(s) on %s\n",
 		r.spec.Slug, status, st.Iterations, st.Commits, st.Branch)
 	fmt.Fprintf(r.opts.Stdout, "post-run checks: %d failed, %d warnings\n", r.prChecks.fails, r.prChecks.warns)
+	if status == StatusPlanned {
+		fmt.Fprintf(r.opts.Stdout, "plan: %s\n", r.progressPath())
+	}
 	if status != StatusComplete {
 		fmt.Fprintf(r.opts.Stdout, "review: git -C %s log --oneline %s..%s%s\n",
 			r.spec.Repo, short(st.Base), r.reviewRef(), baseSuffix(st))
@@ -78,6 +81,8 @@ func summaryLine(status Status, st *runState) string {
 			}
 		}
 		return fmt.Sprintf("Hit the Claude usage limit (%s). Nothing was lost; re-run after it resets.", st.StopReason)
+	case StatusPlanned:
+		return "Planned only (--plan-only); no code was written. The next run starts from this plan."
 	case StatusError:
 		return "The runner hit an error and stopped; nothing was recorded from the failing step."
 	default:

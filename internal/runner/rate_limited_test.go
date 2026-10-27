@@ -231,3 +231,13 @@ func TestExitCodeRateLimited(t *testing.T) {
 		t.Fatalf("ExitCode(StatusRateLimited) = %d, want 9", got)
 	}
 }
+
+func TestExitCodePlanned(t *testing.T) {
+	if got := ExitCode(StatusPlanned); got != 0 {
+		t.Fatalf("ExitCode(StatusPlanned) = %d, want 0", got)
+	}
+	want := "Planned only (--plan-only); no code was written. The next run starts from this plan."
+	if got := summaryLine(StatusPlanned, &runState{}); got != want {
+		t.Fatalf("summaryLine(planned) = %q", got)
+	}
+}

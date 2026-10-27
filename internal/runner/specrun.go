@@ -30,6 +30,7 @@ const (
 	StatusBusy         Status = "busy"
 	StatusInterrupted  Status = "interrupted"      // D8
 	StatusRateLimited  Status = "rate-limited"     // Task 1: agent hit the Claude usage limit
+	StatusPlanned      Status = "planned"          // --plan-only: planning pass done, no work yet
 	statusDryRun       Status = "dry-run"          // internal
 	statusNothing      Status = "nothing-eligible" // internal: --next found nothing
 
@@ -49,7 +50,7 @@ const defaultMaxConcurrent = 2
 // StatusError) is 1.
 func ExitCode(s Status) int {
 	switch s {
-	case StatusComplete, statusDryRun, statusNothing, statusJobsDone:
+	case StatusComplete, StatusPlanned, statusDryRun, statusNothing, statusJobsDone:
 		return 0
 	case StatusBlocked:
 		return 2
@@ -83,6 +84,7 @@ type Options struct {
 	MaxIter       int    // 0 = unset
 	Until         string // "HH:MM" local deadline, or ""
 	DryRun        bool
+	PlanOnly      bool    // run only the planning pass, then stop (ends planned)
 	Follow        bool    // -f: show runner.log and the rendered agent.log live on Stdout
 	Base          string  // "" = fall through to frontmatter/env/config/default
 	MaxConcurrent string  // raw flag value ("" = unset)
