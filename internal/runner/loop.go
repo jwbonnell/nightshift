@@ -217,6 +217,17 @@ func (r *run) loop() Status {
 	st.LimitReset = ""
 	r.deadline = deadline
 
+	if r.opts.PlanOnly {
+		if !needPlan {
+			return StatusPlanned // runLocked's shortcut normally catches this first
+		}
+		// A plan-only pass re-plans from scratch, so a QUESTION.md left by
+		// an earlier blocked pass is stale.
+		if r.scaffoldRemove(r.questionPath()) {
+			r.logf("plan-only: cleared the previous QUESTION.md before re-planning")
+		}
+	}
+
 	// codeAg/planAg are built once per run from the selectors resolveSpecFile
 	// already parsed and validated.
 	settings := agent.Settings{ClaudeBin: r.opts.ClaudeBin, OpencodeBin: r.opts.OpencodeBin, OpencodeConfig: sp.OpencodeCfg}
@@ -341,7 +352,8 @@ func (r *run) loop() Status {
 
 			wake := limitWake(hit.ResetAt, now, cfg.Fallback)
 
-			stop := limitWaitExceedsWindow(wake, now, deadline, cfg.MaxWait) ||
+			stop := r.opts.PlanOnly || // an interactive command never sleeps for a limit
+				limitWaitExceedsWindow(wake, now, deadline, cfg.MaxWait) ||
 				limitHits >= cfg.MaxHits
 			if stop {
 				st.StopReason = res.Message
@@ -392,6 +404,9 @@ func (r *run) loop() Status {
 			planSucceeded := agentErr == nil && !res.IsError && progressAfter != progressBefore
 			if planSucceeded {
 				st.Planned = true
+				if r.opts.PlanOnly {
+					st.SpecHash = sp.ContentHash
+				}
 				needPlan = false
 				noProgress = 0
 			} else {
@@ -411,6 +426,9 @@ func (r *run) loop() Status {
 			}
 			if !planSucceeded && noProgress >= 2 {
 				return StatusStalled
+			}
+			if r.opts.PlanOnly && planSucceeded {
+				return StatusPlanned
 			}
 			continue
 		}

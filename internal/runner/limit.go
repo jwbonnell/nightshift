@@ -171,7 +171,7 @@ func checkActiveLimit(opts Options) (status Status, handled bool, err error) {
 	cfg := opts.limitCfg()
 	wake := limitWake(resetAt, now, cfg.Fallback)
 
-	if limitWaitExceedsWindow(wake, now, deadline, cfg.MaxWait) {
+	if opts.PlanOnly || limitWaitExceedsWindow(wake, now, deadline, cfg.MaxWait) {
 		fmt.Fprintf(opts.Stderr, "usage limit active until %s (recorded by %s); not starting\n", resetAt.Local().Format("Mon 15:04"), active.By)
 		return StatusRateLimited, true, nil
 	}
