@@ -796,7 +796,7 @@ func TestLintCLIUsesInterruptContext(t *testing.T) {
 	writeFullDraftSpec(t, homeDir, "ready-demo", repo, false)
 	stdout.Reset()
 	stderr.Reset()
-	if got := cmdReady([]string{"ready-demo"}, &stdout, &stderr); got != 0 {
+	if got := cmdReady([]string{"ready-demo"}, &stdout, &stderr, strings.NewReader("")); got != 0 {
 		t.Fatalf("cmdReady exit = %d, want 0; stdout=%s stderr=%s", got, stdout.String(), stderr.String())
 	}
 	if calls != 2 {
@@ -1048,5 +1048,96 @@ func TestRunFollowDryRunIsUsageError(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if got := dispatch([]string{"run", "demo", "-f", "--dry-run"}, &stdout, &stderr, strings.NewReader("")); got != 2 {
 		t.Fatalf("exit = %d, want 2; stderr=%s", got, stderr.String())
+	}
+}
+
+func TestReadyPlan(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("NIGHTSHIFT_HOME", homeDir)
+	repo := newTestSourceRepo(t)
+	withStubVerifier(t)
+	writeFullDraftSpec(t, homeDir, "demo", repo, false)
+
+	oldRunFn := runFn
+	t.Cleanup(func() { runFn = oldRunFn })
+	var got runner.Options
+	runFn = func(opts runner.Options) (runner.Status, error) {
+		got = opts
+		if !fileExistsForTest(opts.SpecArg) {
+			t.Errorf("spec %s not moved before the run", opts.SpecArg)
+		}
+		return runner.StatusPlanned, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := dispatch([]string{"ready", "demo", "--plan"}, &stdout, &stderr, strings.NewReader("")); code != 0 {
+		t.Fatalf("exit = %d, want 0; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !got.PlanOnly {
+		t.Fatalf("PlanOnly not set")
+	}
+	if want := filepath.Join(home.ReadyDir(homeDir), "demo.md"); got.SpecArg != want {
+		t.Fatalf("SpecArg = %q, want %q", got.SpecArg, want)
+	}
+}
+
+func TestReadyPlanBlockedPrintsQuestion(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("NIGHTSHIFT_HOME", homeDir)
+	repo := newTestSourceRepo(t)
+	withStubVerifier(t)
+	writeFullDraftSpec(t, homeDir, "demo", repo, false)
+
+	oldRunFn := runFn
+	t.Cleanup(func() { runFn = oldRunFn })
+	runFn = func(opts runner.Options) (runner.Status, error) {
+		dir := filepath.Join(home.RunsDir(homeDir), "demo", "repo")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "QUESTION.md"), []byte("Where is the design doc?\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return runner.StatusBlocked, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := dispatch([]string{"ready", "demo", "--plan"}, &stdout, &stderr, strings.NewReader("")); code != 2 {
+		t.Fatalf("exit = %d, want 2; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	readyPath := filepath.Join(home.ReadyDir(homeDir), "demo.md")
+	for _, want := range []string{
+		"Where is the design doc?",
+		"answer it by editing " + readyPath + ", then: nightshift run demo --plan-only",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+	if !fileExistsForTest(readyPath) {
+		t.Fatalf("spec left specs/ready/")
+	}
+}
+
+func TestReadyPlanLintFailNoRun(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("NIGHTSHIFT_HOME", homeDir)
+	repo := newTestSourceRepo(t)
+	withStubVerifier(t)
+	path := writeFullDraftSpec(t, homeDir, "demo", repo, true)
+
+	oldRunFn := runFn
+	t.Cleanup(func() { runFn = oldRunFn })
+	runFn = func(opts runner.Options) (runner.Status, error) {
+		t.Fatal("runFn must not be called when lint fails")
+		return runner.StatusError, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := dispatch([]string{"ready", "demo", "--plan"}, &stdout, &stderr, strings.NewReader("")); code != 1 {
+		t.Fatalf("exit = %d, want 1; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !fileExistsForTest(path) || fileExistsForTest(filepath.Join(home.ReadyDir(homeDir), "demo.md")) {
+		t.Fatalf("spec was moved despite failing lint")
 	}
 }

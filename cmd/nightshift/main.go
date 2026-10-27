@@ -67,7 +67,7 @@ usage:
   nightshift new <slug> [--repo PATH] [--verify CMD] [--no-interview]
                                         start a draft and interview you to write it
   nightshift refine <slug>              reopen the interview on a draft
-  nightshift ready <slug> [--no-verify] [--no-lint]
+  nightshift ready <slug> [--no-verify] [--no-lint] [--plan]
                                         lint a draft, then move it to specs/ready/
   nightshift lint <spec> [--no-verify]  check a draft or ready spec (verify runs on the base commit in sbx)
   nightshift done <slug>... | --complete
@@ -111,7 +111,7 @@ func dispatch(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 	case "refine":
 		return cmdRefine(args[1:], stdout, stderr)
 	case "ready":
-		return cmdReady(args[1:], stdout, stderr)
+		return cmdReady(args[1:], stdout, stderr, stdin)
 	case "lint":
 		return cmdLint(args[1:], stdout, stderr)
 	case "done":
@@ -453,13 +453,14 @@ func cmdLint(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func cmdReady(args []string, stdout, stderr io.Writer) int {
+func cmdReady(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 	fs := flag.NewFlagSet("nightshift ready", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	noVerify := fs.Bool("no-verify", false, "")
 	noLint := fs.Bool("no-lint", false, "")
+	plan := fs.Bool("plan", false, "")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: nightshift ready <slug> [--no-verify] [--no-lint]")
+		fmt.Fprintln(stderr, "usage: nightshift ready <slug> [--no-verify] [--no-lint] [--plan]")
 	}
 
 	positional, err := parseLintFlags(fs, args)
@@ -477,10 +478,14 @@ func cmdReady(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	if !*noLint {
-		ctx, stop := newInterruptContext()
+	var ctx context.Context
+	if !*noLint || *plan {
+		var stop func()
+		ctx, stop = newInterruptContext()
 		defer stop()
+	}
 
+	if !*noLint {
 		res, err := runLint(ctx, h, slug, *noVerify, stdout)
 		if err != nil {
 			fmt.Fprintf(stderr, "nightshift: %v\n", err)
@@ -496,7 +501,34 @@ func cmdReady(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "nightshift: %v\n", err)
 		return 1
 	}
-	return 0
+	if !*plan {
+		return 0
+	}
+
+	readyPath := filepath.Join(home.ReadyDir(h), slug+".md")
+	status, err := runFn(runner.Options{
+		SpecArg:  readyPath,
+		PlanOnly: true,
+		Home:     h,
+		Stdout:   stdout,
+		Stderr:   stderr,
+		Stdin:    stdin,
+		IsTTY:    isTTY(),
+		Ctx:      ctx,
+		Version:  version,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "nightshift: %v\n", err)
+		return runner.ExitCode(runner.StatusError)
+	}
+	if status == runner.StatusBlocked {
+		q, _ := runner.ReadScaffold(filepath.Join(home.RunsDir(h), slug, "repo", "QUESTION.md"))
+		if q = strings.TrimSpace(q); q != "" {
+			fmt.Fprintln(stdout, q)
+		}
+		fmt.Fprintf(stdout, "answer it by editing %s, then: nightshift run %s --plan-only\n", readyPath, slug)
+	}
+	return runner.ExitCode(status)
 }
 
 func cmdDone(args []string, stdout, stderr io.Writer) int {
