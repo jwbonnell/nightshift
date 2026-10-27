@@ -331,6 +331,8 @@ func PrintStatusTable(w io.Writer, homeDir, stateRoot string, o StatusTableOptio
 				r.group = groupActive
 			case status == "complete":
 				r.group = groupComplete
+			case status == "planned" && isReady:
+				r.group = groupReady
 			default:
 				r.group = groupAttention
 			}

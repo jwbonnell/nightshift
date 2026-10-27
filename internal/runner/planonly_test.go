@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -180,5 +181,45 @@ func TestPlanOnlyWithNextIsUsageErrorLib(t *testing.T) {
 	opts.Next = true
 	if status, err := Run(opts); err == nil || status != StatusError {
 		t.Fatalf("status=%v err=%v, want error", status, err)
+	}
+}
+
+func TestNextPicksPlanned(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "demo", "", repo)
+
+	opts := planOnlyOpts(homeDir, newStubSandbox())
+	if status, err := Run(opts); err != nil || status != StatusPlanned {
+		t.Fatalf("plan-only: status=%v err=%v", status, err)
+	}
+	path, _, err := selectNext(opts)
+	if err != nil || !strings.HasSuffix(path, string(os.PathSeparator)+"demo.md") {
+		t.Fatalf("selectNext = %q, %v; want demo.md", path, err)
+	}
+
+	// --next hands the planned spec to a child run, which starts on a worker.
+	var calls []string
+	var mu sync.Mutex
+	next := Options{
+		Next: true, Home: homeDir, StateRoot: opts.StateRoot, Stdout: io.Discard, Stderr: io.Discard,
+		Stdin: strings.NewReader(""), Spawn: fakeSchedulerSpawner(t, opts.StateRoot, map[string]childScript{"demo": {}}, &calls, &mu),
+	}
+	if _, err := Run(next); err != nil {
+		t.Fatalf("next: %v", err)
+	}
+	if len(calls) != 1 || calls[0] != "demo" {
+		t.Fatalf("--next spawned %v, want [demo]", calls)
+	}
+
+	sb := newStubSandbox()
+	sb.agent = completingAgent(t)
+	sb.verify = alwaysGreenVerify
+	opts.PlanOnly, opts.Sandbox = false, sb
+	if _, err := Run(opts); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(sb.prompts) == 0 || strings.HasPrefix(sb.prompts[0], planPreamble) {
+		t.Fatalf("run did not start with a worker iteration: %v", sb.prompts)
 	}
 }

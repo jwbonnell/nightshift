@@ -953,3 +953,28 @@ func TestStatusSinceIgnoresCount(t *testing.T) {
 		t.Fatalf("footer:\n%s", out)
 	}
 }
+
+func TestStatusPlannedInReadyGroup(t *testing.T) {
+	homeDir := t.TempDir()
+	stateRoot := home.RunsDir(homeDir)
+	repo := newSourceRepo(t)
+	writeReadySpec(t, homeDir, "pln", "", repo)
+	writeReadySpec(t, homeDir, "bad", "", repo)
+	writeRunState(t, stateRoot, "pln", &runState{
+		Slug: "pln", Repo: repo, Status: "planned", Planned: true, Iterations: 1,
+		History: []string{"2026-10-24 10:30 planned"},
+	})
+	writeRunState(t, stateRoot, "bad", &runState{
+		Slug: "bad", Repo: repo, Status: "red", Iterations: 2,
+		History: []string{"2026-10-24 10:00 red"},
+	})
+	var buf bytes.Buffer
+	if err := PrintStatusTable(&buf, homeDir, stateRoot, StatusTableOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 3 || !strings.HasPrefix(lines[1], "bad") || !strings.HasPrefix(lines[2], "pln") ||
+		!strings.Contains(lines[2], "planned") {
+		t.Fatalf("output = %q, want attention row (bad) before ready-group row pln planned", buf.String())
+	}
+}
