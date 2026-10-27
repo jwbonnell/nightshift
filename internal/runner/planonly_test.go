@@ -113,3 +113,72 @@ func TestPlanOnlyNeverWaitsOnLimit(t *testing.T) {
 		t.Fatalf("Sleep called %v", *slept)
 	}
 }
+
+func TestPlanOnlyAlreadyPlanned(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "demo", "", repo)
+
+	opts := planOnlyOpts(homeDir, newStubSandbox())
+	if status, err := Run(opts); err != nil || status != StatusPlanned {
+		t.Fatalf("first: status=%v err=%v", status, err)
+	}
+	before, _ := os.ReadFile(filepath.Join(opts.StateRoot, "demo", "run.json"))
+
+	sb2 := newStubSandbox()
+	var out strings.Builder
+	opts2 := planOnlyOpts(homeDir, sb2)
+	opts2.Stdout = &out
+	status, err := Run(opts2)
+	if err != nil || status != StatusPlanned {
+		t.Fatalf("second: status=%v err=%v", status, err)
+	}
+	if !strings.Contains(out.String(), "spec demo is already planned — its plan is in ") {
+		t.Fatalf("missing already-planned line:\n%s", out.String())
+	}
+	if sb2.createN != 0 || sb2.agentN != 0 {
+		t.Fatalf("createN=%d agentN=%d, want 0/0", sb2.createN, sb2.agentN)
+	}
+	after, _ := os.ReadFile(filepath.Join(opts.StateRoot, "demo", "run.json"))
+	if string(before) != string(after) {
+		t.Fatalf("run.json changed by the shortcut")
+	}
+}
+
+func TestPlanOnlyReplansAfterSpecEdit(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "demo", "", repo)
+
+	sb := newStubSandbox()
+	sb.agent = func(ctx context.Context, iter int, dir string) error {
+		return os.WriteFile(filepath.Join(dir, "QUESTION.md"), []byte("Which design doc?\n"), 0o644)
+	}
+	if status, err := Run(planOnlyOpts(homeDir, sb)); err != nil || status != StatusBlocked {
+		t.Fatalf("first: status=%v err=%v, want blocked", status, err)
+	}
+
+	writeReadySpec(t, homeDir, "demo", "model: edited\n", repo)
+	sb2 := newStubSandbox()
+	opts := planOnlyOpts(homeDir, sb2)
+	status, err := Run(opts)
+	if err != nil || status != StatusPlanned {
+		t.Fatalf("second: status=%v err=%v, want planned", status, err)
+	}
+	if len(sb2.prompts) != 1 || !strings.HasPrefix(sb2.prompts[0], planPreamble) {
+		t.Fatalf("second run did not plan: %d prompts", len(sb2.prompts))
+	}
+
+	sb3 := newStubSandbox()
+	if status, err := Run(planOnlyOpts(homeDir, sb3)); err != nil || status != StatusPlanned || sb3.createN != 0 {
+		t.Fatalf("third: status=%v err=%v createN=%d, want planned via shortcut", status, err, sb3.createN)
+	}
+}
+
+func TestPlanOnlyWithNextIsUsageErrorLib(t *testing.T) {
+	opts := planOnlyOpts(t.TempDir(), newStubSandbox())
+	opts.Next = true
+	if status, err := Run(opts); err == nil || status != StatusError {
+		t.Fatalf("status=%v err=%v, want error", status, err)
+	}
+}

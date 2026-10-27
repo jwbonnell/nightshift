@@ -29,6 +29,7 @@ type stubSandbox struct {
 	models   []string
 
 	agentN, verifyN, stopN, resetVerifyN int
+	createN                              int
 	removed                              bool
 	removeN                              int
 	removeErr                            error
@@ -96,6 +97,7 @@ func stripGitIdentityEnv(env []string) []string {
 func (s *stubSandbox) Available() bool { return s.avail }
 
 func (s *stubSandbox) Create(mountDir string, egress []string) error {
+	s.createN++
 	s.mountDir = mountDir
 	s.egress = egress
 	return nil

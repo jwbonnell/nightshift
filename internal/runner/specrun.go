@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -215,6 +216,10 @@ func resolveCap(opts Options) (int, string, error) {
 func Run(opts Options) (Status, error) {
 	opts.fill()
 
+	if opts.PlanOnly && opts.Next {
+		return StatusError, errors.New("--plan-only can't be used with --next")
+	}
+
 	if opts.Follow && !opts.DryRun {
 		opts.Stdout = &syncWriter{w: opts.Stdout}
 	}
@@ -315,6 +320,10 @@ func runLocked(opts Options, sp *Spec, limit int, capSrc string, specLock *lock.
 		prev := loadPriorState(opts, sp.Slug)
 		if prev != nil && prev.Status == "complete" && prev.SpecHash == sp.ContentHash {
 			return StatusError, fmt.Errorf("spec %s already completed on branch %s — move it to specs/done/ or re-run with --fresh", sp.Slug, prev.Branch)
+		}
+		if opts.PlanOnly && prev != nil && prev.Planned && prev.SpecHash == sp.ContentHash {
+			fmt.Fprintf(opts.Stdout, "spec %s is already planned — its plan is in %s\n", sp.Slug, filepath.Join(opts.StateRoot, sp.Slug, "repo", "PROGRESS.md"))
+			return StatusPlanned, nil
 		}
 	}
 

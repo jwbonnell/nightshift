@@ -135,6 +135,9 @@ func printPlan(w io.Writer, opts Options, sp *Spec, maxConcurrent int, capSrc st
 	fmt.Fprintf(w, "repo:        %s\n", sp.Repo)
 	fmt.Fprintf(w, "verify:      %s\n", sp.Verify)
 	fmt.Fprintf(w, "base:        %s (%s) @ %s\n", sp.Base, sp.src["base"], short(sp.BaseSHA))
+	if opts.PlanOnly {
+		fmt.Fprint(w, "plan-only:   yes\n")
+	}
 	fmt.Fprintf(w, "model:       %s (%s)\n", sp.Model, sp.src["model"])
 	fmt.Fprintf(w, "planner:     %s (%s)\n", sp.Planner, sp.src["planner_model"])
 	fmt.Fprintf(w, "plan agent:  %s\n", sp.PlannerSel.String())

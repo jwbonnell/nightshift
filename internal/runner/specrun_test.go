@@ -817,3 +817,23 @@ func TestConcurrentSameRepo(t *testing.T) {
 		t.Fatalf("expected 2 result notes, got %d", len(entries))
 	}
 }
+
+func TestDryRunPlanOnly(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "demo", "", repo)
+
+	for _, planOnly := range []bool{true, false} {
+		var stdout bytes.Buffer
+		opts := Options{SpecArg: "demo", Home: homeDir, DryRun: true, PlanOnly: planOnly, Stdout: &stdout, Stderr: io.Discard, Stdin: strings.NewReader("")}
+		if status, err := Run(opts); err != nil || status != statusDryRun {
+			t.Fatalf("status=%v err=%v", status, err)
+		}
+		if got := strings.Contains(stdout.String(), "plan-only:   yes\n"); got != planOnly {
+			t.Fatalf("planOnly=%v: plan-only line present=%v:\n%s", planOnly, got, stdout.String())
+		}
+		if dirExists(filepath.Join(home.RunsDir(homeDir), "demo")) || refExists(repo, "refs/heads/spec/demo") {
+			t.Fatalf("dry-run created state")
+		}
+	}
+}
