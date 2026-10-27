@@ -99,6 +99,9 @@ it left behind are removed automatically on the next run of that spec —
 see `docs/nightshift.md`'s Interrupts section. A usage limit that resets
 inside the run's `--until` window waits and resumes automatically instead
 of stopping `rate-limited` — see the `run` subcommand section there.
+`run --plan-only` (and `ready --plan`) runs just the planning pass and ends
+`planned` (exit 0) or `blocked`; a later run skips planning unless the spec
+changed, and a usage limit never waits under `--plan-only`.
 
 ## Trust model — read this before touching sandbox.go or loop.go
 

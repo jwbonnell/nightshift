@@ -53,8 +53,8 @@ nightshift init                       create the nightshift home (~/.nightshift 
 nightshift new <slug> [--repo PATH] [--verify CMD] [--no-interview]
                                       start a draft and interview you to write it
 nightshift refine <slug>              reopen the interview on a draft
-nightshift ready <slug> [--no-verify] [--no-lint]
-                                      lint a draft, then move it to specs/ready/
+nightshift ready <slug> [--no-verify] [--no-lint] [--plan]
+                                      lint a draft, then move it to specs/ready/ (--plan: also run the planning pass)
 nightshift lint <spec> [--no-verify]  check a draft or ready spec (verify runs on the base commit in sbx)
 nightshift done <slug>... | --complete move ready spec(s) to specs/done/
 nightshift run <spec> [flags]         run one ready spec (nightshift run -h for flags)
@@ -120,7 +120,7 @@ non-interactive fallback: without a TTY or without `claude` on `PATH`,
 `refine` errors `nightshift: refine needs an interactive terminal and
 claude on PATH` and exits `1` rather than printing a hint.
 
-### `ready <slug> [--no-verify] [--no-lint]`
+### `ready <slug> [--no-verify] [--no-lint] [--plan]`
 
 Lints the draft (see `lint` below), then moves `specs/draft/<slug>.md` to
 `specs/ready/<slug>.md`. The lint output always prints before anything
@@ -129,7 +129,11 @@ not moved to specs/ready/`, exit `1`, draft left untouched. `--no-verify`
 passes through to lint, skipping check 9. `--no-lint` restores the old
 behavior exactly — only the `repo:`/`verify:`-non-empty check, no lint
 call at all — for when you already know the spec is fine and don't want
-to wait on a sandboxed verify run.
+to wait on a sandboxed verify run. `--plan` then runs
+`run <slug> --plan-only` on the moved spec (see "Plan ahead" under `run`),
+exits with that run's exit code, and on `blocked` prints the question and
+`answer it by editing <ready path>, then: nightshift run <slug> --plan-only`.
+The spec stays in `specs/ready/` whatever the outcome.
 
 ### `lint <spec> [--no-verify]`
 
@@ -276,6 +280,7 @@ sync ref from your source repo too) and starts clean.
 | Status | Exit code | Meaning |
 |---|---|---|
 | `complete` | 0 | every acceptance criterion met, verify green |
+| `planned` | 0 | `--plan-only` finished the planning pass; the next run starts on the work |
 | (dry-run / nothing eligible for `--next`) | 0 | — |
 | error | 1 | the runner itself hit a problem (see stderr) |
 | `blocked` | 2 | the agent wrote `QUESTION.md` and stopped |
@@ -287,7 +292,7 @@ sync ref from your source repo too) and starts clean.
 | `interrupted` | 8 | SIGINT/SIGTERM arrived; resumable |
 | `rate-limited` | 9 | the Claude usage limit's reset falls outside `--until`, is too far away with no `--until`, or hit too many times in a row; resumable |
 
-`blocked`, `red`, `stalled`, `capped`, `window-closed`, `interrupted`, and
+`planned`, `blocked`, `red`, `stalled`, `capped`, `window-closed`, `interrupted`, and
 `rate-limited` are all resumable — just run the same spec again (or let
 `--next` pick it up; `--next` only skips a spec whose *last* status was
 `blocked` or `complete` with an unchanged content hash).
@@ -362,6 +367,22 @@ uncommitted change (other than to `PROGRESS.md`/`QUESTION.md`/
 unchanged tree — it still counts toward the no-progress total, just
 without the wasted verify run.
 
+#### Plan ahead
+
+A spec the planner can't plan (a missing design doc, an unmerged
+prerequisite, an `owns` list that's too narrow) otherwise costs a whole
+night before you see its question. `nightshift run <spec> --plan-only`
+runs just the planning pass and stops: `planned` (exit 0) if it plans
+cleanly, `blocked` (exit 2) with the question if not. `nightshift ready
+<slug> --plan` does the same straight after moving the draft to ready.
+A later normal run (usually `--next` overnight) skips planning unless the
+spec changed. Running `--plan-only` on a spec that is already planned with
+an unchanged hash prints `spec <slug> is already planned — its plan is in
+<clone>/PROGRESS.md` and returns `planned` without creating a sandbox.
+`--plan-only` can't be combined with `--next` (usage error, exit 2), and a
+usage limit never waits under it: the run ends `rate-limited`. `--dry-run
+--plan-only` adds a `plan-only:   yes` line and creates nothing.
+
 ### `status`
 
 With no argument: one table of every spec — runs, ready specs and drafts —
@@ -370,7 +391,7 @@ display status, first match wins:
 
 1. `done` — the spec is in `specs/done/`, whatever `run.json` says.
 2. `running (pid N)` / `waiting (until 15:04)` — the spec lock is held.
-3. the run's own status (`complete`, `capped`, `red`, …; empty is `new`).
+3. the run's own status (`complete`, `capped`, `red`, …; empty is `new`). A `planned` run of a ready spec shows as `planned` in the ready group, not under attention.
 4. `ready` / `ready (waits on <dep>)` — in `specs/ready/` with no run.
 5. `draft`.
 
