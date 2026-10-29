@@ -29,7 +29,7 @@ type runState struct {
 
 	SyncRef      string   `json:"sync_ref,omitempty"`  // refs/heads/<branch> or refs/nightshift/<slug>
 	SyncOwed     bool     `json:"sync_owed,omitempty"` // a copy-back failed and hasn't succeeded since
-	SpecHash     string   `json:"spec_hash"`           // spec content hash at last plan
+	SpecHash     string   `json:"spec_hash"`           // spec content hash the last planning pass read
 	Planned      bool     `json:"planned"`             // a planning iteration ran for SpecHash
 	Iterations   int      `json:"iterations"`          // cumulative across resumes
 	Commits      int      `json:"commits"`             // base..HEAD at last write

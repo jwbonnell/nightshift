@@ -217,15 +217,11 @@ func (r *run) loop() Status {
 	st.LimitReset = ""
 	r.deadline = deadline
 
-	if r.opts.PlanOnly {
-		if !needPlan {
-			return StatusPlanned // runLocked's shortcut normally catches this first
-		}
-		// A plan-only pass re-plans from scratch, so a QUESTION.md left by
-		// an earlier blocked pass is stale.
-		if r.scaffoldRemove(r.questionPath()) {
-			r.logf("plan-only: cleared the previous QUESTION.md before re-planning")
-		}
+	// A QUESTION.md is answered by editing the spec, so one asked about an
+	// older spec is stale; an unchanged spec keeps its question.
+	if st.SpecHash != sp.ContentHash && r.scaffoldRemove(r.questionPath()) {
+		r.logf("resume: cleared QUESTION.md — the spec changed since it was asked")
+		r.appendProgress("Runner: the spec was edited after QUESTION.md was written, so the question was cleared. The answer should be in the spec.")
 	}
 
 	// codeAg/planAg are built once per run from the selectors resolveSpecFile
@@ -401,14 +397,19 @@ func (r *run) loop() Status {
 			}
 
 			progressAfter := r.scaffoldRead(r.progressPath())
-			planSucceeded := agentErr == nil && !res.IsError && progressAfter != progressBefore
+			agentOK := agentErr == nil && !res.IsError
+			progressChanged := progressAfter != progressBefore
+			asked := r.scaffoldExists(r.questionPath())
+			planSucceeded := agentOK && progressChanged && !asked
+			if agentOK && (progressChanged || asked) {
+				st.SpecHash = sp.ContentHash
+			}
 			if planSucceeded {
 				st.Planned = true
-				if r.opts.PlanOnly {
-					st.SpecHash = sp.ContentHash
-				}
 				needPlan = false
 				noProgress = 0
+			} else if asked {
+				st.Planned = false
 			} else {
 				reason := res.Message
 				if reason == "" && agentErr != nil {
@@ -421,7 +422,7 @@ func (r *run) loop() Status {
 				noProgress++
 			}
 			_ = r.saveState()
-			if r.scaffoldExists(r.questionPath()) {
+			if asked {
 				return StatusBlocked
 			}
 			if !planSucceeded && noProgress >= 2 {
