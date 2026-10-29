@@ -104,7 +104,13 @@ func (r *run) git(args ...string) (string, error) {
 	return stripSbxBanner(out), err
 }
 
-func (r *run) attemptsDir() string  { return filepath.Join(r.dir, "attempts") }
+func (r *run) attemptsDir() string { return filepath.Join(r.dir, "attempts") }
+
+// CloneDir is the agent's working clone for a spec's run state.
+func CloneDir(stateRoot, slug string) string {
+	return filepath.Join(stateRoot, slug, "repo")
+}
+
 func (r *run) progressPath() string { return filepath.Join(r.clone, "PROGRESS.md") }
 func (r *run) questionPath() string { return filepath.Join(r.clone, "QUESTION.md") }
 func (r *run) completePath() string { return filepath.Join(r.clone, ".spec-complete") }
@@ -511,7 +517,7 @@ func setup(opts Options, sp *Spec) (*run, error) {
 	if v == "" {
 		v = "dev"
 	}
-	r := &run{opts: opts, spec: sp, dir: dir, clone: filepath.Join(dir, "repo"), version: v}
+	r := &run{opts: opts, spec: sp, dir: dir, clone: CloneDir(opts.StateRoot, sp.Slug), version: v}
 	resuming := dirExists(r.clone)
 
 	if err := os.MkdirAll(r.attemptsDir(), 0o755); err != nil {

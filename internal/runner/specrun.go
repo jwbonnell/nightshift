@@ -321,8 +321,13 @@ func runLocked(opts Options, sp *Spec, limit int, capSrc string, specLock *lock.
 		if prev != nil && prev.Status == "complete" && prev.SpecHash == sp.ContentHash {
 			return StatusError, fmt.Errorf("spec %s already completed on branch %s — move it to specs/done/ or re-run with --fresh", sp.Slug, prev.Branch)
 		}
-		if opts.PlanOnly && prev != nil && prev.Planned && prev.SpecHash == sp.ContentHash {
-			fmt.Fprintf(opts.Stdout, "spec %s is already planned — its plan is in %s\n", sp.Slug, filepath.Join(opts.StateRoot, sp.Slug, "repo", "PROGRESS.md"))
+		if opts.PlanOnly && prev != nil && prev.Status == string(StatusBlocked) && prev.SpecHash == sp.ContentHash {
+			fmt.Fprintf(opts.Stdout, "spec %s is still blocked — answer the question in %s by editing %s, then re-run\n",
+				sp.Slug, filepath.Join(CloneDir(opts.StateRoot, sp.Slug), "QUESTION.md"), sp.Path)
+			return StatusBlocked, nil
+		}
+		if opts.PlanOnly && prev != nil && prev.Planned && prev.Status != string(StatusBlocked) && prev.SpecHash == sp.ContentHash {
+			fmt.Fprintf(opts.Stdout, "spec %s is already planned — its plan is in %s\n", sp.Slug, filepath.Join(CloneDir(opts.StateRoot, sp.Slug), "PROGRESS.md"))
 			return StatusPlanned, nil
 		}
 	}

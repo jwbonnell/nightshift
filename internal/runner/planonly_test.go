@@ -113,6 +113,66 @@ func TestPlanOnlyNeverWaitsOnLimit(t *testing.T) {
 	if len(*slept) != 0 {
 		t.Fatalf("Sleep called %v", *slept)
 	}
+
+	t.Run("active marker", func(t *testing.T) {
+		repo := newSourceRepo(t)
+		homeDir := t.TempDir()
+		writeReadySpec(t, homeDir, "demo", "", repo)
+		clockFn, sleepFn, slept := newFakeClock(base)
+		sb := newStubSandbox()
+		opts := planOnlyOpts(homeDir, sb)
+		opts.Sleep = sleepFn
+		opts.clock = clockFn
+		if err := writeLimitMarker(opts.StateRoot, limitHit{ResetAt: base.Add(10 * time.Minute)}, base, "other", time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		status, err := Run(opts)
+		if err != nil || status != StatusRateLimited {
+			t.Fatalf("status=%v err=%v, want rate-limited/nil", status, err)
+		}
+		if len(*slept) != 0 {
+			t.Fatalf("Sleep called %v", *slept)
+		}
+		if sb.createN != 0 {
+			t.Fatalf("createN = %d, want 0", sb.createN)
+		}
+	})
+}
+
+func TestPlanOnlyBlockedRerunUnchanged(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "demo", "", repo)
+
+	sb := newStubSandbox()
+	sb.agent = func(ctx context.Context, iter int, dir string) error {
+		return os.WriteFile(filepath.Join(dir, "QUESTION.md"), []byte("Which design doc?\n"), 0o644)
+	}
+	opts := planOnlyOpts(homeDir, sb)
+	if status, err := Run(opts); err != nil || status != StatusBlocked {
+		t.Fatalf("first: status=%v err=%v, want blocked", status, err)
+	}
+
+	sb2 := newStubSandbox()
+	var out strings.Builder
+	opts2 := planOnlyOpts(homeDir, sb2)
+	opts2.Stdout = &out
+	status, err := Run(opts2)
+	if err != nil || status != StatusBlocked {
+		t.Fatalf("second: status=%v err=%v, want blocked/nil", status, err)
+	}
+	if ExitCode(status) != 2 {
+		t.Fatalf("exit = %d, want 2", ExitCode(status))
+	}
+	if !strings.Contains(out.String(), "spec demo is still blocked — answer the question in ") {
+		t.Fatalf("missing still-blocked line:\n%s", out.String())
+	}
+	if sb2.createN != 0 {
+		t.Fatalf("createN = %d, want 0", sb2.createN)
+	}
+	if _, err := os.Stat(filepath.Join(CloneDir(opts.StateRoot, "demo"), "QUESTION.md")); err != nil {
+		t.Fatalf("QUESTION.md gone: %v", err)
+	}
 }
 
 func TestPlanOnlyAlreadyPlanned(t *testing.T) {
@@ -158,6 +218,12 @@ func TestPlanOnlyReplansAfterSpecEdit(t *testing.T) {
 	if status, err := Run(planOnlyOpts(homeDir, sb)); err != nil || status != StatusBlocked {
 		t.Fatalf("first: status=%v err=%v, want blocked", status, err)
 	}
+	hashBefore := loadPriorState(planOnlyOpts(homeDir, sb), "demo").SpecHash
+
+	sbSame := newStubSandbox()
+	if status, err := Run(planOnlyOpts(homeDir, sbSame)); err != nil || status != StatusBlocked || sbSame.createN != 0 {
+		t.Fatalf("unedited rerun: status=%v err=%v createN=%d, want blocked via shortcut", status, err, sbSame.createN)
+	}
 
 	writeReadySpec(t, homeDir, "demo", "model: edited\n", repo)
 	sb2 := newStubSandbox()
@@ -168,6 +234,9 @@ func TestPlanOnlyReplansAfterSpecEdit(t *testing.T) {
 	}
 	if len(sb2.prompts) != 1 || !strings.HasPrefix(sb2.prompts[0], planPreamble) {
 		t.Fatalf("second run did not plan: %d prompts", len(sb2.prompts))
+	}
+	if hashAfter := loadPriorState(opts, "demo").SpecHash; hashAfter == hashBefore || hashAfter == "" {
+		t.Fatalf("spec_hash not updated by the edit: before=%q after=%q", hashBefore, hashAfter)
 	}
 
 	sb3 := newStubSandbox()
@@ -212,6 +281,8 @@ func TestNextPicksPlanned(t *testing.T) {
 		t.Fatalf("--next spawned %v, want [demo]", calls)
 	}
 
+	// This direct Run stands in for the spawned --next child: a real child
+	// would exec a real nightshift process (fakeSchedulerSpawner only fakes it).
 	sb := newStubSandbox()
 	sb.agent = completingAgent(t)
 	sb.verify = alwaysGreenVerify

@@ -522,7 +522,7 @@ func cmdReady(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 		return runner.ExitCode(runner.StatusError)
 	}
 	if status == runner.StatusBlocked {
-		q, _ := runner.ReadScaffold(filepath.Join(home.RunsDir(h), slug, "repo", "QUESTION.md"))
+		q, _ := runner.ReadScaffold(filepath.Join(runner.CloneDir(home.RunsDir(h), slug), "QUESTION.md"))
 		if q = strings.TrimSpace(q); q != "" {
 			fmt.Fprintln(stdout, q)
 		}

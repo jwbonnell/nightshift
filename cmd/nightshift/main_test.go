@@ -1117,6 +1117,23 @@ func TestReadyPlanBlockedPrintsQuestion(t *testing.T) {
 	if !fileExistsForTest(readyPath) {
 		t.Fatalf("spec left specs/ready/")
 	}
+
+	// Still blocked: the spec is already in ready/ and the runner reports
+	// blocked again; the question and hint print the same way.
+	stdout.Reset()
+	stderr.Reset()
+	if err := os.Remove(readyPath); err != nil {
+		t.Fatal(err)
+	}
+	writeFullDraftSpec(t, homeDir, "demo", repo, false)
+	if code := dispatch([]string{"ready", "demo", "--plan"}, &stdout, &stderr, strings.NewReader("")); code != 2 {
+		t.Fatalf("still-blocked exit = %d, want 2; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	for _, want := range []string{"Where is the design doc?", "answer it by editing " + readyPath} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("still-blocked stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
 }
 
 func TestReadyPlanLintFailNoRun(t *testing.T) {
