@@ -275,6 +275,11 @@ prior status resumes automatically: the existing clone, branch, and
 confirmation prompt unless `--yes`, deletes `spec/<slug>` and the pending
 sync ref from your source repo too) and starts clean.
 
+A resume whose spec was edited since QUESTION.md was written clears that
+stale question (`resume: cleared QUESTION.md — the spec changed since it was
+asked`, plus a note in PROGRESS.md) and re-plans once. An unedited spec keeps
+its QUESTION.md and stays blocked.
+
 #### Exit codes
 
 | Status | Exit code | Meaning |
@@ -379,6 +384,12 @@ A later normal run (usually `--next` overnight) skips planning unless the
 spec changed. Running `--plan-only` on a spec that is already planned with
 an unchanged hash prints `spec <slug> is already planned — its plan is in
 <clone>/PROGRESS.md` and returns `planned` without creating a sandbox.
+A planning pass that writes QUESTION.md isn't a plan: `planned` stays false
+and the run ends `blocked`. Running `--plan-only` again on such a spec with an
+unchanged hash prints `spec <slug> is still blocked — answer the question in
+<clone>/QUESTION.md by editing <spec>, then re-run` and returns `blocked`
+(exit 2) without creating a sandbox; editing the spec clears the question and
+re-plans.
 `--plan-only` can't be combined with `--next` (usage error, exit 2), and a
 usage limit never waits under it: the run ends `rate-limited`. `--dry-run
 --plan-only` adds a `plan-only:   yes` line and creates nothing.
@@ -421,7 +432,9 @@ nothing remains only the footer prints. After the table (and any `usage
 limit: until …` line), if complete rows are shown: `N complete — review
 and merge, then nightshift done <slug> (or nightshift done --complete)`.
 With no specs or runs at all it prints a one-line hint to run `nightshift
-new`. `status <slug>`'s `status:` line uses the display status.
+new`. `status <slug>`'s `status:` line uses the display status. Its `spec_hash` is
+the content hash of the spec the last planning pass read, recorded by every
+pass that reached an outcome (a plan or a question).
 
 With a slug: every `run.json` field, then `state dir`, `clone`, `runner
 log`, `agent log`, the newest result note (or `none`), `latest review:

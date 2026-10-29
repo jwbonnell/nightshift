@@ -203,3 +203,7 @@ create-failure cleanup, wall-clock progress stamps). If you're porting
 anything from `docs/reference/`, check D11 first — several of its quirks
 are *intentionally* reproduced in the reference's own pseudocode and must
 NOT be copied as-is.
+
+QUESTION.md is cleared only when the spec changed since the last planning
+pass (`spec_hash` mismatch), never otherwise: an unanswered question must
+survive a rerun, and the only way to answer it is to edit the spec.
