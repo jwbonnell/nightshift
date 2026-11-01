@@ -65,6 +65,7 @@ nightshift logs [<slug>] [flags]      show or follow a run's logs (nightshift lo
 nightshift review <slug> [--model M]  sandboxed Claude review of a run's work
 nightshift pr <url>|<repo> <n> [flags] pre-review one PR/MR (nightshift pr -h for flags)
 nightshift pr --pending [flags]       pre-review every open PR/MR awaiting your review
+nightshift completion bash            print a bash completion script
 nightshift version                    print the version
 ```
 
@@ -493,6 +494,40 @@ Prints `nightshift <version>`. `run` stamps that same version into
 and the result note's `nightshift:` frontmatter field — so a note or state
 dir from months ago still says which binary produced it. An empty version
 (a `go build` with no `-ldflags`) is recorded as `dev`.
+
+## Shell completion
+
+`nightshift completion bash` prints a bash completion script. Install it
+either way:
+
+```sh
+nightshift completion bash > ~/.local/share/bash-completion/completions/nightshift   # needs the bash-completion package
+eval "$(nightshift completion bash)"                                                 # or, in ~/.bashrc
+```
+
+Tab then completes subcommand names, each subcommand's flags, and spec
+slugs from the folder that subcommand reads:
+
+| Subcommand | Completes |
+|---|---|
+| `run` | slugs in `specs/ready/` (none after `--next`) |
+| `ready`, `refine` | slugs in `specs/draft/` |
+| `lint` | slugs in `specs/draft/` then `specs/ready/` |
+| `done` | slugs in `specs/ready/`, skipping ones already typed |
+| `status`, `logs`, `review` | runs in `runs/<slug>/` that have a `run.json` |
+| `new --repo` | directories |
+| `review --lens` | built-in lens names plus custom ones in `<home>/lenses/` |
+| `completion` | `bash` |
+| `init`, `pr`, `version` | flags only |
+
+Other value flags complete nothing. `logs` offers `-f` but not its
+`--follow` alias.
+
+The script asks the binary for candidates through a hidden
+`nightshift __complete` command, so completion follows `NIGHTSHIFT_HOME`
+and never touches git, the network, sandboxes or locks. The script embeds
+the absolute path of the binary that printed it; regenerate it after moving
+the binary.
 
 ## Interview
 

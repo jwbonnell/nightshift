@@ -25,7 +25,10 @@ with the runner, but never the runner itself.
 ## Architecture
 
 ```
-cmd/nightshift/        CLI dispatch, flag parsing, exit-code mapping
+cmd/nightshift/        CLI dispatch, flag parsing, exit-code mapping;
+                        complete.go holds the completion table and hidden
+                        `__complete` — a new flag or subcommand needs an
+                        entry there (TestCompleteCoversEveryFlag enforces it)
 internal/home/         Home resolution, D2 layout, config file, init/new/ready/done
 internal/runner/       Everything else: spec resolution, state, the sandbox
                         interface + real sbx implementation, the loop itself,
