@@ -940,25 +940,36 @@ fresh workspace *without* the holdout files, so its output (which the agent may
 see) can't name them. Output goes to `<state dir>/gate/<name>.log`; a gate error
 is written to `gate/error.log`. A gate runs agent-written code in a sandbox
 (`nightshift-<slug>-gate`), exactly as verify does, with the spec's egress and
-image. Both gates run even if the first fails.
+image. Both gates run even if the first fails. Because the holdout gate runs
+with the spec's `egress`, code the agent wrote could in principle send holdout
+details to an allowed host; keep `egress` short on specs with holdouts.
+
+`<Home>/holdout/<slug>` may be a symlink; it is resolved, must still resolve
+outside the repo (checked at start and again right before each overlay), and
+any error other than "doesn't exist" stops the run or is a gate error.
 
 `gate_rounds` (0-5, default 2; frontmatter > `NIGHTSHIFT_GATE_ROUNDS` > default)
 is how many times a failing gate is handed back through `REVIEW.md`. After
 that, or with `gate_rounds: 0`, the run still ends `complete`, with `gate: fail`
 recorded and an urgent notification titled `... (gate failed)`. A gate error
 (workspace, overlay, sandbox create) is never handed back and records
-`gate: error`. If the `--until` window has closed, gates are skipped
-(`gate: skipped`). No new status or exit code exists.
+`gate: error`. Gates are skipped (`gate: skipped`) only if the `--until` window
+is already closed when the agent completes; a window that closes while the
+gates run keeps their real result and only skips the hand-back. A gate result
+is reported only on a run that ends `complete` (a run handed back and then
+capped, stalled or red has no `gate:`). No new status or exit code exists.
 
 **What the agent is told.** For a failing `accept:`: the command, its exit code
-and the last 40 lines of output (control characters replaced by `?`). For
+and the last 40 lines of output (control and Unicode format characters, such as bidi
+overrides and zero-width characters, replaced by `?`). For
 holdouts: only that hidden tests failed. Holdout file names, contents and output
 never reach the clone, PROGRESS.md, REVIEW.md, prompts, agent.log or runner.log;
 they appear only under `<state dir>/gate/` and in the result note.
 
 The result note carries `gate: pass|fail|error|skipped` in its frontmatter and an
 `## Acceptance gate` section with each gate's result and the last 80 lines of
-each failing gate's log (holdout output included; the note is for you).
+each failing gate's log (holdout output included; the note is for you). It also
+lists the overlaid holdout file paths, never their contents.
 
 ## Post-run checks
 

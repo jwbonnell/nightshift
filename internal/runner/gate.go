@@ -34,16 +34,16 @@ func buildGateWorkspace(ws, repo, ref string) (string, error) {
 
 // overlayHoldouts copies every file under holdDir into repoDir at the same
 // relative path, never following a symlink on either side and never
-// overwriting. Returns the number of files written. A missing holdDir is
-// zero files.
-func overlayHoldouts(holdDir, repoDir string) (int, error) {
+// overwriting. Returns the relative paths written, in walk order. A missing
+// holdDir is zero files.
+func overlayHoldouts(holdDir, repoDir string) ([]string, error) {
 	if _, err := os.Lstat(holdDir); err != nil {
 		if os.IsNotExist(err) {
-			return 0, nil
+			return nil, nil
 		}
-		return 0, err
+		return nil, err
 	}
-	n := 0
+	var files []string
 	err := filepath.WalkDir(holdDir, func(path string, d fs.DirEntry, werr error) error {
 		if werr != nil {
 			return werr
@@ -61,10 +61,10 @@ func overlayHoldouts(holdDir, repoDir string) (int, error) {
 		if err := overlayOne(path, repoDir, rel); err != nil {
 			return err
 		}
-		n++
+		files = append(files, rel)
 		return nil
 	})
-	return n, err
+	return files, err
 }
 
 func overlayOne(src, repoDir, rel string) error {
@@ -119,11 +119,28 @@ func holdoutSlugDir(h, slug string) string {
 	return filepath.Join(home.HoldoutDir(h), slug)
 }
 
+// resolveHoldoutDir returns the slug's holdout dir with symlinks resolved,
+// or "" when it doesn't exist.
+func resolveHoldoutDir(h, slug string) (string, error) {
+	real, err := filepath.EvalSymlinks(holdoutSlugDir(h, slug))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return real, nil
+}
+
 // countHoldoutFiles counts non-directory entries under the slug's holdout
 // dir; a missing dir is zero.
 func countHoldoutFiles(h, slug string) int {
+	dir, err := resolveHoldoutDir(h, slug)
+	if err != nil || dir == "" {
+		return 0
+	}
 	n := 0
-	_ = filepath.WalkDir(holdoutSlugDir(h, slug), func(_ string, d fs.DirEntry, err error) error {
+	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
 		if err == nil && !d.IsDir() {
 			n++
 		}
@@ -138,15 +155,18 @@ func checkHoldoutOutsideRepo(h, slug, repo string) error {
 	dir := holdoutSlugDir(h, slug)
 	holdReal, err := filepath.EvalSymlinks(dir)
 	if err != nil {
-		return nil // missing: nothing to protect
+		if os.IsNotExist(err) {
+			return nil // missing: nothing to protect
+		}
+		return fmt.Errorf("holdout dir %s: %w", dir, err)
 	}
 	repoReal, err := filepath.EvalSymlinks(repo)
 	if err != nil {
-		return nil
+		return fmt.Errorf("repo %s: %w", repo, err)
 	}
 	rel, err := filepath.Rel(repoReal, holdReal)
 	if err != nil {
-		return nil
+		return fmt.Errorf("holdout dir %s: %w", dir, err)
 	}
 	if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
 		return fmt.Errorf("holdout dir %s must be outside the repo", dir)
@@ -173,6 +193,9 @@ type gateOutcome struct {
 	gates  []gateRes
 	err    error
 	reason string
+	// holdoutFiles are the overlaid holdout paths (names only), listed in
+	// the result note.
+	holdoutFiles []string
 }
 
 func (g *gateOutcome) failed() bool {
@@ -187,11 +210,12 @@ func (r *run) gateVerifier() BaseVerifier {
 }
 
 // sanitizeGateOutput makes gate output safe to hand to the agent: invalid
-// UTF-8 and control characters other than tab and newline become "?".
+// UTF-8, control characters other than tab and newline, and Unicode format
+// characters (bidi overrides, zero-width) become "?".
 func sanitizeGateOutput(s string) string {
 	s = strings.ToValidUTF8(s, "?")
 	return strings.Map(func(c rune) rune {
-		if c != '\t' && c != '\n' && unicode.IsControl(c) {
+		if c != '\t' && c != '\n' && (unicode.IsControl(c) || unicode.Is(unicode.Cf, c)) {
 			return '?'
 		}
 		return c
@@ -283,10 +307,21 @@ func (r *run) runGates() (handedBack, interrupted bool) {
 			return false, r.interrupted()
 		}
 		if g.overlay {
-			if _, err := overlayHoldouts(holdoutSlugDir(r.opts.Home, sp.Slug), dir); err != nil {
+			if err := checkHoldoutOutsideRepo(r.opts.Home, sp.Slug, sp.Repo); err != nil {
 				gateErr(err)
 				return false, false
 			}
+			hd, err := resolveHoldoutDir(r.opts.Home, sp.Slug)
+			if err != nil {
+				gateErr(err)
+				return false, false
+			}
+			files, err := overlayHoldouts(hd, dir)
+			if err != nil {
+				gateErr(err)
+				return false, false
+			}
+			out.holdoutFiles = files
 		}
 		ctx, cancel := r.iterCtx(r.deadline, clock)
 		o, verr := v.Verify(ctx, dir, sp.Egress, sp.Image, g.cmd)
@@ -375,6 +410,13 @@ func (r *run) writeGateSection(b *strings.Builder) {
 		}
 	}
 	b.WriteString("\n")
+	if len(g.holdoutFiles) > 0 {
+		b.WriteString("holdout files:\n\n")
+		for _, f := range g.holdoutFiles {
+			fmt.Fprintf(b, "- %s\n", f)
+		}
+		b.WriteString("\n")
+	}
 	for _, x := range g.gates {
 		if !x.ok {
 			fmt.Fprintf(b, "### %s output (last 80 lines)\n\n%s\n", x.name, fenced(tailLines(sanitizeGateOutput(x.out), 80)))

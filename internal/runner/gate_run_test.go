@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jwbonnell/nightshift/internal/home"
 )
 
 // fakeGateVerifier scripts the gate verifier: fn gets the call number
@@ -322,7 +324,7 @@ func TestHoldoutNeverLeaks(t *testing.T) {
 	out, _ := exec.Command("git", "-C", r.clone, "log", "-p", "--all").CombinedOutput()
 	check("git log", string(out))
 	body := r.resultBody(StatusComplete)
-	for _, tok := range []string{outTok} {
+	for _, tok := range []string{outTok, name} {
 		if !strings.Contains(body, tok) {
 			t.Errorf("result note lacks %q", tok)
 		}
@@ -337,6 +339,9 @@ func TestGateOutputSanitized(t *testing.T) {
 	got := sanitizeGateOutput(in)
 	if got != "a\tb\nc?[0m?d?e?X?\n" {
 		t.Fatalf("got %q", got)
+	}
+	if got := sanitizeGateOutput("a\u202eb\u200bc"); got != "a?b?c" {
+		t.Fatalf("format chars: got %q", got)
 	}
 	var lines []string
 	for i := 0; i < 60; i++ {
@@ -380,5 +385,51 @@ func TestNoGateUnchanged(t *testing.T) {
 	rj, _ := os.ReadFile(r.statePath())
 	if strings.Contains(string(data), "gate") || strings.Contains(string(rj), "gate") {
 		t.Fatal("gate in runner.log/run.json")
+	}
+}
+
+func TestHoldoutSymlinkedSlugDir(t *testing.T) {
+	repo := newSourceRepo(t)
+	sb := newStubSandbox()
+	sb.agent = completingAgent(t)
+	sb.verify = alwaysGreenVerify
+	var seen []bool
+	fv := &fakeGateVerifier{fn: func(n int, dir, cmd string) (string, error) {
+		_, e1 := os.Stat(filepath.Join(dir, "zz_a_test.go"))
+		_, e2 := os.Stat(filepath.Join(dir, "sub", "zz_b_test.go"))
+		seen = append(seen, e1 == nil && e2 == nil)
+		return "ok", nil
+	}}
+	r := newTestRun(t, repo, "", Options{Stdout: &bytes.Buffer{}, GateVerifier: fv}, sb)
+	target := t.TempDir()
+	writeHoldout(t, target, "zz_a_test.go", "package main\n")
+	writeHoldout(t, target, "sub/zz_b_test.go", "package sub\n")
+	if err := os.MkdirAll(home.HoldoutDir(r.opts.Home), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, holdoutSlugDir(r.opts.Home, "demo")); err != nil {
+		t.Fatal(err)
+	}
+	if n := countHoldoutFiles(r.opts.Home, "demo"); n != 2 {
+		t.Fatalf("count = %d, want 2", n)
+	}
+	status := r.loop()
+	if status != StatusComplete {
+		t.Fatalf("status = %v", status)
+	}
+	if len(seen) != 1 || !seen[0] {
+		t.Fatalf("holdout visibility = %v", seen)
+	}
+	if r.gate == nil || r.gate.result != "pass" {
+		t.Fatalf("gate = %+v", r.gate)
+	}
+	if _, err := r.finish(status); err != nil {
+		t.Fatal(err)
+	}
+	body := r.resultBody(StatusComplete)
+	for _, want := range []string{"zz_a_test.go", "sub/zz_b_test.go"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("note lacks %q", want)
+		}
 	}
 }

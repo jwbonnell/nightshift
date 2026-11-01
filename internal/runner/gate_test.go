@@ -179,9 +179,9 @@ func TestHoldoutOverlay(t *testing.T) {
 	hold, repo := t.TempDir(), t.TempDir()
 	writeHoldout(t, hold, "a/b/x_test.go", "package b\n")
 	writeHoldout(t, hold, "top_test.go", "package main\n")
-	n, err := overlayHoldouts(hold, repo)
-	if err != nil || n != 2 {
-		t.Fatalf("n=%d err=%v", n, err)
+	files, err := overlayHoldouts(hold, repo)
+	if err != nil || len(files) != 2 {
+		t.Fatalf("files=%q err=%v", files, err)
 	}
 	for rel, want := range map[string]string{"a/b/x_test.go": "package b\n", "top_test.go": "package main\n"} {
 		b, err := os.ReadFile(filepath.Join(repo, rel))
@@ -189,8 +189,8 @@ func TestHoldoutOverlay(t *testing.T) {
 			t.Fatalf("%s: %q %v", rel, b, err)
 		}
 	}
-	if n, err := overlayHoldouts(filepath.Join(hold, "missing"), repo); n != 0 || err != nil {
-		t.Fatalf("missing: %d %v", n, err)
+	if files, err := overlayHoldouts(filepath.Join(hold, "missing"), repo); len(files) != 0 || err != nil {
+		t.Fatalf("missing: %q %v", files, err)
 	}
 }
 
@@ -230,5 +230,33 @@ func TestHoldoutAlreadyExists(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(repo, "main.go")); string(b) != "orig" {
 		t.Fatalf("overwritten: %q", b)
+	}
+}
+
+func TestHoldoutCheckErrors(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home.HoldoutDir(homeDir), "demo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tmp := t.TempDir()
+	file := filepath.Join(tmp, "file")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, repo := range map[string]string{
+		"through a file": filepath.Join(file, "repo"),
+		"nonexistent":    filepath.Join(tmp, "nope"),
+	} {
+		if err := checkHoldoutOutsideRepo(homeDir, "demo", repo); err == nil {
+			t.Errorf("%s: nil error", name)
+		}
+	}
+	// A missing holdout dir is fine, even with a bad repo path.
+	if err := checkHoldoutOutsideRepo(homeDir, "absent", filepath.Join(tmp, "nope")); err != nil {
+		t.Errorf("missing holdout: %v", err)
+	}
+	// A holdout path that can't be read is an error, not a pass.
+	if err := checkHoldoutOutsideRepo(homeDir, "demo/../../"+strings.Repeat("x", 5000), tmp); err == nil {
+		t.Error("unresolvable holdout path: nil error")
 	}
 }
