@@ -62,7 +62,7 @@ func TestMixedAgentsPlanSandbox(t *testing.T) {
 		"exec -w " + mountDir + " nightshift-demo env OPENCODE_PERMISSION=" + codePermission + " opencode run --format json --auto -m openai/gpt-5",
 		"stop nightshift-demo",
 		"stop nightshift-demo-plan",
-		"rm -f nightshift-demo nightshift-demo-plan nightshift-demo-ctl nightshift-demo-verify nightshift-demo-gate",
+		"rm -f nightshift-demo nightshift-demo-plan nightshift-demo-ctl",
 	}
 	if !equalLines(got, want) {
 		t.Fatalf("argv =\n%v\nwant\n%v", got, want)

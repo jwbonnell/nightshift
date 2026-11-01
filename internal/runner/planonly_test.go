@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -292,5 +293,47 @@ func TestNextPicksPlanned(t *testing.T) {
 	}
 	if len(sb.prompts) == 0 || strings.HasPrefix(sb.prompts[0], planPreamble) {
 		t.Fatalf("run did not start with a worker iteration: %v", sb.prompts)
+	}
+}
+
+// realRmSandbox runs the real sbxSandbox's lifecycle (Create/ResetVerify/
+// Remove against a fake sbx) and delegates the agent and git to a stub.
+type realRmSandbox struct {
+	*stubSandbox
+	real *sbxSandbox
+}
+
+func (s realRmSandbox) Create(mountDir string, egress []string) error {
+	if err := s.real.Create(mountDir, egress); err != nil {
+		return err
+	}
+	return s.stubSandbox.Create(mountDir, egress)
+}
+func (s realRmSandbox) StopAgent() error   { return s.real.StopAgent() }
+func (s realRmSandbox) ResetVerify() error { return s.real.ResetVerify() }
+func (s realRmSandbox) RunVerify(ctx context.Context, c string) (string, error) {
+	return s.real.RunVerify(ctx, c)
+}
+func (s realRmSandbox) Remove() error { return s.real.Remove() }
+
+func TestPlanOnlyPassesSandboxesCheck(t *testing.T) {
+	bin, _ := newFakeSbx(t)
+	t.Setenv("FAKE_SBX_RM_STRICT", "1")
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "demo", "", repo)
+
+	opts := planOnlyOpts(homeDir, newStubSandbox())
+	opts.Sandbox = realRmSandbox{opts.Sandbox.(*stubSandbox), newSbxSandbox(bin, "claude", "demo")}
+	if status, err := Run(opts); err != nil || status != StatusPlanned {
+		t.Fatalf("status=%v err=%v, want planned/nil", status, err)
+	}
+	notes, _ := filepath.Glob(filepath.Join(homeDir, "results", "demo-*.md"))
+	if len(notes) != 1 {
+		t.Fatalf("result notes = %v", notes)
+	}
+	data, _ := os.ReadFile(notes[0])
+	if !regexp.MustCompile(`(?m)^\s*ok\s+sandboxes$`).Match(data) {
+		t.Fatalf("note lacks ok sandboxes:\n%s", data)
 	}
 }

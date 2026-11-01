@@ -60,6 +60,7 @@ type sbxSandbox struct {
 	egress                                                                       []string
 	image                                                                        string
 	created                                                                      bool
+	verifyCreated                                                                bool
 }
 
 // newSbxSandboxAgents names the agent sandbox nightshift-<slug> per D1,
@@ -119,6 +120,9 @@ func (s *sbxSandbox) mk(name, image, template string) error {
 	if err != nil {
 		return fmt.Errorf("sbx create %s: %v: %s", name, err, out)
 	}
+	if name == s.verifyName {
+		s.verifyCreated = true
+	}
 	for _, host := range s.egress {
 		out, err := execStream(context.Background(), nil, io.Discard, s.bin, "policy", "allow", "network", "--sandbox", name, host)
 		if err != nil {
@@ -129,14 +133,29 @@ func (s *sbxSandbox) mk(name, image, template string) error {
 }
 
 // rmNames lists the agent sandbox(es) plus ctl, verify and gate, in the fixed
-// order every rm -f and Remove call uses: agent, plan (if any), ctl,
-// verify, gate.
+// order Create's leftover sweep uses: agent, plan (if any), ctl, verify, gate.
 func (s *sbxSandbox) rmNames() []string {
 	names := []string{s.agentName}
 	if s.planName != "" {
 		names = append(names, s.planName)
 	}
 	return append(names, s.ctlName, s.verifyName, s.gateName)
+}
+
+// removeNames lists what Remove deletes: agent, plan (if any), ctl, and
+// verify only when ResetVerify created it. sbx rm -f exits non-zero for a
+// name that doesn't exist, so a run that never verified must not name it.
+// The gate sandbox removes itself.
+func (s *sbxSandbox) removeNames() []string {
+	names := []string{s.agentName}
+	if s.planName != "" {
+		names = append(names, s.planName)
+	}
+	names = append(names, s.ctlName)
+	if s.verifyCreated {
+		names = append(names, s.verifyName)
+	}
+	return names
 }
 
 // Create provisions the agent sandbox(es) and the control sandbox; the
@@ -235,7 +254,7 @@ func (s *sbxSandbox) Remove() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
-	_, err := execStream(ctx, nil, io.Discard, s.bin, append([]string{"rm", "-f"}, s.rmNames()...)...)
+	_, err := execStream(ctx, nil, io.Discard, s.bin, append([]string{"rm", "-f"}, s.removeNames()...)...)
 	return err
 }
 

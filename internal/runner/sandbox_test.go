@@ -55,7 +55,14 @@ if [ -n "$FAKE_SBX_STATE" ] && [ "$exit_code" = 0 ]; then
     rm)
       shift
       [ "$1" = "-f" ] && shift
-      for n in "$@"; do rm -f "$FAKE_SBX_STATE/$n"; done ;;
+      missing=0
+      for n in "$@"; do
+        [ -e "$FAKE_SBX_STATE/$n" ] || missing=1
+        rm -f "$FAKE_SBX_STATE/$n"
+      done
+      # Opt-in: like real sbx, rm of a name that doesn't exist still removes
+      # the others but exits 1.
+      if [ -n "$FAKE_SBX_RM_STRICT" ] && [ "$missing" = 1 ]; then exit 1; fi ;;
   esac
 fi
 exit "$exit_code"
@@ -179,7 +186,7 @@ func TestSbxArgv(t *testing.T) {
 	if err := sb.Remove(); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
-	wantRemove := []string{"rm -f nightshift-demo nightshift-demo-ctl nightshift-demo-verify nightshift-demo-gate"}
+	wantRemove := []string{"rm -f nightshift-demo nightshift-demo-ctl nightshift-demo-verify"}
 	if got := readLog(t, logPath); !equalLines(got, wantRemove) {
 		t.Fatalf("Remove argv = %q, want %q", got, wantRemove)
 	}
@@ -514,4 +521,53 @@ func equalLines(got, want []string) bool {
 		}
 	}
 	return true
+}
+
+func TestRemoveSkipsUncreatedVerify(t *testing.T) {
+	bin, logPath := newFakeSbx(t)
+	t.Setenv("FAKE_SBX_RM_STRICT", "1")
+	sb := newSbxSandbox(bin, "claude", "demo")
+	if err := sb.Create("/mnt/demo/repo", nil); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := sb.Remove(); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	got := readLog(t, logPath)
+	last := got[len(got)-1]
+	if last != "rm -f nightshift-demo nightshift-demo-ctl" || strings.Contains(last, "-verify") {
+		t.Fatalf("Remove argv = %q", last)
+	}
+}
+
+func TestRemoveIncludesCreatedVerify(t *testing.T) {
+	bin, logPath := newFakeSbx(t)
+	t.Setenv("FAKE_SBX_RM_STRICT", "1")
+	sb := newSbxSandbox(bin, "claude", "demo")
+	if err := sb.Create("/mnt/demo/repo", nil); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := sb.ResetVerify(); err != nil {
+		t.Fatalf("ResetVerify: %v", err)
+	}
+	if err := sb.Remove(); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	got := readLog(t, logPath)
+	want := "rm -f nightshift-demo nightshift-demo-ctl nightshift-demo-verify"
+	if last := got[len(got)-1]; last != want {
+		t.Fatalf("Remove argv = %q, want %q", last, want)
+	}
+}
+
+func TestCreateSweepsAllNames(t *testing.T) {
+	bin, logPath := newFakeSbx(t)
+	sb := newSbxSandbox(bin, "claude", "demo")
+	if err := sb.Create("/mnt/demo/repo", nil); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	want := "rm -f nightshift-demo nightshift-demo-ctl nightshift-demo-verify nightshift-demo-gate"
+	if got := readLog(t, logPath); got[0] != want {
+		t.Fatalf("sweep = %q, want %q", got[0], want)
+	}
 }
