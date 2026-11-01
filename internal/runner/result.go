@@ -56,9 +56,10 @@ func baseSuffix(st *runState) string {
 	return fmt.Sprintf("   # base %s @ %s", st.BaseRef, short(st.Base))
 }
 
-// summaryLine is summaryLine(status, r.st) with the extension-aware wording
-// for a capped run that used extra iterations.
-func (r *run) summaryLine(status Status) string {
+// runSummaryLine is the one-sentence explanation of status for this run,
+// with extension-aware wording for a capped run that used granted extra
+// iterations.
+func (r *run) runSummaryLine(status Status) string {
 	if status == StatusCapped && r.extended > 0 {
 		return fmt.Sprintf("Hit the iteration cap (%d) plus %d extra iteration(s) granted while it kept landing green commits. Re-run to continue.",
 			r.spec.MaxIter, r.extended)
@@ -152,7 +153,7 @@ func (r *run) resultBody(status Status) string {
 		}
 	}
 
-	b.WriteString(r.summaryLine(status) + "\n\n")
+	b.WriteString(r.runSummaryLine(status) + "\n\n")
 
 	if r.err != nil {
 		fmt.Fprintf(&b, "## Error\n\n%s\n\n", r.err.Error())
@@ -273,7 +274,7 @@ func (r *run) notifyText(status Status) (title, msg string) {
 	if r.gate.failed() {
 		title += " (gate failed)"
 	}
-	msg = r.summaryLine(status)
+	msg = r.runSummaryLine(status)
 	if r.gate != nil {
 		msg += " · gate: " + r.gate.result
 	}

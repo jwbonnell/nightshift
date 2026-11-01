@@ -368,6 +368,12 @@ func (r *run) loop() Status {
 				limitWaitExceedsWindow(wake, now, deadline, cfg.MaxWait) ||
 				limitHits >= cfg.MaxHits
 			if stop {
+				if charged >= sp.MaxIter && granted > 0 {
+					// The rate-limited iteration was a granted extra one that
+					// never ran; take the grant back so extended stays exact.
+					granted--
+					r.extended = granted
+				}
 				st.StopReason = res.Message
 				st.LimitReset = resetStr
 				commits, err := r.commitCount()

@@ -205,3 +205,37 @@ func TestExtendRespectsUntil(t *testing.T) {
 		t.Fatalf("extended = %d, want 1", r.extended)
 	}
 }
+
+func TestExtendRateLimitedGrantNotCounted(t *testing.T) {
+	t.Setenv("NIGHTSHIFT_LIMIT_MAX_WAIT", "1ns")
+	sb := newStubSandbox()
+	sb.agent = func(ctx context.Context, iter int, dir string) error {
+		if iter == 3 {
+			return fmt.Errorf("exit status 1")
+		}
+		commitIter(t, dir, iter)
+		return nil
+	}
+	sb.output = func(iter int) string {
+		if iter == 3 {
+			return rateLimitLine
+		}
+		return "AGENT RAW OUTPUT\n"
+	}
+	sb.verify = alwaysGreenVerify
+	r, _ := newExtendRun(t, "max_iter: 2\nextend_iter: 5\n", Options{}, sb)
+
+	status, err := r.finish(r.loop())
+	if err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+	if status != StatusRateLimited {
+		t.Fatalf("status = %v, want RateLimited", status)
+	}
+	if h := r.st.History[len(r.st.History)-1]; strings.Contains(h, " extended=") {
+		t.Fatalf("history = %q, want no extended=", h)
+	}
+	if body := r.resultBody(status); strings.Contains(body, "extended:") {
+		t.Fatalf("result note has extended:\n%s", body)
+	}
+}
