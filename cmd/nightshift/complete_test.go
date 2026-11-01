@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -263,5 +265,94 @@ func TestCompletionUsageError(t *testing.T) {
 	}
 	if strings.Contains(usage, "__complete") {
 		t.Fatal("usage lists __complete")
+	}
+}
+
+var helpFlagRE = regexp.MustCompile(`(?:^|[\s\[(|])(--?[A-Za-z][A-Za-z0-9-]*)`)
+
+// helpFlags returns the bare flag names found in a subcommand's -h output.
+func helpFlags(out string) map[string]bool {
+	set := map[string]bool{}
+	for _, m := range helpFlagRE.FindAllStringSubmatch(out, -1) {
+		name := strings.TrimLeft(m[1], "-")
+		if name == "h" || name == "help" {
+			continue
+		}
+		set[name] = true
+	}
+	return set
+}
+
+func sortedKeys(m map[string]bool) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func TestCompleteCoversEveryFlag(t *testing.T) {
+	bin := buildNightshiftBinary(t)
+	home := t.TempDir()
+	for _, c := range completionCommands {
+		args := []string{c.name, "-h"}
+		if c.name == "done" {
+			// done parses its args by hand, so "-h" would be taken as a
+			// slug; no arguments prints its usage line instead.
+			args = []string{"done"}
+		}
+		cmd := exec.Command(bin, args...)
+		cmd.Env = append(os.Environ(), "NIGHTSHIFT_HOME="+home, "HOME="+home)
+		out, _ := cmd.CombinedOutput() // -h exits non-zero for some commands
+		got := helpFlags(string(out))
+		if c.name == "run" && (!got["follow"] || !got["plan-only"]) {
+			t.Fatalf("run: flag extraction looks broken: %v", sortedKeys(got))
+		}
+		want := map[string]bool{}
+		for _, f := range c.flags {
+			want[strings.TrimSuffix(f, "=")] = true
+		}
+		var missing, extra []string
+		for f := range got {
+			if !want[f] {
+				missing = append(missing, f)
+			}
+		}
+		for f := range want {
+			if !got[f] {
+				extra = append(extra, f)
+			}
+		}
+		sort.Strings(missing)
+		sort.Strings(extra)
+		if len(missing) > 0 || len(extra) > 0 {
+			t.Errorf("%s: flags in -h but not registered for completion: %v; registered but not in -h: %v",
+				c.name, missing, extra)
+		}
+	}
+}
+
+func TestCompleteCoversEverySubcommand(t *testing.T) {
+	if strings.Contains(usage, "__complete") {
+		t.Error("__complete must not appear in usage")
+	}
+	inUsage := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(?m)^\s+nightshift (\S+)`).FindAllStringSubmatch(usage, -1) {
+		inUsage[m[1]] = true
+	}
+	inTable := map[string]bool{}
+	for _, c := range completionCommands {
+		inTable[c.name] = true
+	}
+	for _, n := range sortedKeys(inUsage) {
+		if !inTable[n] {
+			t.Errorf("subcommand %q is in usage but has no completion entry", n)
+		}
+	}
+	for _, n := range sortedKeys(inTable) {
+		if !inUsage[n] {
+			t.Errorf("subcommand %q has a completion entry but is not in usage", n)
+		}
 	}
 }
