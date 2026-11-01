@@ -56,6 +56,16 @@ func baseSuffix(st *runState) string {
 	return fmt.Sprintf("   # base %s @ %s", st.BaseRef, short(st.Base))
 }
 
+// summaryLine is summaryLine(status, r.st) with the extension-aware wording
+// for a capped run that used extra iterations.
+func (r *run) summaryLine(status Status) string {
+	if status == StatusCapped && r.extended > 0 {
+		return fmt.Sprintf("Hit the iteration cap (%d) plus %d extra iteration(s) granted while it kept landing green commits. Re-run to continue.",
+			r.spec.MaxIter, r.extended)
+	}
+	return summaryLine(status, r.st)
+}
+
 // summaryLine is the one-sentence, human-facing explanation of status.
 func summaryLine(status Status, st *runState) string {
 	switch status {
@@ -99,8 +109,13 @@ func (r *run) resultBody(status Status) string {
 	var b strings.Builder
 
 	ended := r.opts.clockFn()().Format("2006-01-02T15:04:05Z07:00")
-	fmt.Fprintf(&b, "---\ntype: nightshift-result\nspec: %s\nstatus: %s\nstarted: %s\nended: %s\niterations: %d\ncommits: %d\nbranch: %s\nrepo: %s\nbase_ref: %s\nbase: %s\n",
-		sp.Slug, status, st.Started, ended, st.Iterations, st.Commits, st.Branch, sp.Repo, st.BaseRef, short(st.Base))
+	fmt.Fprintf(&b, "---\ntype: nightshift-result\nspec: %s\nstatus: %s\nstarted: %s\nended: %s\niterations: %d\ncommits: %d\n",
+		sp.Slug, status, st.Started, ended, st.Iterations, st.Commits)
+	if r.extended > 0 {
+		fmt.Fprintf(&b, "extended: %d\n", r.extended)
+	}
+	fmt.Fprintf(&b, "branch: %s\nrepo: %s\nbase_ref: %s\nbase: %s\n",
+		st.Branch, sp.Repo, st.BaseRef, short(st.Base))
 	if status == StatusRateLimited {
 		limitReset := st.LimitReset
 		if limitReset == "" {
@@ -134,7 +149,7 @@ func (r *run) resultBody(status Status) string {
 		}
 	}
 
-	b.WriteString(summaryLine(status, st) + "\n\n")
+	b.WriteString(r.summaryLine(status) + "\n\n")
 
 	if r.err != nil {
 		fmt.Fprintf(&b, "## Error\n\n%s\n\n", r.err.Error())
@@ -250,7 +265,7 @@ func (r *run) notifyText(status Status) (title, msg string) {
 	if r.prChecks.fails > 0 {
 		title += " (checks failed)"
 	}
-	msg = summaryLine(status, r.st)
+	msg = r.summaryLine(status)
 	if r.reviewVerdict != "" {
 		msg += fmt.Sprintf(" · review: %s", r.reviewVerdict)
 	}
@@ -309,6 +324,9 @@ func (r *run) finish(status Status) (Status, error) {
 	entry := r.opts.clockFn()().Format("2006-01-02 15:04") + " " + string(status)
 	if r.st.Agents != nil {
 		entry += " agent=" + r.st.Agents.Code
+	}
+	if r.extended > 0 {
+		entry += fmt.Sprintf(" extended=%d", r.extended)
 	}
 	r.st.History = append(r.st.History, entry)
 	_ = r.saveState()

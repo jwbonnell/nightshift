@@ -240,7 +240,14 @@ func (r *run) loop() Status {
 
 	redStreak, noProgress, session, charged, limitHits := 0, 0, 0, 0, 0
 
-	for charged < sp.MaxIter {
+	r.extended = 0
+	granted, earned := 0, false
+
+	for {
+		atCap := charged >= sp.MaxIter+granted
+		if atCap && !(earned && granted < sp.ExtendIter) {
+			break
+		}
 		if r.interrupted() { // D8: checked before each iteration
 			return StatusInterrupted
 		}
@@ -248,6 +255,15 @@ func (r *run) loop() Status {
 			r.logf("window closed before iteration")
 			return StatusWindowClosed
 		}
+		if atCap {
+			granted++
+			r.extended = granted
+			msg := fmt.Sprintf("iter %d: past max_iter — granting extra iteration %d of %d (last iteration was green with a new commit)",
+				st.Iterations+1, granted, sp.ExtendIter)
+			r.logf("%s", msg)
+			r.appendProgress(msg)
+		}
+		earned = false
 		session++
 		charged++
 		st.Iterations++
@@ -543,7 +559,8 @@ func (r *run) loop() Status {
 		if err != nil {
 			return r.fail(err)
 		}
-		progressed := (green && commitsAfter > commitsBefore) || progressAfter != progressBefore
+		earned = green && commitsAfter > commitsBefore
+		progressed := earned || progressAfter != progressBefore
 		if progressed {
 			noProgress = 0
 		} else {

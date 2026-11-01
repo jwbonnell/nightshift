@@ -57,7 +57,7 @@ func TestFailedAgentWithCommitStillVerifies(t *testing.T) {
 	}
 	sb.verify = alwaysGreenVerify
 
-	r := newTestRun(t, repo, "max_iter: 2\n", Options{}, sb)
+	r := newTestRun(t, repo, "max_iter: 2\nextend_iter: 0\n", Options{}, sb)
 	r.loop()
 
 	if sb.verifyN != 1 {

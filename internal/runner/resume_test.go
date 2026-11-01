@@ -140,7 +140,7 @@ func TestPlannerCommitOnResumeResetsToLastGreen(t *testing.T) {
 func TestResumeContinues(t *testing.T) {
 	repo := newSourceRepo(t)
 	homeDir := t.TempDir()
-	writeReadySpec(t, homeDir, "demo", "max_iter: 1\n", repo)
+	writeReadySpec(t, homeDir, "demo", "max_iter: 1\nextend_iter: 0\n", repo)
 	stateRoot := home.RunsDir(homeDir)
 	clone := filepath.Join(stateRoot, "demo", "repo")
 

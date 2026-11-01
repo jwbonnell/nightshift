@@ -72,6 +72,8 @@ type run struct {
 	removeErr error         // Task 5: the explicit, pre-finish sb.Remove() result
 	prChecks  postRunReport // Task 5: computed once in finish(), reused by printSummary/resultBody/notify
 
+	extended int // extra iterations granted past max_iter by this loop() call
+
 	deadline time.Time // the --until deadline computed by loop(), zero if unset
 
 	// needIntegrate is set by setup() when a fresh clone was just created
