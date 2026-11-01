@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -80,6 +81,16 @@ var builtinLenses = map[string]bool{
 	"requirements": true,
 	"quality":      true,
 	"security":     true,
+}
+
+// BuiltinLensNames returns the built-in review lens names, sorted.
+func BuiltinLensNames() []string {
+	names := make([]string, 0, len(builtinLenses))
+	for n := range builtinLenses {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // lensNameRe matches a valid lens name, built-in or custom.

@@ -126,6 +126,8 @@ func dispatch(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 		return cmdPR(args[1:], stdout, stderr)
 	case "review":
 		return cmdReview(args[1:], stdout, stderr)
+	case "__complete":
+		return cmdComplete(args[1:], stdout)
 	default:
 		fmt.Fprint(stderr, usage)
 		return 2
