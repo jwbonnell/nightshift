@@ -560,6 +560,30 @@ func TestRemoveIncludesCreatedVerify(t *testing.T) {
 	}
 }
 
+func TestRemoveAfterFailedVerifyRecreate(t *testing.T) {
+	bin, logPath := newFakeSbx(t)
+	t.Setenv("FAKE_SBX_RM_STRICT", "1")
+	sb := newSbxSandbox(bin, "claude", "demo")
+	if err := sb.Create("/mnt/demo/repo", nil); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := sb.ResetVerify(); err != nil {
+		t.Fatalf("ResetVerify: %v", err)
+	}
+	t.Setenv("FAKE_SBX_FAIL_SUBSTR", "create --name nightshift-demo-verify")
+	if err := sb.ResetVerify(); err == nil {
+		t.Fatal("second ResetVerify: want error")
+	}
+	if err := sb.Remove(); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	got := readLog(t, logPath)
+	last := got[len(got)-1]
+	if last != "rm -f nightshift-demo nightshift-demo-ctl" || strings.Contains(last, "-verify") {
+		t.Fatalf("Remove argv = %q", last)
+	}
+}
+
 func TestCreateSweepsAllNames(t *testing.T) {
 	bin, logPath := newFakeSbx(t)
 	sb := newSbxSandbox(bin, "claude", "demo")
@@ -570,4 +594,18 @@ func TestCreateSweepsAllNames(t *testing.T) {
 	if got := readLog(t, logPath); got[0] != want {
 		t.Fatalf("sweep = %q, want %q", got[0], want)
 	}
+
+	t.Run("with plan sandbox", func(t *testing.T) {
+		claudeAg := mustAgent(t, agent.Selector{Agent: "claude"}, agent.Settings{ClaudeBin: "claude"})
+		opencodeAg := mustAgent(t, agent.Selector{Agent: "opencode", Model: "openai/gpt-5"}, agent.Settings{OpencodeBin: "opencode"})
+		bin, logPath := newFakeSbx(t)
+		sb := newSbxSandboxAgents(bin, "demo", opencodeAg, claudeAg)
+		if err := sb.Create("/mnt/demo/repo", nil); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		want := "rm -f nightshift-demo nightshift-demo-plan nightshift-demo-ctl nightshift-demo-verify nightshift-demo-gate"
+		if got := readLog(t, logPath); got[0] != want {
+			t.Fatalf("sweep = %q, want %q", got[0], want)
+		}
+	})
 }

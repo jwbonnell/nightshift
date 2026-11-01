@@ -173,6 +173,7 @@ func (s *sbxSandbox) Create(mountDir string, egress []string) error {
 	s.egress = egress
 
 	_, _ = execStream(context.Background(), nil, io.Discard, s.bin, append([]string{"rm", "-f"}, s.rmNames()...)...)
+	s.verifyCreated = false
 
 	if err := s.mk(s.agentName, s.image, s.codeTemplate); err != nil {
 		return err
@@ -241,6 +242,7 @@ func (s *sbxSandbox) Git(ctx context.Context, args ...string) (string, error) {
 
 func (s *sbxSandbox) ResetVerify() error {
 	_, _ = execStream(context.Background(), nil, io.Discard, s.bin, "rm", "-f", s.verifyName)
+	s.verifyCreated = false
 	return s.mk(s.verifyName, s.image, "claude")
 }
 
