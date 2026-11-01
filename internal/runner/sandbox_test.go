@@ -121,7 +121,7 @@ func TestSbxArgv(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	want := []string{
-		"rm -f nightshift-demo nightshift-demo-ctl nightshift-demo-verify",
+		"rm -f nightshift-demo nightshift-demo-ctl nightshift-demo-verify nightshift-demo-gate",
 		"create --name nightshift-demo claude " + mountDir,
 		"policy allow network --sandbox nightshift-demo api.example.com",
 		"policy allow network --sandbox nightshift-demo cdn.example.com",
@@ -179,7 +179,7 @@ func TestSbxArgv(t *testing.T) {
 	if err := sb.Remove(); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
-	wantRemove := []string{"rm -f nightshift-demo nightshift-demo-ctl nightshift-demo-verify"}
+	wantRemove := []string{"rm -f nightshift-demo nightshift-demo-ctl nightshift-demo-verify nightshift-demo-gate"}
 	if got := readLog(t, logPath); !equalLines(got, wantRemove) {
 		t.Fatalf("Remove argv = %q, want %q", got, wantRemove)
 	}
@@ -232,7 +232,7 @@ func TestCreateCtlFailureRemovesAgent(t *testing.T) {
 
 	got := readLog(t, logPath)
 	want := []string{
-		"rm -f nightshift-demo nightshift-demo-ctl nightshift-demo-verify",
+		"rm -f nightshift-demo nightshift-demo-ctl nightshift-demo-verify nightshift-demo-gate",
 		"create --name nightshift-demo claude /mnt/demo/repo",
 		"create --name nightshift-demo-ctl claude /mnt/demo/repo",
 		"rm -f nightshift-demo",
@@ -256,7 +256,7 @@ func TestCreateRemovesLeftoverSandboxes(t *testing.T) {
 
 	got := readLog(t, logPath)
 	want := []string{
-		"rm -f nightshift-demo nightshift-demo-ctl nightshift-demo-verify",
+		"rm -f nightshift-demo nightshift-demo-ctl nightshift-demo-verify nightshift-demo-gate",
 		"create --name nightshift-demo claude /mnt/demo/repo",
 		"create --name nightshift-demo-ctl claude /mnt/demo/repo",
 	}

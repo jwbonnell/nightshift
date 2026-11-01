@@ -123,11 +123,18 @@ func (r *run) handBack(round int, verdict string, items []blockItem) {
 	for _, it := range items {
 		fmt.Fprintf(&b, "- **%s** (%s) %s\n", it.ID, it.Lens, it.Text)
 	}
-	r.scaffoldWrite(r.reviewPath(), b.String())
-	r.scaffoldRemove(r.completePath())
-	r.appendProgress(fmt.Sprintf("review round %d: %d blocking finding(s) in REVIEW.md — fix each, note its id here, then touch .spec-complete again", round, len(items)))
+	r.handOff(b.String(), fmt.Sprintf("review round %d: %d blocking finding(s) in REVIEW.md — fix each, note its id here, then touch .spec-complete again", round, len(items)))
 	r.logf("review round %d: %s, %d blocking — handed back", round, verdict, len(items))
 	st.ReviewHandbacks++
 	st.ReviewRound = round
 	_ = r.saveState()
+}
+
+// handOff is the part of a hand-back shared by review rounds and
+// acceptance gates: write REVIEW.md, remove .spec-complete and append the
+// progress line. Callers bump their own counters and save state.
+func (r *run) handOff(reviewMD, progressLine string) {
+	r.scaffoldWrite(r.reviewPath(), reviewMD)
+	r.scaffoldRemove(r.completePath())
+	r.appendProgress(progressLine)
 }

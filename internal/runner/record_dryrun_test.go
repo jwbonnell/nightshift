@@ -68,7 +68,7 @@ func TestRunWithOpencodeCoder(t *testing.T) {
 	}
 	got := readLog(t, logPath)
 	want := []string{
-		"rm -f nightshift-demo nightshift-demo-ctl nightshift-demo-verify",
+		"rm -f nightshift-demo nightshift-demo-ctl nightshift-demo-verify nightshift-demo-gate",
 		"create --name nightshift-demo opencode " + mountDir,
 		"create --name nightshift-demo-ctl claude " + mountDir,
 	}

@@ -67,6 +67,39 @@ func reviewWSDir(stateRoot, slug string) string {
 	return filepath.Join(stateRoot, slug, "review-ws")
 }
 
+// cloneAtRef makes a --no-local clone of repo at parent/name, checks out
+// ref's commit detached and drops the origin remote. Returns the clone dir
+// and the resolved head commit.
+func cloneAtRef(parent, name, repo, ref string) (string, string, error) {
+	head, err := gitx.Run(repo, "rev-parse", "--verify", ref+"^{commit}")
+	if err != nil {
+		return "", "", fmt.Errorf("resolve %s: %v: %s", ref, err, head)
+	}
+	if err := validSHA("git rev-parse --verify "+ref+"^{commit}", head); err != nil {
+		return "", "", err
+	}
+
+	repoDir := filepath.Join(parent, name)
+	if out, err := gitx.Run(parent, "clone", "--no-local", repo, name); err != nil {
+		return "", "", fmt.Errorf("clone %s: %v: %s", repo, err, out)
+	}
+	// git clone --no-local only copies refs/heads and tags: when ref is
+	// the pending refs/nightshift/<slug> ref, head isn't reachable from
+	// any branch and needs an explicit fetch, same as cloneRepo's base.
+	if _, err := gitx.Run(repoDir, "cat-file", "-e", head+"^{commit}"); err != nil {
+		if out, ferr := gitx.Run(repoDir, "fetch", "origin", head); ferr != nil {
+			return "", "", fmt.Errorf("fetch %s from %s: %v: %s", head, repo, ferr, out)
+		}
+	}
+	if out, err := gitx.Run(repoDir, "checkout", "--detach", head); err != nil {
+		return "", "", fmt.Errorf("checkout %s: %v: %s", head, err, out)
+	}
+	if out, err := gitx.Run(repoDir, "remote", "remove", "origin"); err != nil {
+		return "", "", fmt.Errorf("remove remote: %v: %s", err, out)
+	}
+	return repoDir, head, nil
+}
+
 // buildReviewWorkspace rebuilds ws as a review sandbox mount: a
 // --no-local clone of the source repo, checked out detached with no
 // remotes at ref's resolved commit, plus the review prompt's inputs/. It
@@ -82,31 +115,9 @@ func buildReviewWorkspace(ctx context.Context, ws, repo, base, ref, specPath, pr
 		return "", err
 	}
 
-	head, err := gitx.Run(repo, "rev-parse", "--verify", ref+"^{commit}")
+	_, head, err := cloneAtRef(ws, "repo", repo, ref)
 	if err != nil {
-		return "", fmt.Errorf("resolve %s: %v: %s", ref, err, head)
-	}
-	if err := validSHA("git rev-parse --verify "+ref+"^{commit}", head); err != nil {
 		return "", err
-	}
-
-	repoDir := filepath.Join(ws, "repo")
-	if out, err := gitx.Run(ws, "clone", "--no-local", repo, "repo"); err != nil {
-		return "", fmt.Errorf("clone %s: %v: %s", repo, err, out)
-	}
-	// git clone --no-local only copies refs/heads and tags: when ref is
-	// the pending refs/nightshift/<slug> ref, head isn't reachable from
-	// any branch and needs an explicit fetch, same as cloneRepo's base.
-	if _, err := gitx.Run(repoDir, "cat-file", "-e", head+"^{commit}"); err != nil {
-		if out, ferr := gitx.Run(repoDir, "fetch", "origin", head); ferr != nil {
-			return "", fmt.Errorf("fetch %s from %s: %v: %s", head, repo, ferr, out)
-		}
-	}
-	if out, err := gitx.Run(repoDir, "checkout", "--detach", head); err != nil {
-		return "", fmt.Errorf("checkout %s: %v: %s", head, err, out)
-	}
-	if out, err := gitx.Run(repoDir, "remote", "remove", "origin"); err != nil {
-		return "", fmt.Errorf("remove remote: %v: %s", err, out)
 	}
 
 	specText := "(spec file not found)"

@@ -54,7 +54,7 @@ func TestMixedAgentsPlanSandbox(t *testing.T) {
 	const codePermission = `{"edit":"allow","bash":{"*":"allow","git push*":"deny","git remote*":"deny","git config*":"deny"},"webfetch":"allow","external_directory":"deny"}`
 	got := readLog(t, logPath)
 	want := []string{
-		"rm -f nightshift-demo nightshift-demo-plan nightshift-demo-ctl nightshift-demo-verify",
+		"rm -f nightshift-demo nightshift-demo-plan nightshift-demo-ctl nightshift-demo-verify nightshift-demo-gate",
 		"create --name nightshift-demo opencode " + mountDir,
 		"create --name nightshift-demo-plan claude " + mountDir,
 		"create --name nightshift-demo-ctl claude " + mountDir,
@@ -62,7 +62,7 @@ func TestMixedAgentsPlanSandbox(t *testing.T) {
 		"exec -w " + mountDir + " nightshift-demo env OPENCODE_PERMISSION=" + codePermission + " opencode run --format json --auto -m openai/gpt-5",
 		"stop nightshift-demo",
 		"stop nightshift-demo-plan",
-		"rm -f nightshift-demo nightshift-demo-plan nightshift-demo-ctl nightshift-demo-verify",
+		"rm -f nightshift-demo nightshift-demo-plan nightshift-demo-ctl nightshift-demo-verify nightshift-demo-gate",
 	}
 	if !equalLines(got, want) {
 		t.Fatalf("argv =\n%v\nwant\n%v", got, want)
@@ -86,7 +86,7 @@ func TestMixedAgentsPlanCreateFailureRemovesAgent(t *testing.T) {
 
 	got := readLog(t, logPath)
 	want := []string{
-		"rm -f nightshift-demo nightshift-demo-plan nightshift-demo-ctl nightshift-demo-verify",
+		"rm -f nightshift-demo nightshift-demo-plan nightshift-demo-ctl nightshift-demo-verify nightshift-demo-gate",
 		"create --name nightshift-demo opencode /mnt/demo/repo",
 		"create --name nightshift-demo-plan claude /mnt/demo/repo",
 		"rm -f nightshift-demo",
@@ -117,7 +117,7 @@ func TestSbxImageArgv(t *testing.T) {
 
 	got := readLog(t, logPath)
 	want := []string{
-		"rm -f nightshift-demo nightshift-demo-plan nightshift-demo-ctl nightshift-demo-verify",
+		"rm -f nightshift-demo nightshift-demo-plan nightshift-demo-ctl nightshift-demo-verify nightshift-demo-gate",
 		"create --name nightshift-demo --template foo:1 opencode " + mountDir,
 		"create --name nightshift-demo-plan --template foo:1 claude " + mountDir,
 		"create --name nightshift-demo-ctl claude " + mountDir,

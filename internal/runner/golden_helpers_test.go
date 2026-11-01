@@ -38,7 +38,7 @@ func goldenReview(rv sbxReviewer, ws, model, prompt string) (string, error) {
 
 // readGoldenSandboxLines returns just the sandbox-sequence portion of
 // the pinned claude-argv golden file — everything through the second
-// "rm -f nightshift-demo nightshift-demo-ctl nightshift-demo-verify",
+// "rm -f nightshift-demo nightshift-demo-ctl nightshift-demo-verify nightshift-demo-gate",
 // before the review sandbox's lines. TestSameAgentOneSandbox uses it to
 // confirm newSbxSandboxAgents produces byte-identical argv to
 // newSbxSandbox when both roles resolve to the same agent.

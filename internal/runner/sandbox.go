@@ -55,11 +55,11 @@ type Sandbox interface {
 // sandboxes (agent/ctl/verify) use the sbx template named "claude" and
 // mount the same clone dir, at the same absolute path, as the working dir.
 type sbxSandbox struct {
-	bin, claudeBin, agentName, planName, ctlName, verifyName, mountDir string
-	codeTemplate, planTemplate                                         string
-	egress                                                             []string
-	image                                                              string
-	created                                                            bool
+	bin, claudeBin, agentName, planName, ctlName, verifyName, gateName, mountDir string
+	codeTemplate, planTemplate                                                   string
+	egress                                                                       []string
+	image                                                                        string
+	created                                                                      bool
 }
 
 // newSbxSandboxAgents names the agent sandbox nightshift-<slug> per D1,
@@ -75,6 +75,7 @@ func newSbxSandboxAgents(bin, slug string, code, plan agent.Agent) *sbxSandbox {
 		agentName:    name,
 		ctlName:      name + "-ctl",
 		verifyName:   name + "-verify",
+		gateName:     name + "-gate",
 		codeTemplate: code.SbxAgent(),
 	}
 	if plan.Name() != code.Name() {
@@ -127,15 +128,15 @@ func (s *sbxSandbox) mk(name, image, template string) error {
 	return nil
 }
 
-// rmNames lists the agent sandbox(es) plus ctl and verify, in the fixed
+// rmNames lists the agent sandbox(es) plus ctl, verify and gate, in the fixed
 // order every rm -f and Remove call uses: agent, plan (if any), ctl,
-// verify.
+// verify, gate.
 func (s *sbxSandbox) rmNames() []string {
 	names := []string{s.agentName}
 	if s.planName != "" {
 		names = append(names, s.planName)
 	}
-	return append(names, s.ctlName, s.verifyName)
+	return append(names, s.ctlName, s.verifyName, s.gateName)
 }
 
 // Create provisions the agent sandbox(es) and the control sandbox; the
@@ -247,6 +248,15 @@ type sbxBaseVerifier struct {
 	bin, name string
 }
 
+// verifierSetupError marks a BaseVerifier failure to set the sandbox up
+// (create, egress policy) as opposed to the command itself failing, so the
+// acceptance gate can tell a gate error from a gate failure. Its message
+// is the wrapped error's.
+type verifierSetupError struct{ err error }
+
+func (e verifierSetupError) Error() string { return e.err.Error() }
+func (e verifierSetupError) Unwrap() error { return e.err }
+
 // Verify creates a fresh sandbox mounting dir (adding --template image
 // when image is non-empty), allows egress to each host, runs cmd in it,
 // and always removes the sandbox afterward — even when create or exec
@@ -262,11 +272,11 @@ func (v sbxBaseVerifier) Verify(ctx context.Context, dir string, egress []string
 	}()
 
 	if out, err := execStream(context.Background(), nil, io.Discard, v.bin, createArgs(v.name, image, "claude", dir)...); err != nil {
-		return out, fmt.Errorf("create: %w", err)
+		return out, verifierSetupError{fmt.Errorf("create: %w", err)}
 	}
 	for _, host := range egress {
 		if out, err := execStream(context.Background(), nil, io.Discard, v.bin, "policy", "allow", "network", "--sandbox", v.name, host); err != nil {
-			return out, fmt.Errorf("policy allow %s: %w", host, err)
+			return out, verifierSetupError{fmt.Errorf("policy allow %s: %w", host, err)}
 		}
 	}
 
