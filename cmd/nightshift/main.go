@@ -82,6 +82,7 @@ usage:
   nightshift pr --pending [flags]       pre-review every open PR/MR awaiting your review
   nightshift review <slug> [--model M] [--lens a,b]
                                         sandboxed Claude review of a run's work
+  nightshift completion bash            print a bash completion script
   nightshift version                    print the version
 `
 
@@ -126,6 +127,8 @@ func dispatch(args []string, stdout, stderr io.Writer, stdin io.Reader) int {
 		return cmdPR(args[1:], stdout, stderr)
 	case "review":
 		return cmdReview(args[1:], stdout, stderr)
+	case "completion":
+		return cmdCompletion(args[1:], stdout, stderr)
 	case "__complete":
 		return cmdComplete(args[1:], stdout)
 	default:

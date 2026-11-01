@@ -1,6 +1,7 @@
 package main
 
 import (
+	_ "embed"
 	"fmt"
 	"io"
 	"os"
@@ -271,4 +272,26 @@ func completeLenses(h, cur string) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+//go:embed complete.bash
+var completeBashScript string
+
+// cmdCompletion prints a shell completion script. Add further shells as
+// cases of the switch.
+func cmdCompletion(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 1 {
+		switch args[0] {
+		case "bash":
+			bin, err := os.Executable()
+			if err != nil || bin == "" {
+				bin = "nightshift"
+			}
+			q := "'" + strings.ReplaceAll(bin, "'", `'\''`) + "'"
+			fmt.Fprint(stdout, strings.ReplaceAll(completeBashScript, "__NIGHTSHIFT_BIN__", q))
+			return 0
+		}
+	}
+	fmt.Fprintln(stderr, "usage: nightshift completion bash")
+	return 2
 }

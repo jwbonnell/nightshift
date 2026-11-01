@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -174,5 +175,93 @@ func TestCompleteNoHome(t *testing.T) {
 	t.Setenv("HOME", "")
 	if got := complete(t, ""); got != "" {
 		t.Errorf("no home: %q", got)
+	}
+}
+
+func TestCompletionBashScript(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := dispatch([]string{"completion", "bash"}, &out, &errb, strings.NewReader("")); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	script := out.String()
+	for _, want := range []string{"complete -F", "__complete"} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("script missing %q:\n%s", want, script)
+		}
+	}
+	if strings.Contains(script, "__NIGHTSHIFT_BIN__") {
+		t.Fatalf("placeholder left in script")
+	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("no bash")
+	}
+	f := filepath.Join(t.TempDir(), "c.bash")
+	if err := os.WriteFile(f, []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if o, err := exec.Command(bash, "-n", f).CombinedOutput(); err != nil {
+		t.Fatalf("bash -n: %v: %s", err, o)
+	}
+}
+
+func TestCompletionBashEndToEnd(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("no bash")
+	}
+	bin := buildNightshiftBinary(t)
+	h := t.TempDir()
+	for _, rel := range []string{"specs/ready/demo.md", "specs/draft/dummy.md"} {
+		p := filepath.Join(h, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env := append(os.Environ(), "NIGHTSHIFT_HOME="+h, "HOME="+h)
+	gen := exec.Command(bin, "completion", "bash")
+	gen.Env = env
+	script, err := gen.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(t.TempDir(), "c.bash")
+	if err := os.WriteFile(f, script, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := func(words string, cword int) string {
+		c := exec.Command(bash, "--norc", "--noprofile", "-c",
+			`source "$1"; COMP_WORDS=(`+words+`); COMP_CWORD=`+string(rune('0'+cword))+`; _nightshift; printf "%s\n" "${COMPREPLY[@]}"`, "_", f)
+		c.Env = env
+		o, err := c.Output()
+		if err != nil {
+			t.Fatalf("bash: %v", err)
+		}
+		return string(o)
+	}
+	if got := run("nightshift run d", 2); got != "demo\n" {
+		t.Fatalf("run d = %q", got)
+	}
+	if got := run(`nightshift ""`, 1); !strings.Contains(got, "run\n") {
+		t.Fatalf("subcommands = %q", got)
+	}
+}
+
+func TestCompletionUsageError(t *testing.T) {
+	for _, args := range [][]string{{"completion"}, {"completion", "zsh"}, {"completion", "bash", "extra"}} {
+		var out, errb bytes.Buffer
+		code := dispatch(args, &out, &errb, strings.NewReader(""))
+		if code != 2 || out.Len() != 0 || errb.String() != "usage: nightshift completion bash\n" {
+			t.Fatalf("%v: code %d stdout %q stderr %q", args, code, out.String(), errb.String())
+		}
+	}
+	if !strings.Contains(usage, "nightshift completion bash") || !strings.Contains(usage, "print a bash completion script") {
+		t.Fatal("usage missing completion line")
+	}
+	if strings.Contains(usage, "__complete") {
+		t.Fatal("usage lists __complete")
 	}
 }
