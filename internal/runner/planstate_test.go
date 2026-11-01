@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -172,5 +173,47 @@ func TestNextSkipsBlockedAfterReplan(t *testing.T) {
 		if c.slug == "demo" {
 			t.Fatalf("--next would pick the blocked spec: %v", cands)
 		}
+	}
+}
+
+func TestQuestionWithAgentErrorRecordsHash(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	specPath := writeReadySpec(t, homeDir, "demo", "", repo)
+	sb := newStubSandbox()
+	sb.agent = func(ctx context.Context, iter int, dir string) error {
+		if err := askQuestion(ctx, iter, dir); err != nil {
+			return err
+		}
+		return errors.New("agent crashed")
+	}
+	opts := normalOpts(homeDir, sb)
+	if status, err := Run(opts); err != nil || status != StatusBlocked {
+		t.Fatalf("first: status=%v err=%v, want blocked", status, err)
+	}
+	prev := loadPriorState(opts, "demo")
+	if prev == nil || prev.SpecHash != specSum(t, specPath) {
+		t.Fatalf("spec_hash = %+v, want current hash", prev)
+	}
+
+	sb2 := newStubSandbox()
+	existed := false
+	sb2.agent = func(ctx context.Context, iter int, dir string) error {
+		if iter == 1 {
+			_, err := os.Lstat(filepath.Join(dir, "QUESTION.md"))
+			existed = err == nil
+		}
+		return nil
+	}
+	opts2 := normalOpts(homeDir, sb2)
+	opts2.Stdout = io.Discard
+	if _, err := Run(opts2); err != nil {
+		t.Fatal(err)
+	}
+	if !existed {
+		t.Fatal("QUESTION.md was cleared although the spec did not change")
+	}
+	if _, err := os.Lstat(filepath.Join(CloneDir(opts.StateRoot, "demo"), "QUESTION.md")); err != nil {
+		t.Fatalf("QUESTION.md gone: %v", err)
 	}
 }

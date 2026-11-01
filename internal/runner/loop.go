@@ -417,7 +417,7 @@ func (r *run) loop() Status {
 			progressChanged := progressAfter != progressBefore
 			asked := r.scaffoldExists(r.questionPath())
 			planSucceeded := agentOK && progressChanged && !asked
-			if agentOK && (progressChanged || asked) {
+			if asked || (agentOK && progressChanged) {
 				st.SpecHash = sp.ContentHash
 			}
 			if planSucceeded {

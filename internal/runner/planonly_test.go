@@ -337,3 +337,33 @@ func TestPlanOnlyPassesSandboxesCheck(t *testing.T) {
 		t.Fatalf("note lacks ok sandboxes:\n%s", data)
 	}
 }
+
+func TestPlanOnlyStillBlockedNeedsQuestion(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "demo", "", repo)
+	sb := newStubSandbox()
+	sb.agent = askQuestion
+	opts := planOnlyOpts(homeDir, sb)
+	if status, err := Run(opts); err != nil || status != StatusBlocked {
+		t.Fatalf("first: status=%v err=%v, want blocked", status, err)
+	}
+	if err := os.Remove(filepath.Join(CloneDir(opts.StateRoot, "demo"), "QUESTION.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	sb2 := newStubSandbox()
+	var out strings.Builder
+	opts2 := planOnlyOpts(homeDir, sb2)
+	opts2.Stdout = &out
+	status, err := Run(opts2)
+	if err != nil || status != StatusPlanned {
+		t.Fatalf("second: status=%v err=%v, want planned", status, err)
+	}
+	if sb2.createN < 1 {
+		t.Fatalf("createN = %d, want a planning pass", sb2.createN)
+	}
+	if strings.Contains(out.String(), "still blocked") {
+		t.Fatalf("unexpected still-blocked line:\n%s", out.String())
+	}
+}
