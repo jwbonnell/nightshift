@@ -159,6 +159,14 @@ func printPlan(w io.Writer, opts Options, sp *Spec, maxConcurrent int, capSrc st
 		lensesDisplay = strings.Join(sp.Lenses, ", ")
 	}
 	fmt.Fprintf(w, "review:      %s (%s), model %s (%s), rounds %d (%s)\n", lensesDisplay, sp.src["review"], sp.ReviewModel, sp.src["review_model"], sp.ReviewRounds, sp.src["review_rounds"])
+	acceptDisplay, holdDisplay := "unset", "none"
+	if sp.Accept != "" {
+		acceptDisplay = "set"
+	}
+	if n := countHoldoutFiles(opts.Home, sp.Slug); n > 0 {
+		holdDisplay = fmt.Sprintf("%d file(s)", n)
+	}
+	fmt.Fprintf(w, "gate:        accept %s · holdout %s · rounds %d (%s)\n", acceptDisplay, holdDisplay, sp.GateRounds, sp.src["gate_rounds"])
 	if len(sp.Egress) > 0 {
 		fmt.Fprintf(w, "egress+:     %s\n", strings.Join(sp.Egress, ", "))
 	}

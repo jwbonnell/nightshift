@@ -38,8 +38,11 @@ func LensesDir(home string) string    { return filepath.Join(home, "lenses") }
 // ReviewsDir, PRDir and PRPromptPath are nightshift pr's layout (P5):
 // review notes land in ReviewsDir, PRDir holds its state (clones, work
 // trees, logs, lock), and PRPromptPath is the optional prompt override.
-func ReviewsDir(home string) string   { return filepath.Join(home, "reviews") }
-func PRDir(home string) string        { return filepath.Join(home, "pr") }
+func ReviewsDir(home string) string { return filepath.Join(home, "reviews") }
+func PRDir(home string) string      { return filepath.Join(home, "pr") }
+
+// HoldoutDir holds the owner's per-slug holdout test files for acceptance gates.
+func HoldoutDir(home string) string   { return filepath.Join(home, "holdout") }
 func PRPromptPath(home string) string { return filepath.Join(home, "pr-prompt.md") }
 
 // SpecLockPath is the per-spec lock file path under home's state root,

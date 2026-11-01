@@ -44,7 +44,7 @@ type BaseVerifier interface {
 var allowedFrontmatterKeys = map[string]bool{
 	"type": true, "project": true, "status": true, "created": true,
 	"repo": true, "verify": true, "model": true, "planner_model": true,
-	"max_iter": true, "extend_iter": true, "iter_timeout": true, "base": true, "egress": true,
+	"accept": true, "gate_rounds": true, "max_iter": true, "extend_iter": true, "iter_timeout": true, "base": true, "egress": true,
 	"review": true, "review_model": true, "review_rounds": true,
 	"depends_on": true, "owns": true, "image": true,
 }

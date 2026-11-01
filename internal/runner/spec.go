@@ -28,6 +28,7 @@ const (
 	defaultModel       = "sonnet"
 	defaultPlanner     = "opus"
 	defaultReviewModel = "opus"
+	defaultGateRounds  = 2
 )
 
 // Spec is one resolved, ready-to-run spec.
@@ -48,6 +49,8 @@ type Spec struct {
 	Review       bool
 	Lenses       []string // review lens names, in frontmatter order; empty when Review is false
 	ReviewRounds int
+	Accept       string // acceptance-gate command run on completion; empty = none
+	GateRounds   int    // gate hand-backs before finishing with the failure recorded
 	ReviewModel  string // raw selector string, as handed to Reviewer
 	ReviewSel    agent.Selector
 	Created      string
@@ -461,6 +464,11 @@ func resolveSpecFile(opts Options, path string) (*Spec, error) {
 	if err != nil || reviewRounds < 0 || reviewRounds > 5 {
 		return nil, fmt.Errorf("review_rounds %q: want 0-5", reviewRoundsStr)
 	}
+	gateStr := pick(src, "gate_rounds", "", fmVal("gate_rounds"), os.Getenv("NIGHTSHIFT_GATE_ROUNDS"), cfg["NIGHTSHIFT_GATE_ROUNDS"], strconv.Itoa(defaultGateRounds))
+	gateRounds, err := strconv.Atoi(gateStr)
+	if err != nil || gateRounds < 0 || gateRounds > 5 || strings.HasPrefix(gateStr, "+") {
+		return nil, fmt.Errorf("gate_rounds %q: want 0-5", gateStr)
+	}
 	reviewModel := pick(src, "review_model", "", fmVal("review_model"), os.Getenv("NIGHTSHIFT_REVIEW_MODEL"), cfg["NIGHTSHIFT_REVIEW_MODEL"], defaultReviewModel)
 	reviewSel, err := agent.ParseSelector(reviewModel)
 	if err != nil {
@@ -523,6 +531,8 @@ func resolveSpecFile(opts Options, path string) (*Spec, error) {
 		Review:          review,
 		Lenses:          lenses,
 		ReviewRounds:    reviewRounds,
+		Accept:          fmVal("accept"),
+		GateRounds:      gateRounds,
 		ReviewModel:     reviewModel,
 		ReviewSel:       reviewSel,
 		OpencodeCfgPath: opencodeCfgPath,

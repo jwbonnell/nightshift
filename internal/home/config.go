@@ -26,6 +26,7 @@ var configKeys = map[string]bool{
 	"NIGHTSHIFT_REVIEW":          true,
 	"NIGHTSHIFT_REVIEW_MODEL":    true,
 	"NIGHTSHIFT_REVIEW_ROUNDS":   true,
+	"NIGHTSHIFT_GATE_ROUNDS":     true,
 	"NIGHTSHIFT_LIMIT_FALLBACK":  true,
 	"NIGHTSHIFT_LIMIT_MAX_WAIT":  true,
 	"NIGHTSHIFT_LIMIT_MAX_HITS":  true,

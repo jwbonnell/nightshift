@@ -637,3 +637,15 @@ func TestFindFoldStaysInDir(t *testing.T) {
 		t.Errorf("fold match: got %q, %v", p, ok)
 	}
 }
+
+func TestInitCreatesHoldoutDir(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "nightshift-home")
+	t.Setenv("PATH", fakeBin(t, "sbx"))
+	var stdout, stderr bytes.Buffer
+	if err := Init(home, "sbx", &stdout, &stderr); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if HoldoutDir(home) != filepath.Join(home, "holdout") || !dirExists(HoldoutDir(home)) {
+		t.Fatalf("holdout dir missing: %s", HoldoutDir(home))
+	}
+}

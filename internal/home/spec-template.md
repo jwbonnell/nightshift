@@ -44,6 +44,10 @@ OPTIONAL frontmatter:
   review_model:  model for that review                              (default: opus)
   review_rounds: hand a rejecting review back to the agent to fix, up to this many
                  times, before the run finishes (0-5)                (default: 0)
+  accept:        single-line shell command run in a fresh workspace, outside the
+                 agent's reach, when the agent claims completion  (default: none)
+  gate_rounds:   hand a failing acceptance gate back to the agent, up to this
+                 many times, before the run finishes (0-5)           (default: 2)
   depends_on:    comma list of other spec slugs this one builds on; it won't run
                  until each is complete, and starts from a base that already
                  contains their branches merged in

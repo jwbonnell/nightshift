@@ -276,6 +276,10 @@ func Run(opts Options) (Status, error) {
 		return StatusError, err
 	}
 
+	if err := checkHoldoutOutsideRepo(opts.Home, sp.Slug, sp.Repo); err != nil {
+		return StatusError, err
+	}
+
 	if opts.DryRun {
 		sha, err := resolveBase(sp.Repo, sp.Base)
 		if err != nil {

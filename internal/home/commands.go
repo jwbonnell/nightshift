@@ -55,6 +55,8 @@ const commentedConfig = `# nightshift config file.
 # NIGHTSHIFT_REVIEW_MODEL=opus
 # fix rounds: hand a rejecting review back to the agent up to N times (0-5)
 # NIGHTSHIFT_REVIEW_ROUNDS=0
+# acceptance-gate hand-backs before the run finishes with the gate failure recorded (0-5)
+# NIGHTSHIFT_GATE_ROUNDS=2
 
 # how long to wait out a usage limit with no usable reset time
 # NIGHTSHIFT_LIMIT_FALLBACK=60m
@@ -116,7 +118,7 @@ func ensureLayout(home string) error {
 func Init(home, sbxBin string, stdout, stderr io.Writer) error {
 	var created []string
 
-	for _, d := range []string{home, DraftDir(home), ReadyDir(home), DoneDir(home), ResultsDir(home), RunsDir(home), LogsDir(home), ContextDir(home), LensesDir(home), ReviewsDir(home)} {
+	for _, d := range []string{home, DraftDir(home), ReadyDir(home), DoneDir(home), ResultsDir(home), RunsDir(home), LogsDir(home), ContextDir(home), LensesDir(home), ReviewsDir(home), HoldoutDir(home)} {
 		existed := dirExists(d)
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
