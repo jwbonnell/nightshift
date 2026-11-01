@@ -111,6 +111,7 @@ type Options struct {
 	IsTTY             bool
 	Notifier          notify.Notifier                                  // nil = resolve from NIGHTSHIFT_NOTIFY/config
 	Reviewer          Reviewer                                         // nil = sbxReviewer
+	GateVerifier      BaseVerifier                                     // nil = sbxBaseVerifier named nightshift-<slug>-gate
 	Ctx               context.Context                                  // D8: cancellation source; nil = context.Background()
 	Version           string                                           // the running binary's version; "" is recorded as "dev"
 	Sleep             func(ctx context.Context, d time.Duration) error // injectable waiter for Task 3's usage-limit wait; nil = a real timer that returns ctx.Err() early on cancellation

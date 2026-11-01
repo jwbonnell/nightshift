@@ -517,10 +517,17 @@ func (r *run) loop() Status {
 			}
 			if green && commits >= 1 {
 				st.Commits = commits
-				roundDue := sp.Review && sp.ReviewRounds > 0 && !r.interrupted() && (deadline.IsZero() || clock().Before(deadline))
-				if !roundDue || !r.reviewRound() {
+				gateBack, gateIntr := r.runGates()
+				if gateIntr {
 					_ = r.saveState()
-					return StatusComplete
+					return StatusInterrupted
+				}
+				if !gateBack {
+					roundDue := sp.Review && sp.ReviewRounds > 0 && !r.interrupted() && (deadline.IsZero() || clock().Before(deadline))
+					if !roundDue || !r.reviewRound() {
+						_ = r.saveState()
+						return StatusComplete
+					}
 				}
 				// Handed back: reviewRound already wrote REVIEW.md, removed
 				// .spec-complete, appended to PROGRESS.md and saved state.

@@ -46,6 +46,7 @@ type runState struct {
 
 	ReviewRound     int `json:"review_round,omitempty"`     // fix rounds: the last review round run (0 = none yet)
 	ReviewHandbacks int `json:"review_handbacks,omitempty"` // fix rounds: how many times REVIEW.md has been handed back
+	GateHandbacks   int `json:"gate_handbacks,omitempty"`   // acceptance gates: how many times a failing gate was handed back
 }
 
 // agentsRec is runState.Agents: a struct rather than a map so plan always
@@ -85,7 +86,8 @@ type run struct {
 	// read by resultBody/notifyText. reviewVerdict == "" means no review
 	// was attempted (review: false, or status != complete).
 	reviewVerdict string
-	reviewReason  string // set only when reviewVerdict == "skipped"
+	gate          *gateOutcome // nil = no gates configured or completion never reached
+	reviewReason  string       // set only when reviewVerdict == "skipped"
 	reviewNote    string
 	reviewNoteErr error // set only when the review note itself failed to write
 

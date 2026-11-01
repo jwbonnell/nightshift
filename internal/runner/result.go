@@ -130,6 +130,9 @@ func (r *run) resultBody(status Status) string {
 	if r.reviewVerdict != "" {
 		fmt.Fprintf(&b, "review: %s\n", r.reviewVerdict)
 	}
+	if r.gate != nil {
+		fmt.Fprintf(&b, "gate: %s\n", r.gate.result)
+	}
 	b.WriteString("---\n\n")
 
 	switch {
@@ -170,6 +173,8 @@ func (r *run) resultBody(status Status) string {
 		}
 		b.WriteString("```\n\n")
 	}
+
+	r.writeGateSection(&b)
 
 	switch {
 	case len(r.reviewRounds) > 0:
@@ -265,7 +270,13 @@ func (r *run) notifyText(status Status) (title, msg string) {
 	if r.prChecks.fails > 0 {
 		title += " (checks failed)"
 	}
+	if r.gate.failed() {
+		title += " (gate failed)"
+	}
 	msg = r.summaryLine(status)
+	if r.gate != nil {
+		msg += " · gate: " + r.gate.result
+	}
 	if r.reviewVerdict != "" {
 		msg += fmt.Sprintf(" · review: %s", r.reviewVerdict)
 	}
@@ -310,7 +321,7 @@ func (r *run) notify(status Status) {
 	}
 	title, msg := r.notifyText(status)
 	urgent := status == StatusError || status == StatusRed || status == StatusStalled ||
-		r.prChecks.fails > 0 || r.reviewVerdict == "reject" || r.reviewVerdict == "error"
+		r.prChecks.fails > 0 || r.gate.failed() || r.reviewVerdict == "reject" || r.reviewVerdict == "error"
 	n.Notify(title, msg, urgent)
 }
 
