@@ -535,6 +535,7 @@ func (r *run) loop() Status {
 						return StatusComplete
 					}
 				}
+				r.gate = nil
 				// Handed back: reviewRound already wrote REVIEW.md, removed
 				// .spec-complete, appended to PROGRESS.md and saved state.
 				// Fall through to the usual question/progress accounting

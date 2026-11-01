@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeGateVerifier scripts the gate verifier: fn gets the call number
@@ -120,6 +121,67 @@ func TestGateInterrupted(t *testing.T) {
 	}
 	if refExists(r.spec.Repo, reviewRoundRef("demo")) {
 		t.Fatal("review ref left behind")
+	}
+	if r.gate != nil {
+		t.Fatalf("gate = %+v, want nil after interrupt", r.gate)
+	}
+	body := r.resultBody(StatusInterrupted)
+	if strings.Contains(body, "gate:") || strings.Contains(body, "## Acceptance gate") {
+		t.Fatalf("note mentions gate:\n%s", body)
+	}
+}
+
+func TestGateWindowClosesDuringGates(t *testing.T) {
+	repo := newSourceRepo(t)
+	sb := newStubSandbox()
+	sb.agent = gateAgent(t)
+	sb.verify = alwaysGreenVerify
+	now := time.Date(2026, 1, 5, 10, 0, 0, 0, time.Local)
+	fv := &fakeGateVerifier{fn: func(n int, dir, cmd string) (string, error) {
+		now = now.Add(2 * time.Hour)
+		return "still bad\n", exit3()
+	}}
+	nr := &recordingNotifierForTest{}
+	r := newTestRun(t, repo, "accept: ./accept.sh\n", Options{Stdout: &bytes.Buffer{}, GateVerifier: fv, Notifier: nr, Until: "11:00", clock: func() time.Time { return now }}, sb)
+	status := r.loop()
+	if status != StatusComplete {
+		t.Fatalf("status = %v", status)
+	}
+	if len(fv.calls) != 1 || r.st.GateHandbacks != 0 {
+		t.Fatalf("calls=%d handbacks=%d, want 1/0", len(fv.calls), r.st.GateHandbacks)
+	}
+	if _, err := r.finish(status); err != nil {
+		t.Fatal(err)
+	}
+	if !nr.urgent || !strings.HasSuffix(nr.title, " (gate failed)") {
+		t.Fatalf("notify = %q urgent=%v", nr.title, nr.urgent)
+	}
+	body := r.resultBody(StatusComplete)
+	if !strings.Contains(body, "gate: fail\n") || !strings.Contains(body, "## Acceptance gate") || !strings.Contains(body, "still bad") {
+		t.Fatalf("note:\n%s", body)
+	}
+}
+
+func TestGateNotReportedAfterHandBackThenCap(t *testing.T) {
+	repo := newSourceRepo(t)
+	sb := newStubSandbox()
+	sb.agent = completingAgent(t)
+	sb.verify = alwaysGreenVerify
+	fv := &fakeGateVerifier{fn: func(n int, dir, cmd string) (string, error) { return "bad\n", exit3() }}
+	nr := &recordingNotifierForTest{}
+	r := newTestRun(t, repo, "accept: ./accept.sh\nmax_iter: 3\nextend_iter: 0\n", Options{Stdout: &bytes.Buffer{}, GateVerifier: fv, Notifier: nr}, sb)
+	status := r.loop()
+	if status != StatusCapped {
+		t.Fatalf("status = %v, want capped", status)
+	}
+	if len(fv.calls) != 1 {
+		t.Fatalf("gate calls = %d, want 1", len(fv.calls))
+	}
+	if _, err := r.finish(status); err != nil {
+		t.Fatal(err)
+	}
+	if r.gate != nil || strings.Contains(r.resultBody(status), "\ngate: ") || strings.Contains(nr.title, "(gate failed)") {
+		t.Fatalf("stale gate reported: gate=%+v title=%q", r.gate, nr.title)
 	}
 }
 

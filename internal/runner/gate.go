@@ -237,9 +237,15 @@ func (r *run) runGates() (handedBack, interrupted bool) {
 	}
 
 	out := &gateOutcome{}
-	r.gate = out
+	// An interrupt mid-gate is not an outcome: leave r.gate unset.
+	defer func() {
+		if interrupted {
+			r.gate = nil
+		}
+	}()
 	gateErr := func(err error) {
 		out.result, out.err = "error", err
+		r.gate = out
 		_ = os.MkdirAll(r.gateLogDir(), 0o755)
 		_ = os.WriteFile(filepath.Join(r.gateLogDir(), "error.log"), []byte(err.Error()+"\n"), 0o644)
 		r.logf("gate: error (details in gate/error.log)")
@@ -309,10 +315,6 @@ func (r *run) runGates() (handedBack, interrupted bool) {
 		}
 	}
 
-	if windowClosed() {
-		r.gate = &gateOutcome{result: "skipped", reason: "window closed"}
-		return false, false
-	}
 	var failing []gateRes
 	for _, g := range out.gates {
 		if !g.ok {
@@ -321,10 +323,12 @@ func (r *run) runGates() (handedBack, interrupted bool) {
 	}
 	if len(failing) == 0 {
 		out.result = "pass"
+		r.gate = out
 		return false, false
 	}
 	out.result = "fail"
-	if st.GateHandbacks >= sp.GateRounds {
+	r.gate = out
+	if st.GateHandbacks >= sp.GateRounds || windowClosed() {
 		return false, false
 	}
 
@@ -340,6 +344,8 @@ func (r *run) runGates() (handedBack, interrupted bool) {
 		b.WriteString("\n")
 	}
 	st.GateHandbacks++
+	// A gate result is only reported on a run that ends complete.
+	r.gate = nil
 	r.handOff(b.String(), fmt.Sprintf("acceptance gate: %d failing gate(s) in REVIEW.md (hand-back %d of %d) — fix them, then touch .spec-complete again", len(failing), st.GateHandbacks, sp.GateRounds))
 	r.logf("gate: %d failing, handed back (%d of %d)", len(failing), st.GateHandbacks, sp.GateRounds)
 	_ = r.saveState()
