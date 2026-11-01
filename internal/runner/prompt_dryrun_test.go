@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -139,6 +140,8 @@ func TestDryRunShowsImage(t *testing.T) {
 
 	mountDir := stateDirFor(opts, sp) + "/repo"
 	for _, want := range []string{
+		// Written as a literal, not via CloneDir, so the test pins the bytes.
+		"clone:       " + filepath.Join(home.RunsDir(homeDir), "demo", "repo") + "\n",
 		"image:       last-light-flutter:3.27.1 (agent, verify)",
 		"  sbx create --name nightshift-demo --template last-light-flutter:3.27.1 claude " + mountDir,
 		"  sbx create --name nightshift-demo-ctl claude " + mountDir,

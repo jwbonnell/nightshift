@@ -766,7 +766,7 @@ func Review(opts ReviewOptions) (Status, error) {
 		return StatusError, err
 	}
 
-	progress, _ := ReadScaffold(filepath.Join(opts.StateRoot, opts.Slug, "repo", "PROGRESS.md"))
+	progress, _ := ReadScaffold(filepath.Join(CloneDir(opts.StateRoot, opts.Slug), "PROGRESS.md"))
 
 	limits, err := resolveLimitConfig(Options{Home: opts.Home})
 	if err != nil {

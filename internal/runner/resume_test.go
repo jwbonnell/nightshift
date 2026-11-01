@@ -78,7 +78,7 @@ func TestPlannerCommitOnResumeResetsToLastGreen(t *testing.T) {
 	homeDir := t.TempDir()
 	writeReadySpec(t, homeDir, "demo", "max_iter: 2\n", repo)
 	stateRoot := home.RunsDir(homeDir)
-	clone := filepath.Join(stateRoot, "demo", "repo")
+	clone := CloneDir(stateRoot, "demo")
 
 	sb1 := newStubSandbox()
 	sb1.agent = func(ctx context.Context, iter int, dir string) error {
@@ -142,7 +142,7 @@ func TestResumeContinues(t *testing.T) {
 	homeDir := t.TempDir()
 	writeReadySpec(t, homeDir, "demo", "max_iter: 1\nextend_iter: 0\n", repo)
 	stateRoot := home.RunsDir(homeDir)
-	clone := filepath.Join(stateRoot, "demo", "repo")
+	clone := CloneDir(stateRoot, "demo")
 
 	sb1 := newStubSandbox()
 	sb1.agent = func(ctx context.Context, iter int, dir string) error {
@@ -244,7 +244,7 @@ func TestResumeClearsStaleComplete(t *testing.T) {
 	homeDir := t.TempDir()
 	writeReadySpec(t, homeDir, "demo", "max_iter: 1\n", repo)
 	stateRoot := home.RunsDir(homeDir)
-	clone := filepath.Join(stateRoot, "demo", "repo")
+	clone := CloneDir(stateRoot, "demo")
 
 	sb1 := newStubSandbox()
 	sb1.verify = alwaysGreenVerify
@@ -293,7 +293,7 @@ func TestResumeStaleCompleteSymlinkNotFollowed(t *testing.T) {
 	homeDir := t.TempDir()
 	writeReadySpec(t, homeDir, "demo", "max_iter: 1\n", repo)
 	stateRoot := home.RunsDir(homeDir)
-	clone := filepath.Join(stateRoot, "demo", "repo")
+	clone := CloneDir(stateRoot, "demo")
 
 	sb1 := newStubSandbox()
 	sb1.verify = alwaysGreenVerify

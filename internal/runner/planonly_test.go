@@ -73,9 +73,7 @@ func TestPlanOnlyBlocked(t *testing.T) {
 	writeReadySpec(t, homeDir, "demo", "", repo)
 
 	sb := newStubSandbox()
-	sb.agent = func(ctx context.Context, iter int, dir string) error {
-		return os.WriteFile(filepath.Join(dir, "QUESTION.md"), []byte("Which design doc?\n"), 0o644)
-	}
+	sb.agent = askQuestion
 	status, err := Run(planOnlyOpts(homeDir, sb))
 	if err != nil || status != StatusBlocked {
 		t.Fatalf("status=%v err=%v, want blocked/nil", status, err)
@@ -146,9 +144,7 @@ func TestPlanOnlyBlockedRerunUnchanged(t *testing.T) {
 	writeReadySpec(t, homeDir, "demo", "", repo)
 
 	sb := newStubSandbox()
-	sb.agent = func(ctx context.Context, iter int, dir string) error {
-		return os.WriteFile(filepath.Join(dir, "QUESTION.md"), []byte("Which design doc?\n"), 0o644)
-	}
+	sb.agent = askQuestion
 	opts := planOnlyOpts(homeDir, sb)
 	if status, err := Run(opts); err != nil || status != StatusBlocked {
 		t.Fatalf("first: status=%v err=%v, want blocked", status, err)
@@ -213,9 +209,7 @@ func TestPlanOnlyReplansAfterSpecEdit(t *testing.T) {
 	writeReadySpec(t, homeDir, "demo", "", repo)
 
 	sb := newStubSandbox()
-	sb.agent = func(ctx context.Context, iter int, dir string) error {
-		return os.WriteFile(filepath.Join(dir, "QUESTION.md"), []byte("Which design doc?\n"), 0o644)
-	}
+	sb.agent = askQuestion
 	if status, err := Run(planOnlyOpts(homeDir, sb)); err != nil || status != StatusBlocked {
 		t.Fatalf("first: status=%v err=%v, want blocked", status, err)
 	}

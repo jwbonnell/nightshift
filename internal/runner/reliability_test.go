@@ -53,7 +53,7 @@ func TestScaffoldingNeverCommitted(t *testing.T) {
 		t.Fatalf("status=%v err=%v, want Complete/nil", status, err)
 	}
 
-	clone := filepath.Join(home.RunsDir(homeDir), "demo", "repo")
+	clone := CloneDir(home.RunsDir(homeDir), "demo")
 	log := mustGit(t, clone, "log", "--name-only", "--format=", "HEAD")
 	for _, name := range []string{"PROGRESS.md", "QUESTION.md", ".spec-complete"} {
 		if strings.Contains(log, name) {

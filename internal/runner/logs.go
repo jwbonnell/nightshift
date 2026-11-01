@@ -107,7 +107,7 @@ func (o *LogsOptions) newStream(slug string, prefix string) *logStream {
 	name := "runner.log"
 	if o.Agent {
 		name = "agent.log"
-		s.rend = &Renderer{Roots: []string{filepath.Join(o.StateRoot, slug, "repo")}, Loc: o.Loc}
+		s.rend = &Renderer{Roots: []string{CloneDir(o.StateRoot, slug)}, Loc: o.Loc}
 	}
 	s.path = filepath.Join(o.StateRoot, slug, name)
 	return s

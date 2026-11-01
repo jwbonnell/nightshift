@@ -176,8 +176,9 @@ func printPlan(w io.Writer, opts Options, sp *Spec, maxConcurrent int, capSrc st
 	fmt.Fprintf(w, "max_concurrent: %d (%s)\n", maxConcurrent, capSrc)
 	printHeldLocks(w, opts.StateRoot)
 	stateDir := stateDirFor(opts, sp)
+	clone := CloneDir(opts.StateRoot, sp.Slug)
 	fmt.Fprintf(w, "state dir:   %s\n", stateDir)
-	fmt.Fprintf(w, "clone:       %s\n", stateDir+"/repo")
+	fmt.Fprintf(w, "clone:       %s\n", clone)
 	fmt.Fprintf(w, "branch:      spec/%s\n", sp.Slug)
 
 	// codeAg/planAg are built without OpencodeConfig even when sp.OpencodeCfg
@@ -202,26 +203,26 @@ func printPlan(w io.Writer, opts Options, sp *Spec, maxConcurrent int, capSrc st
 		if p.image != "" {
 			tmpl = "--template " + p.image + " "
 		}
-		fmt.Fprintf(w, "  %s create --name %s %s%s %s/repo\n", opts.SbxBin, p.name, tmpl, p.template, stateDir)
+		fmt.Fprintf(w, "  %s create --name %s %s%s %s\n", opts.SbxBin, p.name, tmpl, p.template, clone)
 		for _, h := range sp.Egress {
 			fmt.Fprintf(w, "  %s policy allow network --sandbox %s %s\n", opts.SbxBin, p.name, h)
 		}
 	}
-	fmt.Fprintf(w, "agent (per iteration, prompt on stdin):\n  %s exec -w %s/repo %s %s\n",
-		opts.SbxBin, stateDir, sbx.agentName, execPreview(codeAg, opts.ClaudeBin, agent.Invocation{Role: agent.RoleCode, Model: sp.ModelSel.Model}, hasCfg))
+	fmt.Fprintf(w, "agent (per iteration, prompt on stdin):\n  %s exec -w %s %s %s\n",
+		opts.SbxBin, clone, sbx.agentName, execPreview(codeAg, opts.ClaudeBin, agent.Invocation{Role: agent.RoleCode, Model: sp.ModelSel.Model}, hasCfg))
 	fmt.Fprintf(w, "  %s stop %s   # kill the agent before verify\n", opts.SbxBin, sbx.agentName)
 	if sbx.planName != "" {
-		fmt.Fprintf(w, "plan agent (per iteration, prompt on stdin):\n  %s exec -w %s/repo %s %s\n",
-			opts.SbxBin, stateDir, sbx.planName, execPreview(planAg, opts.ClaudeBin, agent.Invocation{Role: agent.RolePlan, Model: sp.PlannerSel.Model}, hasCfg))
+		fmt.Fprintf(w, "plan agent (per iteration, prompt on stdin):\n  %s exec -w %s %s %s\n",
+			opts.SbxBin, clone, sbx.planName, execPreview(planAg, opts.ClaudeBin, agent.Invocation{Role: agent.RolePlan, Model: sp.PlannerSel.Model}, hasCfg))
 		fmt.Fprintf(w, "  %s stop %s   # kill the plan agent before verify\n", opts.SbxBin, sbx.planName)
 	}
-	fmt.Fprintf(w, "git ops (per iteration, in the ctl sandbox):\n  %s exec -w %s/repo %s git ...\n", opts.SbxBin, stateDir, sbx.ctlName)
+	fmt.Fprintf(w, "git ops (per iteration, in the ctl sandbox):\n  %s exec -w %s %s git ...\n", opts.SbxBin, clone, sbx.ctlName)
 	verifyTmpl := ""
 	if sp.Image != "" {
 		verifyTmpl = "--template " + sp.Image + " "
 	}
-	fmt.Fprintf(w, "verify (per iteration, in a freshly recreated sandbox):\n  %s rm -f %s && %s create --name %s %sclaude %s/repo\n  %s exec -w %s/repo %s sh -c %q\n",
-		opts.SbxBin, sbx.verifyName, opts.SbxBin, sbx.verifyName, verifyTmpl, stateDir, opts.SbxBin, stateDir, sbx.verifyName, sp.Verify)
+	fmt.Fprintf(w, "verify (per iteration, in a freshly recreated sandbox):\n  %s rm -f %s && %s create --name %s %sclaude %s\n  %s exec -w %s %s sh -c %q\n",
+		opts.SbxBin, sbx.verifyName, opts.SbxBin, sbx.verifyName, verifyTmpl, clone, opts.SbxBin, clone, sbx.verifyName, sp.Verify)
 	fmt.Fprintf(w, "\n--- planning prompt ---\n%s\n", buildPrompt(sp, true))
 	fmt.Fprintf(w, "\n--- iteration prompt ---\n%s\n", buildPrompt(sp, false))
 }

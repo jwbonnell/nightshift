@@ -85,7 +85,7 @@ func TestStaleQuestionClearedAfterSpecEdit(t *testing.T) {
 	if len(sb2.prompts) == 0 || !strings.HasPrefix(sb2.prompts[0], planPreamble) {
 		t.Fatalf("second run did not start with planning")
 	}
-	prog, _ := os.ReadFile(filepath.Join(filepath.Join(opts2.StateRoot, "demo", "repo"), "PROGRESS.md"))
+	prog, _ := os.ReadFile(filepath.Join(CloneDir(opts2.StateRoot, "demo"), "PROGRESS.md"))
 	if !strings.Contains(string(prog), "the question was cleared") {
 		t.Fatalf("PROGRESS.md lacks the cleared note:\n%s", prog)
 	}
@@ -119,7 +119,7 @@ func TestQuestionKeptWhenSpecUnchanged(t *testing.T) {
 	if !existedAtPlan {
 		t.Fatal("QUESTION.md was removed although the spec did not change")
 	}
-	if _, err := os.Lstat(filepath.Join(filepath.Join(opts.StateRoot, "demo", "repo"), "QUESTION.md")); err != nil {
+	if _, err := os.Lstat(filepath.Join(CloneDir(opts.StateRoot, "demo"), "QUESTION.md")); err != nil {
 		t.Fatalf("QUESTION.md gone: %v", err)
 	}
 }
@@ -128,22 +128,31 @@ func TestSpecHashRecordedOnReplan(t *testing.T) {
 	repo := newSourceRepo(t)
 	homeDir := t.TempDir()
 	writeReadySpec(t, homeDir, "demo", "max_iter: 2\n", repo)
-	run := func() *stubSandbox {
+	run := func() (*stubSandbox, Status) {
 		sb := newStubSandbox()
 		sb.verify = alwaysGreenVerify
 		status, err := Run(normalOpts(homeDir, sb))
 		if err != nil || status == StatusBlocked || status == StatusError || status == StatusComplete {
 			t.Fatalf("status=%v err=%v, want a resumable non-blocked status", status, err)
 		}
-		return sb
+		return sb, status
 	}
-	run()
+	sb1, status1 := run()
+	if status1 != StatusCapped {
+		t.Fatalf("first run status = %v, want capped", status1)
+	}
+	if len(sb1.prompts) == 0 || !strings.HasPrefix(sb1.prompts[0], planPreamble) {
+		t.Fatalf("first run did not start with the planning prompt")
+	}
 	writeReadySpec(t, homeDir, "demo", "max_iter: 2\niter_timeout: 31m\n", repo)
-	sb2 := run()
+	sb2, status2 := run()
+	if status2 != StatusCapped {
+		t.Fatalf("second run status = %v, want capped", status2)
+	}
 	if len(sb2.prompts) == 0 || !strings.HasPrefix(sb2.prompts[0], planPreamble) {
 		t.Fatalf("edited spec did not re-plan")
 	}
-	sb3 := run()
+	sb3, _ := run()
 	if len(sb3.prompts) == 0 || strings.HasPrefix(sb3.prompts[0], planPreamble) {
 		t.Fatalf("unedited resume re-planned: %q", sb3.prompts)
 	}

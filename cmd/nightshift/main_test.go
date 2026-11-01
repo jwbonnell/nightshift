@@ -1096,7 +1096,7 @@ func TestReadyPlanBlockedPrintsQuestion(t *testing.T) {
 	oldRunFn := runFn
 	t.Cleanup(func() { runFn = oldRunFn })
 	runFn = func(opts runner.Options) (runner.Status, error) {
-		dir := filepath.Join(home.RunsDir(homeDir), "demo", "repo")
+		dir := runner.CloneDir(home.RunsDir(homeDir), "demo")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -1131,10 +1131,13 @@ func TestReadyPlanBlockedPrintsQuestion(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFullDraftSpec(t, homeDir, "demo", repo, false)
+	// The second call writes nothing: the question on screen is the one the
+	// first call left in the clone.
+	runFn = func(runner.Options) (runner.Status, error) { return runner.StatusBlocked, nil }
 	if code := dispatch([]string{"ready", "demo", "--plan"}, &stdout, &stderr, strings.NewReader("")); code != 2 {
 		t.Fatalf("still-blocked exit = %d, want 2; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
-	for _, want := range []string{"Where is the design doc?", "answer it by editing " + readyPath} {
+	for _, want := range []string{"Where is the design doc?", "answer it by editing " + readyPath + ", then: nightshift run demo --plan-only"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("still-blocked stdout missing %q:\n%s", want, stdout.String())
 		}
