@@ -914,6 +914,52 @@ nightshift only passes the reference through to `sbx create --template`;
 it doesn't build, push, or validate that the image exists — an image
 that doesn't resolve surfaces as sbx's own error.
 
+## Acceptance gates
+
+Verify only proves the code agrees with tests the agent wrote. When the agent
+touches `.spec-complete` (green, at least one commit), the runner can check the
+work against evidence the agent didn't write, before any review round:
+
+- **`accept:`** (frontmatter, single-line shell command; empty = none) is run
+  as written. It proves the finished work behaves as the spec says from the
+  outside (a smoke test, a CLI invocation).
+- **holdout tests** are files you keep under `<Home>/holdout/<slug>/`
+  (created by `nightshift init`). They are overlaid at their relative paths
+  onto a fresh checkout and the spec's `verify:` is run over them. They prove
+  behaviour the agent's own tests don't cover.
+
+Write holdouts as black-box tests of the spec's public behaviour, using **new
+file names only** (an existing path in the repo is a gate error), mirroring the
+repo layout. A holdout dir that resolves inside the spec's repo is refused
+before the run starts.
+
+Both run in a throwaway workspace (`<state dir>/gate-ws/`) built as a
+`--no-local` clone of the source repo at the last green commit; it is never
+the agent's clone and is deleted afterwards. The `accept:` command runs in a
+fresh workspace *without* the holdout files, so its output (which the agent may
+see) can't name them. Output goes to `<state dir>/gate/<name>.log`; a gate error
+is written to `gate/error.log`. A gate runs agent-written code in a sandbox
+(`nightshift-<slug>-gate`), exactly as verify does, with the spec's egress and
+image. Both gates run even if the first fails.
+
+`gate_rounds` (0-5, default 2; frontmatter > `NIGHTSHIFT_GATE_ROUNDS` > default)
+is how many times a failing gate is handed back through `REVIEW.md`. After
+that, or with `gate_rounds: 0`, the run still ends `complete`, with `gate: fail`
+recorded and an urgent notification titled `... (gate failed)`. A gate error
+(workspace, overlay, sandbox create) is never handed back and records
+`gate: error`. If the `--until` window has closed, gates are skipped
+(`gate: skipped`). No new status or exit code exists.
+
+**What the agent is told.** For a failing `accept:`: the command, its exit code
+and the last 40 lines of output (control characters replaced by `?`). For
+holdouts: only that hidden tests failed. Holdout file names, contents and output
+never reach the clone, PROGRESS.md, REVIEW.md, prompts, agent.log or runner.log;
+they appear only under `<state dir>/gate/` and in the result note.
+
+The result note carries `gate: pass|fail|error|skipped` in its frontmatter and an
+`## Acceptance gate` section with each gate's result and the last 80 lines of
+each failing gate's log (holdout output included; the note is for you).
+
 ## Post-run checks
 
 Every result note ends with a `## Post-run checks` section — six checks,

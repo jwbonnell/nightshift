@@ -122,6 +122,14 @@ changed, and a usage limit never waits under `--plan-only`.
   `TestScaffoldSymlinkRejected`. `REVIEW.md` is written only by a
   rejecting fix round (`review_rounds > 0`), to hand blocking findings
   back to the agent — see `docs/nightshift.md`'s Review section.
+- **The gate workspace** (`gate.go`, `<state dir>/gate-ws/`) is like the
+  `-review` workspace: a `--no-local` clone of the *source* repo at the
+  published review ref, never the agent's clone, deleted after every gate
+  attempt. The `nightshift-<slug>-gate` sandbox runs agent-written code like
+  verify. **Holdout rule:** holdout file names, contents and output
+  (`<Home>/holdout/<slug>/`) may appear only under `<state dir>/gate/` and in
+  the result note — never in the clone, PROGRESS.md, REVIEW.md, prompts,
+  agent.log or runner.log. See `docs/nightshift.md`'s Acceptance gates section.
 - **The clone has no remotes.** The only way work reaches the source repo
   is the runner's own `syncBranchBack`, under a repo lock, from the host,
   fetching *out of* the clone — never the reverse.
