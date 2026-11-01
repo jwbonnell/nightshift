@@ -184,6 +184,24 @@ func TestLintAllowsImage(t *testing.T) {
 	}
 }
 
+func TestLintAllowsExtendIter(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeLintSpec(t, home.DraftDir(homeDir), "demo", "extend_iter: 3\n", repo, fullSpecBody)
+
+	var buf bytes.Buffer
+	res, err := Lint(LintOptions{Home: homeDir, SpecArg: "demo", NoVerify: true, Stdout: &buf})
+	if err != nil {
+		t.Fatalf("Lint: %v", err)
+	}
+	if res.Warns != 0 {
+		t.Fatalf("expected no warns, got %+v\n%s", res, buf.String())
+	}
+	if strings.Contains(buf.String(), `unknown key "extend_iter"`) {
+		t.Fatalf("output unexpectedly warns about extend_iter:\n%s", buf.String())
+	}
+}
+
 func TestLintSections(t *testing.T) {
 	repo := newSourceRepo(t)
 

@@ -46,7 +46,7 @@ func TestPrintPlanIncludesHomeLineFirst(t *testing.T) {
 		"verify:      true",
 		"model:       sonnet (default)",
 		"planner:     opus (default)",
-		"max_iter:    10 (default)",
+		"max_iter:    10 (default)\nextend_iter: 10 (default)\niter_timeout:",
 		"iter_timeout:30m0s (default)",
 		"egress+:     api.example.com",
 		"max_concurrent: 2 (default)",

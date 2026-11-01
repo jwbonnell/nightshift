@@ -23,6 +23,7 @@ import (
 
 const (
 	defaultMaxIter     = 10
+	defaultExtendIter  = 10
 	defaultIterTimeout = 30 * time.Minute
 	defaultModel       = "sonnet"
 	defaultPlanner     = "opus"
@@ -40,6 +41,7 @@ type Spec struct {
 	ModelSel     agent.Selector
 	PlannerSel   agent.Selector
 	MaxIter      int
+	ExtendIter   int // extra iterations granted past MaxIter while green with commits; 0 = none
 	IterTimeout  time.Duration
 	Egress       []string
 	Image        string // sbx --template for agent/plan/verify sandboxes; empty means the stock image
@@ -367,7 +369,7 @@ func resolveSpec(opts Options) (*Spec, error) {
 // calls this directly on a draft or ready path). Validation order
 // matches the reference: repo, base NAME (not yet resolved to a sha —
 // that's resolveBase, called later by the caller), verify, model,
-// planner, max_iter, iter_timeout, review, review_model, egress, image.
+// planner, max_iter, extend_iter, iter_timeout, review, review_model, egress, image.
 func resolveSpecFile(opts Options, path string) (*Spec, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -435,6 +437,12 @@ func resolveSpecFile(opts Options, path string) (*Spec, error) {
 	maxIter, err := parsePositiveInt(maxIterStr)
 	if err != nil {
 		return nil, fmt.Errorf("max_iter %q: %w", maxIterStr, err)
+	}
+
+	extendStr := pick(src, "extend_iter", opts.ExtendIter, fmVal("extend_iter"), os.Getenv("NIGHTSHIFT_EXTEND_ITER"), cfg["NIGHTSHIFT_EXTEND_ITER"], strconv.Itoa(defaultExtendIter))
+	extendIter, err := strconv.Atoi(extendStr)
+	if err != nil || extendIter < 0 || extendIter > 50 || strings.HasPrefix(extendStr, "+") {
+		return nil, fmt.Errorf("extend_iter %q: want a whole number from 0 to 50", extendStr)
 	}
 
 	iterTimeout, err := parseIterTimeout(src, fmVal("iter_timeout"), os.Getenv("NIGHTSHIFT_ITER_TIMEOUT"), cfg["NIGHTSHIFT_ITER_TIMEOUT"])
@@ -508,6 +516,7 @@ func resolveSpecFile(opts Options, path string) (*Spec, error) {
 		ModelSel:        modelSel,
 		PlannerSel:      plannerSel,
 		MaxIter:         maxIter,
+		ExtendIter:      extendIter,
 		IterTimeout:     iterTimeout,
 		Egress:          egress,
 		Image:           image,

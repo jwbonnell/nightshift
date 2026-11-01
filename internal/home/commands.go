@@ -33,6 +33,7 @@ const commentedConfig = `# nightshift config file.
 # NIGHTSHIFT_MODEL=sonnet
 # NIGHTSHIFT_PLANNER_MODEL=opus
 # NIGHTSHIFT_MAX_ITER=10
+# NIGHTSHIFT_EXTEND_ITER=10
 # NIGHTSHIFT_ITER_TIMEOUT=30m
 # NIGHTSHIFT_MAX_CONCURRENT=2
 # how many eligible specs 'run --next --jobs' can start at once, capped by

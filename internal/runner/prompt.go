@@ -146,6 +146,7 @@ func printPlan(w io.Writer, opts Options, sp *Spec, maxConcurrent int, capSrc st
 		fmt.Fprintf(w, "opencode cfg: %s\n", sp.OpencodeCfgPath)
 	}
 	fmt.Fprintf(w, "max_iter:    %d (%s)\n", sp.MaxIter, sp.src["max_iter"])
+	fmt.Fprintf(w, "extend_iter: %d (%s)\n", sp.ExtendIter, sp.src["extend_iter"])
 	fmt.Fprintf(w, "iter_timeout:%s (%s)\n", sp.IterTimeout, sp.src["iter_timeout"]) // NB: no space after the colon
 	if active := readActiveLimit(opts.StateRoot, opts.clockFn()(), false); active != nil {
 		resetAt, _ := time.Parse(time.RFC3339, active.ResetAt)

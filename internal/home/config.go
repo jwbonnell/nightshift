@@ -14,6 +14,7 @@ var configKeys = map[string]bool{
 	"NIGHTSHIFT_MODEL":           true,
 	"NIGHTSHIFT_PLANNER_MODEL":   true,
 	"NIGHTSHIFT_MAX_ITER":        true,
+	"NIGHTSHIFT_EXTEND_ITER":     true,
 	"NIGHTSHIFT_ITER_TIMEOUT":    true,
 	"NIGHTSHIFT_MAX_CONCURRENT":  true,
 	"NIGHTSHIFT_JOBS":            true,

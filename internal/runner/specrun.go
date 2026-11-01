@@ -83,6 +83,7 @@ type Options struct {
 	Fresh         bool
 	Yes           bool
 	MaxIter       int    // 0 = unset
+	ExtendIter    string // raw --extend-iter value, "" = unset
 	Until         string // "HH:MM" local deadline, or ""
 	DryRun        bool
 	PlanOnly      bool    // run only the planning pass, then stop (ends planned)

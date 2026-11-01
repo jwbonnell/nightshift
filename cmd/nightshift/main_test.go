@@ -89,6 +89,11 @@ func TestRunHelpMatchesD4(t *testing.T) {
 	want = strings.ReplaceAll(want, "  -until string\n",
 		"  -plan-only\n    \trun only the planning pass, then stop\n  -until string\n")
 
+	// cap-extend adds --extend-iter.
+	want = strings.ReplaceAll(want, "[--max-iter N] [--until", "[--max-iter N] [--extend-iter N] [--until")
+	want = strings.ReplaceAll(want, "  -f\tfollow:",
+		"  -extend-iter string\n    \textra iterations granted past max-iter while each lands a green commit (default: spec/env/10)\n  -f\tfollow:")
+
 	bin := buildNightshiftBinary(t)
 	cmd := exec.Command(bin, "run", "-h")
 	var stderr bytes.Buffer

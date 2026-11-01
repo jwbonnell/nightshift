@@ -181,6 +181,48 @@ func TestModelPlannerIterTimeoutPrecedence(t *testing.T) {
 	}
 }
 
+func TestExtendIterResolve(t *testing.T) {
+	repo := newSourceRepo(t)
+	homeDir := t.TempDir()
+	writeReadySpec(t, homeDir, "demo", "", repo)
+	check := func(label string, opts Options, want int, src string) {
+		t.Helper()
+		opts.SpecArg, opts.Home = "demo", homeDir
+		sp, err := resolveSpec(opts)
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		if sp.ExtendIter != want || sp.src["extend_iter"] != src {
+			t.Fatalf("%s: extend=%d src=%q, want %d %q", label, sp.ExtendIter, sp.src["extend_iter"], want, src)
+		}
+	}
+	check("default", Options{}, 10, "default")
+	if err := os.WriteFile(home.ConfigPath(homeDir), []byte("NIGHTSHIFT_EXTEND_ITER=4\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	check("config", Options{}, 4, "config")
+	t.Setenv("NIGHTSHIFT_EXTEND_ITER", "5")
+	check("env", Options{}, 5, "env")
+	writeReadySpec(t, homeDir, "demo", "extend_iter: 7\n", repo)
+	check("frontmatter", Options{}, 7, "frontmatter")
+	check("flag", Options{ExtendIter: "3"}, 3, "flag")
+	check("flag zero", Options{ExtendIter: "0"}, 0, "flag")
+	check("flag 50", Options{ExtendIter: "50"}, 50, "flag")
+
+	for _, bad := range []string{"-1", "51", "x", "+5"} {
+		_, err := resolveSpec(Options{SpecArg: "demo", Home: homeDir, ExtendIter: bad})
+		want := fmt.Sprintf("extend_iter %q: want a whole number from 0 to 50", bad)
+		if err == nil || err.Error() != want {
+			t.Fatalf("flag %q: err = %v, want %q", bad, err, want)
+		}
+	}
+	writeReadySpec(t, homeDir, "demo", "extend_iter: 51\n", repo)
+	_, err := resolveSpec(Options{SpecArg: "demo", Home: homeDir})
+	if err == nil || err.Error() != `extend_iter "51": want a whole number from 0 to 50` {
+		t.Fatalf("frontmatter 51: err = %v", err)
+	}
+}
+
 func TestMaxIterAndBasePrecedence(t *testing.T) {
 	repo := newSourceRepo(t)
 

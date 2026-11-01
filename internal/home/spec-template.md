@@ -22,6 +22,9 @@ OPTIONAL frontmatter:
   model:         iterator model for most iterations   (default: sonnet)
   planner_model: model for the first planning pass     (default: opus)
   max_iter:      per-run iteration cap                 (default: 10)
+  extend_iter:   extra iterations past max_iter, granted one at a time
+                 while each iteration is green with a new commit, 0-50
+                                                       (default: 10)
   iter_timeout:  Go duration per iteration, e.g. 30m   (default: 30m)
   base:          branch/ref/sha the spec/<slug> branch starts from. Prefers
                  origin/<base> over a same-named local branch; a full ref or a
