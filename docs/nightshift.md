@@ -210,12 +210,14 @@ and whose lock isn't held, in slug order, then prints `marked N done` (or
 ### `run <spec-name|path> [flags]` / `run --next [flags]`
 
 ```
-usage: nightshift run <spec-name|path> [--fresh [--yes]] [--max-iter N] [--until HH:MM] [--base REF] [--max-concurrent N] [--ignore-deps] [-f] [--dry-run]
+usage: nightshift run <spec-name|path> [--fresh [--yes]] [--max-iter N] [--extend-iter N] [--until HH:MM] [--base REF] [--max-concurrent N] [--ignore-deps] [-f] [--dry-run]
        nightshift run --next [--until HH:MM] [--max-concurrent N] [--jobs N] [-f] [--dry-run]
   -base string
         branch/ref/sha the run starts from (default: spec base:/NIGHTSHIFT_BASE/origin HEAD)
   -dry-run
         resolve, validate, and print the plan; run nothing
+  -extend-iter string
+        extra iterations granted past max-iter while each lands a green commit (default: spec/env/10)
   -f	follow: show runner.log and the rendered agent.log live (prefixed per spec under --next --jobs)
   -follow
         alias for -f
@@ -236,6 +238,16 @@ usage: nightshift run <spec-name|path> [--fresh [--yes]] [--max-iter N] [--until
   -yes
         assume yes to the --fresh confirmation
 ```
+
+Past `max_iter`, a run earns extra iterations one at a time, up to
+`extend_iter` (default 10, `--extend-iter N`, `0` disables): when the cap is
+reached, one more iteration is granted only if the iteration that just
+finished was a worker (not planning) iteration, verified green, and added at
+least one commit. Extensions count in `iterations` like any other, and every
+other stop (red streak, stall, blocked, complete, interrupt, `--until`,
+usage limit) still wins. Each grant is logged in `runner.log` and appended to
+`PROGRESS.md`, and recorded as `extended=N` in history and `extended: N` in
+the result note. A run that stops earning ends `capped` as before.
 
 Flags may appear before or after the spec name. Without `--next`, exactly
 one positional (a slug, a bare filename, or a path) is required; with
@@ -291,7 +303,7 @@ its QUESTION.md and stays blocked.
 | `blocked` | 2 | the agent wrote `QUESTION.md` and stopped |
 | `red` | 3 | two consecutive iterations left verify red |
 | `stalled` | 4 | two iterations made no progress |
-| `capped` | 5 | hit `max_iter` before completing |
+| `capped` | 5 | hit `max_iter` (plus any `extend_iter` extras it earned) before completing |
 | `window-closed` | 6 | the `--until` deadline arrived mid-run |
 | `busy` | 7 | another process already holds this spec, or every concurrency slot is full |
 | `interrupted` | 8 | SIGINT/SIGTERM arrived; resumable |
@@ -675,6 +687,7 @@ env > config > default.)
 | `model:` | `NIGHTSHIFT_MODEL` | `NIGHTSHIFT_MODEL` | `sonnet` |
 | `planner_model:` | `NIGHTSHIFT_PLANNER_MODEL` | `NIGHTSHIFT_PLANNER_MODEL` | `opus` |
 | `max_iter:` | `NIGHTSHIFT_MAX_ITER` | `NIGHTSHIFT_MAX_ITER` | `10` |
+| `extend_iter:` | `NIGHTSHIFT_EXTEND_ITER` | `NIGHTSHIFT_EXTEND_ITER` | `10` (0–50) |
 | `iter_timeout:` | `NIGHTSHIFT_ITER_TIMEOUT` | `NIGHTSHIFT_ITER_TIMEOUT` | `30m` |
 | `base:` | `NIGHTSHIFT_BASE` | `NIGHTSHIFT_BASE` | repo's `origin/HEAD`, then `main`, then `master` |
 | `review:` | `NIGHTSHIFT_REVIEW` | `NIGHTSHIFT_REVIEW` | `false` |
