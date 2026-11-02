@@ -19,10 +19,15 @@ import (
 type fakeGateVerifier struct {
 	calls []string
 	fn    func(n int, dir, cmd string) (string, error)
+	// ctxFn, when set, is used instead of fn and also sees the context.
+	ctxFn func(ctx context.Context, n int, dir, cmd string) (string, error)
 }
 
 func (f *fakeGateVerifier) Verify(ctx context.Context, dir string, egress []string, image, cmd string) (string, error) {
 	f.calls = append(f.calls, cmd)
+	if f.ctxFn != nil {
+		return f.ctxFn(ctx, len(f.calls), dir, cmd)
+	}
 	return f.fn(len(f.calls), dir, cmd)
 }
 
@@ -161,6 +166,107 @@ func TestGateWindowClosesDuringGates(t *testing.T) {
 	body := r.resultBody(StatusComplete)
 	if !strings.Contains(body, "gate: fail\n") || !strings.Contains(body, "## Acceptance gate") || !strings.Contains(body, "still bad") {
 		t.Fatalf("note:\n%s", body)
+	}
+}
+
+// deadlineGateRun builds a run with holdout+accept gates, until 11:00, where
+// the completing iteration moves the clock to just before the deadline.
+func deadlineGateRun(t *testing.T, fv *fakeGateVerifier, now *time.Time, nr *recordingNotifierForTest) *run {
+	t.Helper()
+	repo := newSourceRepo(t)
+	sb := newStubSandbox()
+	ga := gateAgent(t)
+	deadline := time.Date(2026, 1, 5, 11, 0, 0, 0, time.Local)
+	sb.agent = func(ctx context.Context, iter int, dir string) error {
+		if iter == 2 {
+			*now = deadline.Add(-300 * time.Millisecond)
+		}
+		return ga(ctx, iter, dir)
+	}
+	sb.verify = alwaysGreenVerify
+	r := newTestRun(t, repo, "accept: ./accept.sh\n", Options{Stdout: &bytes.Buffer{}, GateVerifier: fv, Notifier: nr, Until: "11:00", clock: func() time.Time { return *now }}, sb)
+	writeHoldout(t, holdoutSlugDir(r.opts.Home, "demo"), "zz_hold_test.go", "package main\n")
+	return r
+}
+
+func gateStatuses(g *gateOutcome) string {
+	var s []string
+	for _, x := range g.gates {
+		s = append(s, x.name+"="+x.status)
+	}
+	return strings.Join(s, ",")
+}
+
+func TestGateDeadlineDuringFirstGate(t *testing.T) {
+	now := time.Date(2026, 1, 5, 10, 0, 0, 0, time.Local)
+	fv := &fakeGateVerifier{}
+	fv.ctxFn = func(ctx context.Context, n int, dir, cmd string) (string, error) {
+		now = now.Add(time.Hour)
+		select {
+		case <-ctx.Done():
+		case <-time.After(10 * time.Second):
+			t.Error("ctx never cancelled")
+		}
+		return "", ctx.Err()
+	}
+	nr := &recordingNotifierForTest{}
+	r := deadlineGateRun(t, fv, &now, nr)
+	status := r.loop()
+	if status != StatusComplete {
+		t.Fatalf("status = %v", status)
+	}
+	if len(fv.calls) != 1 || r.st.GateHandbacks != 0 {
+		t.Fatalf("calls=%d handbacks=%d", len(fv.calls), r.st.GateHandbacks)
+	}
+	if r.gate == nil || r.gate.result != "skipped" || r.gate.reason != "window closed during gates" {
+		t.Fatalf("gate = %+v", r.gate)
+	}
+	if got := gateStatuses(r.gate); got != "holdout=timed out,accept=not run" {
+		t.Fatalf("statuses = %s", got)
+	}
+	if _, err := r.finish(status); err != nil {
+		t.Fatal(err)
+	}
+	if nr.urgent || strings.Contains(nr.title, "(gate failed)") {
+		t.Fatalf("notify = %q urgent=%v", nr.title, nr.urgent)
+	}
+	body := r.resultBody(StatusComplete)
+	for _, want := range []string{"gate: skipped", "- holdout: timed out", "- accept: not run"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "### holdout output") {
+		t.Fatalf("output block for timed out gate:\n%s", body)
+	}
+}
+
+func TestGateFailsThenDeadline(t *testing.T) {
+	now := time.Date(2026, 1, 5, 10, 0, 0, 0, time.Local)
+	fv := &fakeGateVerifier{fn: func(n int, dir, cmd string) (string, error) {
+		now = now.Add(2 * time.Hour)
+		return "bad\n", exit3()
+	}}
+	nr := &recordingNotifierForTest{}
+	r := deadlineGateRun(t, fv, &now, nr)
+	status := r.loop()
+	if status != StatusComplete {
+		t.Fatalf("status = %v", status)
+	}
+	if len(fv.calls) != 1 || r.st.GateHandbacks != 0 {
+		t.Fatalf("calls=%d handbacks=%d", len(fv.calls), r.st.GateHandbacks)
+	}
+	if r.gate == nil || r.gate.result != "fail" {
+		t.Fatalf("gate = %+v", r.gate)
+	}
+	if got := gateStatuses(r.gate); got != "holdout=fail,accept=not run" {
+		t.Fatalf("statuses = %s", got)
+	}
+	if _, err := r.finish(status); err != nil {
+		t.Fatal(err)
+	}
+	if !nr.urgent || !strings.HasSuffix(nr.title, " (gate failed)") {
+		t.Fatalf("notify = %q urgent=%v", nr.title, nr.urgent)
 	}
 }
 

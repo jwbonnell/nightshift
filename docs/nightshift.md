@@ -1001,8 +1001,11 @@ that, or with `gate_rounds: 0`, the run still ends `complete`, with `gate: fail`
 recorded and an urgent notification titled `... (gate failed)`. A gate error
 (workspace, overlay, sandbox create) is never handed back and records
 `gate: error`. Gates are skipped (`gate: skipped`) only if the `--until` window
-is already closed when the agent completes; a window that closes while the
-gates run keeps their real result and only skips the hand-back. A gate result
+is already closed when the agent completes. A window that closes while the
+gates run never turns into `fail`: a gate cut off by the deadline is recorded
+`timed out`, later gates `not run`, and the result is `skipped` (`window closed
+during gates`) unless a gate that finished really failed (`fail`, no hand-back).
+Neither `timed out` nor `not run` makes the notification urgent. A gate result
 is reported only on a run that ends `complete` (a run handed back and then
 capped, stalled or red has no `gate:`). No new status or exit code exists.
 

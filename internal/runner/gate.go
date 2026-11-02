@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -181,9 +182,12 @@ const holdoutBullet = "- **holdout** hidden acceptance tests failed. Their detai
 type gateRes struct {
 	name, cmd string
 	ok        bool
-	exit      int
-	logPath   string
-	out       string
+	// status is pass, fail, "timed out" (cut off by the --until deadline)
+	// or "not run" (the window closed before it started).
+	status  string
+	exit    int
+	logPath string
+	out     string
 }
 
 // gateOutcome is the last completion attempt's gate result: pass, fail,
@@ -298,7 +302,14 @@ func (r *run) runGates() (handedBack, interrupted bool) {
 	if sp.Accept != "" {
 		todo = append(todo, spec{"accept", sp.Accept, false})
 	}
-	for _, g := range todo {
+	for i, g := range todo {
+		if windowClosed() {
+			for _, rest := range todo[i:] {
+				out.gates = append(out.gates, gateRes{name: rest.name, cmd: rest.cmd, status: "not run"})
+				r.logf("gate: %s not run (window closed)", rest.name)
+			}
+			break
+		}
 		// Rebuilt per gate: accept runs in a holdout-free tree so its
 		// output (shown to the agent) can't name holdout files.
 		dir, err := buildGateWorkspace(r.gateWSDir(), sp.Repo, ref)
@@ -323,8 +334,12 @@ func (r *run) runGates() (handedBack, interrupted bool) {
 			}
 			out.holdoutFiles = files
 		}
+		// Mirrors iterCtx: the deadline, not iter_timeout, bounds this gate.
+		byDeadline := !r.deadline.IsZero() && r.deadline.Sub(clock()) < sp.IterTimeout
 		ctx, cancel := r.iterCtx(r.deadline, clock)
 		o, verr := v.Verify(ctx, dir, sp.Egress, sp.Image, g.cmd)
+		// Read before cancel(), which makes Err() report Canceled.
+		ctxErr := ctx.Err()
 		cancel()
 		if r.interrupted() {
 			return false, true
@@ -334,8 +349,12 @@ func (r *run) runGates() (handedBack, interrupted bool) {
 			gateErr(verr)
 			return false, false
 		}
-		res := gateRes{name: g.name, cmd: g.cmd, ok: verr == nil, out: o, logPath: filepath.Join(r.gateLogDir(), g.name+".log")}
-		if verr != nil {
+		res := gateRes{name: g.name, cmd: g.cmd, ok: verr == nil, status: "pass", out: o, logPath: filepath.Join(r.gateLogDir(), g.name+".log")}
+		timedOut := verr != nil && byDeadline && ctxErr == context.DeadlineExceeded
+		if timedOut {
+			res.status = "timed out"
+		} else if verr != nil {
+			res.status = "fail"
 			res.exit = exitCodeOf(verr)
 		}
 		if err := os.WriteFile(res.logPath, []byte(o), 0o644); err != nil {
@@ -343,21 +362,40 @@ func (r *run) runGates() (handedBack, interrupted bool) {
 			return false, false
 		}
 		out.gates = append(out.gates, res)
-		if res.ok {
+		switch res.status {
+		case "pass":
 			r.logf("gate: %s pass", g.name)
-		} else {
+		case "timed out":
+			r.logf("gate: %s timed out (window closed)", g.name)
+			for _, rest := range todo[i+1:] {
+				out.gates = append(out.gates, gateRes{name: rest.name, cmd: rest.cmd, status: "not run"})
+				r.logf("gate: %s not run (window closed)", rest.name)
+			}
+		default:
 			r.logf("gate: %s fail (exit %d)", g.name, res.exit)
+		}
+		if timedOut {
+			break
 		}
 	}
 
 	var failing []gateRes
+	allPass := true
 	for _, g := range out.gates {
-		if !g.ok {
+		if g.status == "fail" {
 			failing = append(failing, g)
+		}
+		if g.status != "pass" {
+			allPass = false
 		}
 	}
 	if len(failing) == 0 {
-		out.result = "pass"
+		if allPass {
+			out.result = "pass"
+		} else {
+			out.result, out.reason = "skipped", "window closed during gates"
+			r.logf("gate: skipped (window closed during gates)")
+		}
 		r.gate = out
 		return false, false
 	}
@@ -398,12 +436,16 @@ func (r *run) writeGateSection(b *strings.Builder) {
 	switch g.result {
 	case "skipped":
 		fmt.Fprintf(b, "skipped (%s)\n\n", g.reason)
-		return
+		if len(g.gates) == 0 {
+			return
+		}
 	case "error":
 		fmt.Fprintf(b, "gate error: %v\n\n", g.err)
 	}
 	for _, x := range g.gates {
-		if x.ok {
+		if x.status == "timed out" || x.status == "not run" {
+			fmt.Fprintf(b, "- %s: %s\n", x.name, x.status)
+		} else if x.ok {
 			fmt.Fprintf(b, "- %s: pass\n", x.name)
 		} else {
 			fmt.Fprintf(b, "- %s: fail (exit %d) — %s\n", x.name, x.exit, x.logPath)
@@ -418,7 +460,7 @@ func (r *run) writeGateSection(b *strings.Builder) {
 		b.WriteString("\n")
 	}
 	for _, x := range g.gates {
-		if !x.ok {
+		if x.status == "fail" {
 			fmt.Fprintf(b, "### %s output (last 80 lines)\n\n%s\n", x.name, fenced(tailLines(sanitizeGateOutput(x.out), 80)))
 		}
 	}
