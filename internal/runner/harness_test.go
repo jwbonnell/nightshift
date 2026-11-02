@@ -220,6 +220,15 @@ func newTestRun(t *testing.T, repo, extraFrontmatter string, opts Options, sb *s
 	}
 	sp.BaseSHA = sha
 
+	// Resolve usage-limit settings the way Run does, so a test's
+	// NIGHTSHIFT_LIMIT_* env vars take effect instead of the 6h default.
+	if opts.limits == (limitConfig{}) {
+		opts.limits, err = resolveLimitConfig(opts)
+		if err != nil {
+			t.Fatalf("resolveLimitConfig: %v", err)
+		}
+	}
+
 	r, err := setup(opts, sp)
 	if err != nil {
 		t.Fatalf("setup: %v", err)
