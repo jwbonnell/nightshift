@@ -525,6 +525,12 @@ func reviewLenses(ctx context.Context, rv Reviewer, p reviewParams) (results []l
 		return nil, names, head, buildErr
 	}
 
+	var shots string
+	if dir, ok := repoScreenshotsDir(filepath.Join(ws, "repo")); ok {
+		list, more := screenshotPNGs(filepath.Join(ws, "repo"), dir)
+		shots = screenshotsReviewSection(list, more, "repo/")
+	}
+
 	clock := p.clock
 	if clock == nil {
 		clock = time.Now
@@ -541,6 +547,13 @@ func reviewLenses(ctx context.Context, rv Reviewer, p reviewParams) (results []l
 		if perr != nil {
 			results = append(results, lensResult{lens: name, verdict: "error", text: "Review failed: " + perr.Error(), err: perr})
 			continue
+		}
+
+		if shots != "" {
+			if !strings.HasSuffix(prompt, "\n") {
+				prompt += "\n"
+			}
+			prompt += shots
 		}
 
 		lensCtx := ctx

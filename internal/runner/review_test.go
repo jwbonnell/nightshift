@@ -248,3 +248,97 @@ func TestReviewDiffHonorsContext(t *testing.T) {
 		t.Fatalf("err = %v, want mention of diffstat", err)
 	}
 }
+
+// shotsPrompt commits files (path -> content) to a fresh source repo, runs
+// one general-lens review over it and returns the prompt plus the baseline
+// lens prompt.
+func shotsPrompt(t *testing.T, files map[string]string, links map[string]string) (got, base string) {
+	t.Helper()
+	repo := newSourceRepo(t)
+	baseRev := mustGit(t, repo, "rev-parse", "HEAD")
+	for name, content := range files {
+		full := filepath.Join(repo, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, target := range links {
+		if err := os.Symlink(target, filepath.Join(repo, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustGit(t, repo, "add", "-A")
+	mustGit(t, repo, "commit", "-q", "-m", "shots")
+	home := t.TempDir()
+	rv := &seqReviewer{texts: []string{"VERDICT: approve\nSUMMARY: ok."}}
+	p := reviewParams{home: home, stateRoot: t.TempDir(), slug: "demo", repo: repo, base: baseRev, ref: "main", model: "opus", lenses: []string{"general"}}
+	if _, _, _, err := reviewLenses(context.Background(), rv, p); err != nil {
+		t.Fatalf("reviewLenses: %v", err)
+	}
+	base, err := lensPrompt(home, "general")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rv.prompts[0], base
+}
+
+const shotsDecl = "screenshots: build/screens/\n"
+
+func TestReviewScreenshotsListed(t *testing.T) {
+	got, base := shotsPrompt(t, map[string]string{
+		".nightshift.md":        shotsDecl,
+		"build/screens/b.png":   "x",
+		"build/screens/a.png":   "x",
+		"build/screens/C.PNG":   "x",
+		"build/screens/n.txt":   "x",
+		"build/screens/z/d.png": "x",
+	}, nil)
+	want := base + "\n## Screenshots to look at\n\n- repo/build/screens/C.PNG\n- repo/build/screens/a.png\n- repo/build/screens/b.png\n- repo/build/screens/z/d.png\n" +
+		"\nOpen each one. Report anything a tester would notice in the first ten seconds that the diff does not explain.\n"
+	if !strings.HasSuffix(base, "\n") {
+		want = base + "\n" + want[len(base):]
+	}
+	if got != want {
+		t.Fatalf("prompt mismatch\ngot tail: %q\nwant tail: %q", got[len(base):], want[len(base):])
+	}
+}
+
+func TestReviewScreenshotsCap(t *testing.T) {
+	files := map[string]string{".nightshift.md": shotsDecl}
+	for i := 0; i < 45; i++ {
+		files[filepath.Join("build/screens", "s"+string(rune('a'+i/26))+string(rune('a'+i%26))+".png")] = "x"
+	}
+	got, _ := shotsPrompt(t, files, nil)
+	if n := strings.Count(got, "- repo/build/screens/"); n != 40 {
+		t.Fatalf("listed %d, want 40", n)
+	}
+	if !strings.Contains(got, "\n+5 more\n") {
+		t.Fatalf("missing +5 more:\n%s", got)
+	}
+}
+
+func TestReviewScreenshotsOmitted(t *testing.T) {
+	cases := map[string]struct {
+		files map[string]string
+		links map[string]string
+	}{
+		"not declared": {files: map[string]string{"build/screens/a.png": "x"}},
+		"dir missing":  {files: map[string]string{".nightshift.md": shotsDecl}},
+		"no pngs":      {files: map[string]string{".nightshift.md": shotsDecl, "build/screens/a.txt": "x"}},
+		"symlinked dir": {
+			files: map[string]string{".nightshift.md": shotsDecl, "other/a.png": "x"},
+			links: map[string]string{"build": "other"},
+		},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			got, base := shotsPrompt(t, c.files, c.links)
+			if got != base {
+				t.Fatalf("prompt changed: %q", got[len(base):])
+			}
+		})
+	}
+}

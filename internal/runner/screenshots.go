@@ -1,10 +1,18 @@
 package runner
 
 import (
+	"io/fs"
+	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
+	"unicode"
 )
+
+// maxScreenshotsListed caps how many images a review prompt names.
+const maxScreenshotsListed = 40
 
 // screenshotsRe matches the optional `screenshots: <dir>` declaration in a
 // repo's .nightshift.md. Only spaces and tabs may follow the colon: with (?m),
@@ -62,4 +70,54 @@ func screenshotsIterParagraph(dir string) string {
 // screenshotsPlanSentence is the sentence appended to the planning prompt.
 func screenshotsPlanSentence(dir string) string {
 	return "This repo has screenshots in " + dir + "; plan a step near the end that views them."
+}
+
+// screenshotPNGs lists the PNG files under root/dir as sorted repo-relative
+// slash paths, at most maxScreenshotsListed, with more = how many were cut.
+// Any symlinked component, or a non-directory, yields nothing, so a link
+// like build/screens -> /home/x can't leak host file names into a prompt.
+func screenshotPNGs(root, dir string) (list []string, more int) {
+	cur := root
+	for _, part := range strings.Split(filepath.ToSlash(dir), "/") {
+		cur = filepath.Join(cur, part)
+		fi, err := os.Lstat(cur)
+		if err != nil || fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+			return nil, 0
+		}
+	}
+	var all []string
+	_ = filepath.WalkDir(cur, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.Type().IsRegular() || strings.ToLower(filepath.Ext(path)) != ".png" {
+			return nil
+		}
+		rel, rerr := filepath.Rel(root, path)
+		if rerr != nil || strings.IndexFunc(rel, unicode.IsControl) >= 0 {
+			return nil
+		}
+		all = append(all, filepath.ToSlash(rel))
+		return nil
+	})
+	sort.Strings(all)
+	if len(all) > maxScreenshotsListed {
+		return all[:maxScreenshotsListed], len(all) - maxScreenshotsListed
+	}
+	return all, 0
+}
+
+// screenshotsReviewSection renders the "Screenshots to look at" block, or ""
+// when there is nothing to list. prefix is prepended to each path.
+func screenshotsReviewSection(list []string, more int, prefix string) string {
+	if len(list) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n## Screenshots to look at\n\n")
+	for _, p := range list {
+		b.WriteString("- " + prefix + p + "\n")
+	}
+	if more > 0 {
+		b.WriteString("+" + strconv.Itoa(more) + " more\n")
+	}
+	b.WriteString("\nOpen each one. Report anything a tester would notice in the first ten seconds that the diff does not explain.\n")
+	return b.String()
 }
