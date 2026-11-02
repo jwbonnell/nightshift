@@ -36,6 +36,7 @@ type Result struct {
 	Text           string // the full final answer text
 	CostUSD        float64
 	CostKnown      bool
+	transient      bool // set by opencode's Parse only
 }
 
 // Agent is the one interface every place nightshift runs a model goes

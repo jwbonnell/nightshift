@@ -1,6 +1,6 @@
 {"type":"text","part":{"text":"Checking rateLimit handling and rate-limited paths; quota and overloaded noted."}}
-{"type":"tool_use","tool":"grep","input":{"pattern":"rateLimit"},"output":"loop.go:512: // rate-limited, HTTP 503 overloaded quota"}
+{"type":"tool_use","part":{"tool":"grep","state":{"input":{"pattern":"rateLimit"},"output":"loop.go:512: // rate-limited, HTTP 503 overloaded quota"}}}
 {"type":"text","part":{"text":"See line 512 for HTTP 503 handling."}}
-{"type":"tool_use","tool":"bash","state":{"output":"rate_limit quota overloaded line 512 HTTP 503"}}
+{"type":"tool_use","part":{"tool":"bash","state":{"output":"rate_limit quota overloaded line 512 HTTP 503"}}}
 {"type":"text","part":{"text":"Plan written to PROGRESS.md."}}
 {"type":"step_finish","part":{"cost":0.02}}

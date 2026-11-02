@@ -69,12 +69,11 @@ type opencodeEvent struct {
 // seen after the last "tool_use" event; CostUSD sums "step_finish" events'
 // part.cost. Errors come only from error signals: an "error" event, or a
 // raw line (not JSON) that matches transientRe. Text and tool output inside
-// JSON events are never matched. Transient is derived from the Result, so
-// the transient evidence is kept where Transient can see it: APIStatus is
-// the first transient error's status (else the first nonzero status), and
-// Message is the chosen error's own message (the first transient error,
-// else the first error) even when there is text, so the runner logs say
-// what went wrong and Transient can match transientRe against it.
+// JSON events are never matched.
+// Transient only reports what Parse decided: the chosen error is the first
+// transient one (else the first), APIStatus is its status (else the first
+// nonzero status), and Message is only a fallback: the first line of the
+// final text, else the chosen error's message, else "opencode error".
 func (opencodeAgent) Parse(out string) Result {
 	var res Result
 	var texts []string
@@ -145,8 +144,12 @@ func (opencodeAgent) Parse(out string) Result {
 				break
 			}
 		}
-		if chosen.msg != "" {
+		res.transient = chosen.transient
+		if res.Message == "" {
 			res.Message = chosen.msg
+		}
+		if res.Message == "" {
+			res.Message = "opencode error"
 		}
 	}
 	return res
@@ -157,9 +160,9 @@ func (opencodeAgent) Parse(out string) Result {
 // marker the way claude's session-limit message does.
 func (opencodeAgent) RateLimited(Result) bool { return false }
 
-// Transient reports whether r is an error worth retrying: status 429 or
-// 5xx, or a rate-limit/quota/overload message. Parse stores the transient
-// error's status and message in r for exactly this check.
+// Transient reports whether r is an error worth retrying. Parse decides
+// that per error signal (status 429 or 5xx, or a rate-limit/quota/overload
+// message) and records it in r; the agent's own text never counts.
 func (opencodeAgent) Transient(r Result) bool {
-	return r.IsError && (transientStatus(r.APIStatus) || transientRe.MatchString(r.Message))
+	return r.IsError && r.transient
 }

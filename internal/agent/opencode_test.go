@@ -117,6 +117,9 @@ func TestOpencodeParseFixtures(t *testing.T) {
 		if res.Text != "Plan written to PROGRESS.md." {
 			t.Errorf("Text = %q", res.Text)
 		}
+		if !res.CostKnown || res.CostUSD != 0.02 {
+			t.Errorf("cost = %v known=%v", res.CostUSD, res.CostKnown)
+		}
 	})
 
 	t.Run("error_model", func(t *testing.T) {
@@ -160,6 +163,52 @@ func TestOpencodeTransient(t *testing.T) {
 			}
 			if a.RateLimited(res) {
 				t.Errorf("RateLimited(%s) = true, want always false for opencode", c.file)
+			}
+		})
+	}
+}
+
+func TestOpencodeTransientSignals(t *testing.T) {
+	a := opencodeAgent{}
+	const model = `{"type":"error","message":"model not found: foo/bar"}`
+	cases := []struct {
+		name      string
+		out       string
+		transient bool
+		status    int
+		message   string
+	}{
+		{"noisy text then 400",
+			`{"type":"text","part":{"text":"checking rate limits"}}` + "\n" + `{"type":"error","status":400}`,
+			false, 400, "checking rate limits"},
+		{"permanent then transient",
+			`{"type":"error","status":400,"message":"bad request"}` + "\n" + `{"type":"error","status":503,"message":"upstream unavailable"}`,
+			true, 503, "upstream unavailable"},
+		{"transient then permanent",
+			`{"type":"error","status":503,"message":"upstream unavailable"}` + "\n" + `{"type":"error","status":400,"message":"bad request"}`,
+			true, 503, "upstream unavailable"},
+		{"stderr 429 plus permanent",
+			"HTTP 429 Too Many Requests\n" + `{"type":"error","status":400,"message":"bad request"}`,
+			true, 0, "HTTP 429 Too Many Requests"},
+		{"text plus model error",
+			`{"type":"text","part":{"text":"Working on it"}}` + "\n" + model,
+			false, 0, "Working on it"},
+		{"bare error", `{"type":"error"}`, false, 0, "opencode error"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res := a.Parse(c.out)
+			if !res.IsError {
+				t.Fatalf("not an error: %+v", res)
+			}
+			if got := a.Transient(res); got != c.transient {
+				t.Errorf("Transient = %v, want %v", got, c.transient)
+			}
+			if res.APIStatus != c.status {
+				t.Errorf("APIStatus = %d, want %d", res.APIStatus, c.status)
+			}
+			if res.Message != c.message {
+				t.Errorf("Message = %q, want %q", res.Message, c.message)
 			}
 		})
 	}
