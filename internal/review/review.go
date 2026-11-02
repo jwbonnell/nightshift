@@ -355,7 +355,7 @@ func (r *runner) reviewOne(ctx context.Context, kind forge.Kind, repoPath string
 	if err != nil {
 		return r.failOutcome(ctx, label, slug, err)
 	}
-	prompt := buildPrompt(promptText, kind, repoPath, label, change.Title, change.Author, change.TargetBranch, base, head, inputs, change.Description)
+	prompt := buildPrompt(promptText, kind, repoPath, label, change.Title, change.Author, change.TargetBranch, base, head, inputs, change.Description, treeDir)
 
 	logW := agentLogWriter(homeDir, label, r.opts.Now())
 	defer logW.Close()

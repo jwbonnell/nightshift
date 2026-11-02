@@ -1180,6 +1180,34 @@ results dir isn't writable), the result note's `## Review` line reads
 `<verdict> — (note not written: <error>)` instead of a path — the run's
 status is unaffected either way.
 
+### Screenshots
+
+A repo opts in with one line anywhere in its `.nightshift.md`:
+
+```
+screenshots: build/screens/
+```
+
+The value is a repo-relative directory (trailing `/` optional); the first
+match wins, and a missing file or no match means not declared. Repos without
+the line see no prompt changes at all.
+
+When declared:
+
+- The iteration prompt gains a paragraph telling the agent to open the images
+  in that directory before `touch .spec-complete` on a UI spec and to record
+  one line per image in `PROGRESS.md`; the planning prompt gains one sentence
+  asking for a late step that views them.
+- Both review prompts (the runner's finish/`nightshift review` reviewers, and
+  `nightshift pr`'s) gain a `Screenshots to look at` section listing the PNGs
+  (repo-relative, sorted, at most 40, then `+K more`) with an instruction to
+  open each one. The section is omitted when the directory is missing or has
+  no PNGs. Review workspaces and `pr` trees hold only committed files, so
+  gitignored screenshots reach the worker iteration but not reviewers.
+
+nightshift never generates, compares or inlines images; that is the repo's
+test suite's job.
+
 ### Fix rounds
 
 `review_rounds: N` (0-5, default `0`) turns a `review: true`/lens-list

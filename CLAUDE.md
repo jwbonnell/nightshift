@@ -76,7 +76,11 @@ and clone management, `sandbox.go`/`prompt.go` the sbx backend and prompts,
 `status.go` the `status` command (one unified table of runs/ready/drafts/done),
 `logs.go`/`follow.go`/`logview.go` the `logs` command, the `run -f`
 follower, and the agent.log renderer, `lint.go` the `lint` checks and the
-`BaseVerifier` interface behind check 9's sandboxed verify-on-base) — see
+`BaseVerifier` interface behind check 9's sandboxed verify-on-base,
+`screenshots.go` the optional `screenshots:` line of `.nightshift.md`, which adds a
+screenshots paragraph to iteration, planning and review prompts;
+`internal/review/prompt.go` has its own copy for `nightshift pr`, no shared helper
+because of package boundaries) — see
 `PROGRESS.md` (local, gitignored) for exactly how each piece arrived,
 including a few deliberate forward-declarations that got relocated once
 their target file existed. nightshift-deps added `deps.go` (the dependency

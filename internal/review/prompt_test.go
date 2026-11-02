@@ -3,6 +3,7 @@ package review
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -126,7 +127,7 @@ func TestTruncateUTF8Valid(t *testing.T) {
 
 func TestBuildPrompt(t *testing.T) {
 	inputs := reviewInputs{Stat: "file.go | 2 +-", ChangedLines: 5}
-	got := buildPrompt("PROMPT TEXT", forge.KindGitHub, "owner/repo", "owner/repo#4", "Fix bug", "alice", "main", "base123", "head456", inputs, "a description")
+	got := buildPrompt("PROMPT TEXT", forge.KindGitHub, "owner/repo", "owner/repo#4", "Fix bug", "alice", "main", "base123", "head456", inputs, "a description", "")
 
 	for _, want := range []string{
 		"PROMPT TEXT\n\n## PR context\n",
@@ -154,5 +155,72 @@ func TestLastLines(t *testing.T) {
 	}
 	if got := lastLines("a\nb\nc\nd", 2); got != "c\nd" {
 		t.Errorf("lastLines = %q, want %q", got, "c\nd")
+	}
+}
+
+func writeTreeFile(t *testing.T, root, rel, content string) {
+	t.Helper()
+	p := filepath.Join(root, rel)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func promptFor(tree string) string {
+	return buildPrompt("P", forge.KindGitHub, "o/r", "o/r#1", "t", "a", "main", "b", "h", reviewInputs{Stat: "s"}, "d", tree)
+}
+
+func TestBuildPromptNoScreenshotsUnchanged(t *testing.T) {
+	tree := t.TempDir()
+	base := promptFor("")
+	if got := promptFor(tree); got != base {
+		t.Fatalf("no declaration changed prompt:\n%s", got)
+	}
+	writeTreeFile(t, tree, ".nightshift.md", "screenshots: build/screens/\n")
+	if got := promptFor(tree); got != base {
+		t.Fatalf("missing dir changed prompt:\n%s", got)
+	}
+	if err := os.MkdirAll(filepath.Join(tree, "build/screens"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTreeFile(t, tree, "build/screens/notes.txt", "x")
+	if got := promptFor(tree); got != base {
+		t.Fatalf("empty dir changed prompt:\n%s", got)
+	}
+}
+
+func TestBuildPromptScreenshots(t *testing.T) {
+	tree := t.TempDir()
+	writeTreeFile(t, tree, ".nightshift.md", "x\nscreenshots: build/screens\n")
+	writeTreeFile(t, tree, "build/screens/b.png", "")
+	writeTreeFile(t, tree, "build/screens/a.png", "")
+	got := promptFor(tree)
+	want := "\n## Screenshots to look at\n\n- build/screens/a.png\n- build/screens/b.png\n\nOpen each one. Report anything a tester would notice in the first ten seconds that the diff does not explain.\n"
+	if !strings.Contains(got, want) {
+		t.Fatalf("missing section:\n%s", got)
+	}
+}
+
+func TestBuildPromptScreenshotsCap(t *testing.T) {
+	tree := t.TempDir()
+	writeTreeFile(t, tree, ".nightshift.md", "screenshots: s/\n")
+	for i := 0; i < 43; i++ {
+		writeTreeFile(t, tree, filepath.Join("s", "img"+strconv.Itoa(100+i)+".png"), "")
+	}
+	got := promptFor(tree)
+	if strings.Count(got, "- s/img") != 40 || !strings.Contains(got, "+3 more\n") {
+		t.Fatalf("cap wrong:\n%s", got)
+	}
+}
+
+func TestParseScreenshotsDir(t *testing.T) {
+	for in, want := range map[string]string{"screenshots: a/b/": "a/b", "screenshots: a": "a", "screenshots:\nfoo": "", "none": "", "screenshots: /abs": "", "screenshots: ../x": ""} {
+		got, ok := parseScreenshotsDir([]byte(in))
+		if got != want || ok != (want != "") {
+			t.Errorf("%q = %q,%v", in, got, ok)
+		}
 	}
 }
