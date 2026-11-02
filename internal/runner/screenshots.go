@@ -44,3 +44,22 @@ func repoScreenshotsDir(repo string) (string, bool) {
 	}
 	return parseScreenshotsDir([]byte(b))
 }
+
+// screenshotsIterParagraph is the paragraph appended to the iteration
+// prompt when a repo declares a screenshots directory.
+func screenshotsIterParagraph(dir string) string {
+	return "Screenshots: after verify, this repo writes first-frame screenshots of\n" +
+		"its screens to " + dir + ". Before you run 'touch .spec-complete' on a spec that\n" +
+		"touches UI, open every image there that your spec could affect and write\n" +
+		"one line per image in PROGRESS.md: what it shows, and whether it matches\n" +
+		"the spec. An image that shows nothing interactive, overlapping or\n" +
+		"clipped text, or an element the spec requires but you cannot see, blocks\n" +
+		"completion exactly like a red test. Do not run the verify command\n" +
+		"yourself to produce them if that is expensive; read whatever is already\n" +
+		"in " + dir + " from the last verify, and say so if it is empty."
+}
+
+// screenshotsPlanSentence is the sentence appended to the planning prompt.
+func screenshotsPlanSentence(dir string) string {
+	return "This repo has screenshots in " + dir + "; plan a step near the end that views them."
+}
