@@ -30,6 +30,13 @@ Linux only. `sbx` must be installed and configured (`sbx secret ls` should
 show an `anthropic` service secret) on the host; `claude` runs only inside
 the sandbox template, never on the host.
 
+## Skills and backlog
+
+[`skills/nightshift-spec/`](skills/nightshift-spec/) is an agent skill for drafting specs
+and reviewing runs; [`skills/README.md`](skills/README.md) says how to install it for
+Claude Code, Claude Desktop or opencode. [`docs/backlog.md`](docs/backlog.md) lists
+known leftovers, deferred ideas and lessons from running nightshift.
+
 ## Build
 
 ```sh
