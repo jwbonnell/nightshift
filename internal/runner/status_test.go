@@ -635,9 +635,7 @@ func TestStatusTableUnified(t *testing.T) {
 		"fresh ready - - 2026-10-24 07:00 alpha -",
 		"waity ready (waits on fresh) - - 2026-10-24 06:00 beta -",
 		"drafty draft - - 2026-10-24 10:00 beta -",
-		"old1 done 2 1 2026-10-23 12:00 alpha -",
-		"nodone done - - 2026-10-16 12:00 alpha -",
-		"old10 done 2 1 2026-10-14 12:00 beta -",
+		"+3 done (--done N, --since <dur> or --all to show)",
 		"1 complete — review and merge, then nightshift done <slug> (or nightshift done --complete)",
 	}
 	g := norm(got)
@@ -765,9 +763,13 @@ func TestStatusRepoFilter(t *testing.T) {
 	if strings.Contains(out, "alpha") || !statusLineHas(out, "capd", "beta") {
 		t.Fatalf("repo filter:\n%s", out)
 	}
-	// The only beta done row (old10) fits under the default count.
-	if !statusLineHas(out, "old10", "done") || strings.Contains(out, "older done") || strings.Contains(out, "more than") {
+	// The only beta done row (old10) is hidden by default and counted.
+	if statusLineHas(out, "old10", "done") || !strings.Contains(out, "+1 done (--done N, --since <dur> or --all to show)\n") {
 		t.Fatalf("done rows under --repo:\n%s", out)
+	}
+	out2 := statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now, Repo: "beta", DoneLimit: 3})
+	if !statusLineHas(out2, "old10", "done") || strings.Contains(out2, "older done") || strings.Contains(out2, "more than") {
+		t.Fatalf("done rows under --repo --done 3:\n%s", out2)
 	}
 	if strings.Contains(out, "complete —") {
 		t.Fatalf("hint should be absent (no complete row kept):\n%s", out)
@@ -886,13 +888,14 @@ func doneSlugs(out string) []string {
 func TestStatusDoneDefaultCount(t *testing.T) {
 	homeDir, stateRoot, now := doneCountFixture(t)
 	out := statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now})
-	if got := strings.Join(doneSlugs(out), ","); got != "d1,d2,d3" {
+	if got := strings.Join(doneSlugs(out), ","); got != "" {
 		t.Fatalf("done rows %q:\n%s", got, out)
 	}
 	if !statusLineHas(out, "fin", "complete") || !statusLineHas(out, "capd", "capped") {
 		t.Fatalf("complete/capped rows must stay:\n%s", out)
 	}
-	if !strings.Contains(out, "+2 older done (--all to show)\n") || strings.Contains(out, "more than") {
+	if !strings.Contains(out, "+5 done (--done N, --since <dur> or --all to show)\n") ||
+		strings.Contains(out, "older done") || strings.Contains(out, "more than") {
 		t.Fatalf("footer:\n%s", out)
 	}
 }
@@ -904,6 +907,7 @@ func TestStatusDoneFlag(t *testing.T) {
 		want   string
 		footer string
 	}{
+		{3, "d1,d2,d3", "+2 older done (--all to show)\n"},
 		{1, "d1", "+4 older done (--all to show)\n"},
 		{DoneNone, "", "+5 older done (--all to show)\n"},
 		{10, "d1,d2,d3,d4,d5", ""},
@@ -911,6 +915,9 @@ func TestStatusDoneFlag(t *testing.T) {
 		out := statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now, DoneLimit: c.limit})
 		if got := strings.Join(doneSlugs(out), ","); got != c.want {
 			t.Errorf("limit %d: done rows %q:\n%s", c.limit, got, out)
+		}
+		if strings.Contains(out, "(--done N,") {
+			t.Errorf("limit %d: default footer for explicit limit:\n%s", c.limit, out)
 		}
 		if c.footer == "" {
 			if strings.Contains(out, "older done") {
@@ -926,13 +933,21 @@ func TestStatusDoneWithRepo(t *testing.T) {
 	// d1,d3,d4,d5 alpha; d2 beta.
 	homeDir, stateRoot, now := doneCountFixture(t, "alpha", "beta", "alpha", "alpha", "alpha")
 	out := statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now, Repo: "alpha"})
+	if got := strings.Join(doneSlugs(out), ","); got != "" || !strings.Contains(out, "+4 done (--done N, --since <dur> or --all to show)\n") {
+		t.Fatalf("alpha default:\n%s", out)
+	}
+	out = statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now, Repo: "beta"})
+	if got := strings.Join(doneSlugs(out), ","); got != "" || !strings.Contains(out, "+1 done (--done N, --since <dur> or --all to show)\n") {
+		t.Fatalf("beta default:\n%s", out)
+	}
+	out = statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now, Repo: "alpha", DoneLimit: 3})
 	if got := strings.Join(doneSlugs(out), ","); got != "d1,d3,d4" {
 		t.Fatalf("done rows %q:\n%s", got, out)
 	}
 	if !strings.Contains(out, "+1 older done (--all to show)\n") {
 		t.Fatalf("footer counts only alpha rows:\n%s", out)
 	}
-	out = statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now, Repo: "beta"})
+	out = statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: now, Repo: "beta", DoneLimit: 3})
 	if got := strings.Join(doneSlugs(out), ","); got != "d2" || strings.Contains(out, "older done") {
 		t.Fatalf("beta:\n%s", out)
 	}
@@ -976,5 +991,25 @@ func TestStatusPlannedInReadyGroup(t *testing.T) {
 	if len(lines) != 3 || !strings.HasPrefix(lines[1], "bad") || !strings.HasPrefix(lines[2], "pln") ||
 		!strings.Contains(lines[2], "planned") {
 		t.Fatalf("output = %q, want attention row (bad) before ready-group row pln planned", buf.String())
+	}
+}
+
+func TestStatusDefaultNoDoneNoFooter(t *testing.T) {
+	homeDir := t.TempDir()
+	stateRoot := home.RunsDir(homeDir)
+	writeReadySpec(t, homeDir, "only", "", "")
+	out := statusOut(t, homeDir, stateRoot, StatusTableOptions{Now: time.Now()})
+	if !statusLineHas(out, "only", "ready") {
+		t.Fatalf("ready row missing:\n%s", out)
+	}
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(l, "+") {
+			t.Fatalf("unexpected footer %q:\n%s", l, out)
+		}
+	}
+	for _, bad := range []string{"done (--done", "older done", "more than"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("unexpected %q:\n%s", bad, out)
+		}
 	}
 }

@@ -108,13 +108,15 @@ type StatusTableOptions struct {
 	SinceText string        // the --since text as given, for the footer; empty means Since.String()
 	Repo      string        // keep only rows whose REPO equals this
 	// DoneLimit is how many of the newest done rows to show when neither
-	// All nor Since is set. Zero means not set (DefaultDoneLimit); any
-	// negative value, conventionally DoneNone, shows no done rows.
+	// All nor Since is set. Zero means not set (DefaultDoneLimit, so no done
+	// rows, with the default-view footer); a positive N shows the N newest;
+	// any negative value, conventionally DoneNone (--done 0), shows none.
 	DoneLimit int
 }
 
-// DefaultDoneLimit is how many done rows the default view shows.
-const DefaultDoneLimit = 3
+// DefaultDoneLimit is how many done rows the default view shows: none.
+// Done rows appear only with --done N, --since or --all.
+const DefaultDoneLimit = 0
 
 // DoneNone is the DoneLimit that hides every done row (--done 0).
 const DoneNone = -1
@@ -442,6 +444,8 @@ func PrintStatusTable(w io.Writer, homeDir, stateRoot string, o StatusTableOptio
 	if hidden > 0 {
 		if o.Since > 0 {
 			fmt.Fprintf(w, "+%d done more than %s ago (--all to show)\n", hidden, windowText)
+		} else if o.DoneLimit == 0 {
+			fmt.Fprintf(w, "+%d done (--done N, --since <dur> or --all to show)\n", hidden)
 		} else {
 			fmt.Fprintf(w, "+%d older done (--all to show)\n", hidden)
 		}

@@ -431,16 +431,17 @@ Rows are grouped: active (running/waiting), needs attention (any run status
 but `complete`), complete, ready, draft, done; newest `UPDATED` first within
 a group, ties by slug.
 
-Only done rows are ever hidden; every other status always shows. By
-default the 3 newest done rows are shown. `--done N` shows the N newest
-instead (a whole number, 0 or more; 0 hides every done row). `--since
+Only done rows are ever hidden; every other status always shows. Done
+rows are hidden by default. `--done N` shows the N newest
+(a whole number, 0 or more; 0 hides every done row). `--since
 <dur>` (`3d` or any positive Go duration) instead shows every done row
 updated inside that window, with no count limit. `--all` shows
 everything. `--done`, `--since` and `--all` are mutually exclusive.
 `--repo <name>` keeps only rows whose `REPO` matches exactly. Flags are
 not accepted with a slug. When done rows are hidden a footer reads `+N
-older done (--all to show)`, or with `--since` `+N done more than
-<window> ago (--all to show)` (counting only rows `--repo` keeps); if
+done (--done N, --since <dur> or --all to show)` in the default view,
+`+N older done (--all to show)` with `--done N`, or with `--since` `+N
+done more than <window> ago (--all to show)` (counting only rows `--repo` keeps); if
 nothing remains only the footer prints. After the table (and any `usage
 limit: until …` line), if complete rows are shown: `N complete — review
 and merge, then nightshift done <slug> (or nightshift done --complete)`.
