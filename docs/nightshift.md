@@ -506,7 +506,9 @@ eval "$(nightshift completion bash)"                                            
 ```
 
 Tab then completes subcommand names, each subcommand's flags, and spec
-slugs from the folder that subcommand reads:
+slugs from the folder that subcommand reads. Values containing `:` or `=`
+(`--until 06:00`, `--until=06:00`) are handled, and `--flag=<Tab>` completes
+that flag's values:
 
 | Subcommand | Completes |
 |---|---|

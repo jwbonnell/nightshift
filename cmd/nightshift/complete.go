@@ -121,7 +121,32 @@ func cmdComplete(words []string, stdout io.Writer) int {
 	return 0
 }
 
+// valueCandidates completes the value of value flag n of c given the text
+// typed so far.
+func valueCandidates(h string, c *completionCmd, n, cur string) []string {
+	switch {
+	case c.name == "new" && n == "repo":
+		return []string{"__dirs__"}
+	case c.name == "review" && n == "lens":
+		return completeLenses(h, cur)
+	}
+	return nil
+}
+
 func completeFor(h string, c *completionCmd, prev []string, cur string) []string {
+	if i := strings.Index(cur, "="); i > 0 && strings.HasPrefix(cur, "-") {
+		n, ok := c.valueFlag(cur[:i])
+		if !ok {
+			return nil
+		}
+		cands := valueCandidates(h, c, n, cur[i+1:])
+		for j, v := range cands {
+			if v != "__dirs__" {
+				cands[j] = cur[:i+1] + v
+			}
+		}
+		return cands
+	}
 	if strings.HasPrefix(cur, "-") {
 		var out []string
 		for _, f := range c.flags {
@@ -133,13 +158,7 @@ func completeFor(h string, c *completionCmd, prev []string, cur string) []string
 	}
 	if len(prev) > 0 {
 		if n, ok := c.valueFlag(prev[len(prev)-1]); ok {
-			switch {
-			case c.name == "new" && n == "repo":
-				return []string{"__dirs__"}
-			case c.name == "review" && n == "lens":
-				return completeLenses(h, cur)
-			}
-			return nil
+			return valueCandidates(h, c, n, cur)
 		}
 	}
 	var positional []string
@@ -150,7 +169,7 @@ func completeFor(h string, c *completionCmd, prev []string, cur string) []string
 			positional = append(positional, w)
 			continue
 		}
-		flagSeen[strings.TrimLeft(w, "-")] = true
+		flagSeen[strings.TrimLeft(strings.SplitN(w, "=", 2)[0], "-")] = true
 		if _, ok := c.valueFlag(w); ok {
 			i++
 		}
@@ -192,10 +211,11 @@ func completeFor(h string, c *completionCmd, prev []string, cur string) []string
 	seen := map[string]bool{}
 	lc := strings.ToLower(cur)
 	for _, s := range all {
-		if seen[s] || !strings.HasPrefix(strings.ToLower(s), lc) {
+		k := strings.ToLower(s)
+		if seen[k] || !strings.HasPrefix(k, lc) {
 			continue
 		}
-		seen[s] = true
+		seen[k] = true
 		typed := false
 		if c.multi {
 			for _, p := range positional {

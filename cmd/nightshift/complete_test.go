@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -74,6 +75,31 @@ func TestCompleteSubcommands(t *testing.T) {
 	}
 }
 
+func TestCompleteFlagEqualsValue(t *testing.T) {
+	completeHome(t)
+	if got := complete(t, "run", "--until=06:00", ""); got != lines("Demo", "alpha", "shared") {
+		t.Errorf("run --until=06:00: %q", got)
+	}
+	if got := complete(t, "review", "--lens="); got != lines("--lens=general", "--lens=mine", "--lens=quality", "--lens=requirements", "--lens=security") {
+		t.Errorf("review --lens=: %q", got)
+	}
+	if got := complete(t, "review", "--lens=general,q"); got != lines("--lens=general,quality") {
+		t.Errorf("--lens=general,q: %q", got)
+	}
+	if got := complete(t, "run", "--bogus=1", ""); got != lines("Demo", "alpha", "shared") {
+		t.Errorf("run --bogus=1: %q", got)
+	}
+	if got := complete(t, "run", "--until="); got != "" {
+		t.Errorf("run --until=: %q", got)
+	}
+	if got := complete(t, "new", "--repo="); got != "__dirs__\n" {
+		t.Errorf("new --repo=: %q", got)
+	}
+	if got := complete(t, "run", "--next=true", ""); got != "" {
+		t.Errorf("run --next=true: %q", got)
+	}
+}
+
 func TestCompleteSlugsPerCommand(t *testing.T) {
 	completeHome(t)
 	cases := []struct {
@@ -109,6 +135,24 @@ func TestCompleteSlugsPerCommand(t *testing.T) {
 	for _, tc := range cases {
 		if got := complete(t, tc.words...); got != tc.want {
 			t.Errorf("%q: got %q want %q", tc.words, got, tc.want)
+		}
+	}
+
+	// Draft and ready slugs that differ only in case list once, draft spelling.
+	h := t.TempDir()
+	t.Setenv("NIGHTSHIFT_HOME", h)
+	for _, rel := range []string{"specs/draft/Shared.md", "specs/ready/shared.md"} {
+		p := filepath.Join(h, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, cur := range []string{"", "s", "S"} {
+		if got := complete(t, "lint", cur); got != lines("Shared") {
+			t.Errorf("lint %q: got %q", cur, got)
 		}
 	}
 }
@@ -234,21 +278,58 @@ func TestCompletionBashEndToEnd(t *testing.T) {
 	if err := os.WriteFile(f, script, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	run := func(words string, cword int) string {
+	const stubDef = `_get_comp_words_by_ref() {
+  [[ "$*" == "-n =: cur words cword" ]] || return 1
+  words=(nightshift run --until 06:00 d); cword=4; cur=d; STUB_USED=1
+}
+`
+	run := func(line, wordsExpr string, cword int, stub bool) (string, string) {
+		pre := ""
+		if stub {
+			pre = stubDef
+		}
 		c := exec.Command(bash, "--norc", "--noprofile", "-c",
-			`source "$1"; COMP_WORDS=(`+words+`); COMP_CWORD=`+string(rune('0'+cword))+`; _nightshift; printf "%s\n" "${COMPREPLY[@]}"`, "_", f)
+			`source "$1"; `+pre+`STUB_USED=0; COMP_LINE=$2; COMP_POINT=${#COMP_LINE}; COMP_WORDS=(`+wordsExpr+`); COMP_CWORD=`+strconv.Itoa(cword)+`; _nightshift; printf "%s\n" "${COMPREPLY[@]}"; echo "stub=$STUB_USED"`, "_", f, line)
 		c.Env = env
 		o, err := c.Output()
 		if err != nil {
 			t.Fatalf("bash: %v", err)
 		}
-		return string(o)
+		i := strings.LastIndex(string(o), "stub=")
+		return string(o[:i]), strings.TrimSpace(string(o[i+5:]))
 	}
-	if got := run("nightshift run d", 2); got != "demo\n" {
-		t.Fatalf("run d = %q", got)
+	for _, stub := range []bool{false, true} {
+		want := "0"
+		if stub {
+			want = "1"
+		}
+		cases := []struct {
+			line, words string
+			cword       int
+			want        string
+		}{
+			{"nightshift run d", "nightshift run d", 2, "demo\n"},
+			{"nightshift run --until 06:00 d", "nightshift run --until 06 : 00 d", 6, "demo\n"},
+			{"nightshift run --until=06:00 d", "nightshift run --until = 06 : 00 d", 7, "demo\n"},
+		}
+		for _, tc := range cases {
+			got, used := run(tc.line, tc.words, tc.cword, stub)
+			if tc.line == "nightshift run d" && stub {
+				continue // the stub always supplies the --until line
+			}
+			if got != tc.want {
+				t.Errorf("stub=%v %q = %q, want %q", stub, tc.line, got, tc.want)
+			}
+			if used != want {
+				t.Errorf("stub=%v %q: stub used = %s", stub, tc.line, used)
+			}
+		}
 	}
-	if got := run(`nightshift ""`, 1); !strings.Contains(got, "run\n") {
+	if got, _ := run("nightshift ", `nightshift ""`, 1, false); !strings.Contains(got, "run\n") {
 		t.Fatalf("subcommands = %q", got)
+	}
+	if got, _ := run("nightshift review --lens=", "nightshift review --lens =", 3, false); !strings.HasPrefix(got, "general\n") {
+		t.Fatalf("--lens= = %q", got)
 	}
 }
 
