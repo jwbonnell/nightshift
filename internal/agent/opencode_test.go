@@ -3,6 +3,7 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -108,6 +109,26 @@ func TestOpencodeParseFixtures(t *testing.T) {
 		}
 	})
 
+	t.Run("success_noisy", func(t *testing.T) {
+		res := a.Parse(readTestdata(t, "success_noisy.jsonl"))
+		if !res.Found || res.IsError {
+			t.Errorf("got %+v, want Found and !IsError", res)
+		}
+		if res.Text != "Plan written to PROGRESS.md." {
+			t.Errorf("Text = %q", res.Text)
+		}
+	})
+
+	t.Run("error_model", func(t *testing.T) {
+		res := a.Parse(readTestdata(t, "error_model.jsonl"))
+		if !res.Found || !res.IsError || res.APIStatus != 0 {
+			t.Errorf("got %+v", res)
+		}
+		if !strings.Contains(res.Message, "model not found: foo/bar") {
+			t.Errorf("Message = %q", res.Message)
+		}
+	})
+
 	t.Run("unknown and garbage ignored", func(t *testing.T) {
 		res := a.Parse(`{"type":"mystery","part":{"text":"nope"}}` + "\ngarbage line\n")
 		if res.Found {
@@ -128,6 +149,8 @@ func TestOpencodeTransient(t *testing.T) {
 		{"error503.jsonl", true},
 		{"success.jsonl", false},
 		{"stderr429.txt", true},
+		{"success_noisy.jsonl", false},
+		{"error_model.jsonl", false},
 	}
 	for _, c := range cases {
 		t.Run(c.file, func(t *testing.T) {

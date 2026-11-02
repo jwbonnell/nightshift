@@ -850,6 +850,16 @@ instead of writing a key straight into the file. The file must be plain
 JSON (no comments); a parse failure is reported the same way, naming the
 path.
 
+**How opencode errors are detected.** Only opencode's own `error` events
+and raw (non-JSON) stderr lines count as errors. Text, tool calls and tool
+output never do, however often they mention rate limits or 5xx-looking
+numbers; a raw stderr line counts only if it matches 429/5xx, rate limit,
+quota or overloaded. Of those errors, only the ones with status 429 or 5xx,
+or a rate-limit, quota or overload message (or such a raw line), are
+retried with the usual 1m/5m/15m transient waits. Anything else, such as a
+bad model name, fails the attempt at once. The `agent error:` line in
+`runner.log` carries the error's own message.
+
 **Mixed agents and the `-plan` sandbox.** `nightshift-<slug>` (the agent
 sandbox) is always created with the *coding* role's agent. If the planner
 resolves to a different agent than the coder, a second agent sandbox,
