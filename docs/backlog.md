@@ -16,6 +16,7 @@ When a spec fixes one, remove it.
 | nightshift-opencode-transient | opencode errors only from real error events or raw stderr; only 429/5xx/quota/overload retried |
 | nightshift-visual-check | `screenshots:` in `.nightshift.md` feeds the iteration, planning and both review prompts |
 | nightshift-followups | opencode `Transient` uses Parse's decision; bash completion handles `:`/`=`; gates cut off by `--until` are `timed out`/`not run`, not `fail`; `lint` completion case dedupe |
+| nightshift-status-watch | `status -w [N]` redraws the table every N seconds (default 2, 1–3600) like `watch`; one write per frame on a terminal, no escapes when piped; Ctrl+C exits 0 |
 | nightshift-status-hide-done | `status` hides done rows by default; footer `+N done (--done N, --since <dur> or --all to show)`; `--done N`/`--since`/`--all` unchanged |
 | (by hand) | `newTestRun` resolves the limit config, so the rate-limit test no longer hangs between 8pm and 2am Eastern |
 

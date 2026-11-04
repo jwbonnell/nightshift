@@ -25,6 +25,8 @@ func TestMain(m *testing.M) {
 	// TTY/exec behavior override these per-test and restore via
 	// t.Cleanup.
 	isTerminal = func() bool { return false }
+	stdoutIsTerminal = func() bool { return false }
+	watchSleep = func(context.Context, time.Duration) error { return context.Canceled }
 	execFn = func(argv0 string, argv, envv []string) error {
 		panic(fmt.Sprintf("execFn must be overridden per-test; got argv0=%s argv=%v", argv0, argv))
 	}
@@ -957,6 +959,7 @@ func TestStatusFlagsWithSlugIsUsageError(t *testing.T) {
 		{"--done", "-1"}, {"--done", "x"}, {"--done", "-0"}, {"--done", "+1"},
 		{"--done", "99999999999999999999"}, {"--done", " 1"}, {"--done="}, {"--done", "2", "--all"},
 		{"--done", "2", "--since", "3d"}, {"demo", "--done", "2"},
+		{"-w", "demo"}, {"demo", "-w"}, {"--watch", "5", "demo"},
 	} {
 		if code, _, _ := runStatus(args...); code != 2 {
 			t.Errorf("status %v exit = %d, want 2", args, code)

@@ -74,7 +74,7 @@ usage:
                                         move ready specs to specs/done/
   nightshift run <spec> [flags]         run one ready spec (nightshift run -h for flags)
   nightshift run --next [flags]         run the oldest eligible ready spec
-  nightshift status [--all | --since <dur> | --done N] [--repo <name>] | <slug>
+  nightshift status [--all | --since <dur> | --done N] [--repo <name>] [-w [N]] | <slug>
                                         list every spec, or show one run in detail
   nightshift logs [<slug>] [-f] [--agent [--raw] [--iter N]] [--verify N] [-n N]
                                         show or follow a run's runner.log / agent activity
@@ -588,14 +588,18 @@ func cmdStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	stateRoot := home.RunsDir(h)
 
-	const usage = "usage: nightshift status [--all | --since <dur> | --done N] [--repo <name>] | <slug>"
+	const usage = "usage: nightshift status [--all | --since <dur> | --done N] [--repo <name>] [-w [N]] | <slug>"
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	all := fs.Bool("all", false, "show every row")
 	since := fs.String("since", "", "done-row age window")
 	done := fs.String("done", "", "number of newest done rows to show")
 	repo := fs.String("repo", "", "only rows for this repo")
-	if err := fs.Parse(args); err != nil {
+	var wf watchFlag
+	fs.Var(&wf, "watch", "redraw every N seconds (default 2)")
+	fs.Var(&wf, "w", "alias for --watch")
+	parseArgs, display := mergeWatchArgs(args)
+	if err := fs.Parse(parseArgs); err != nil {
 		fmt.Fprintln(stderr, usage)
 		return 2
 	}
@@ -633,6 +637,16 @@ func cmdStatus(args []string, stdout, stderr io.Writer) int {
 				return 2
 			}
 			opts.Since, opts.SinceText = d, *since
+		}
+		if set["watch"] || set["w"] {
+			secs, ok := wf.seconds()
+			if !ok {
+				fmt.Fprintf(stderr, "nightshift status: --watch %q: want whole seconds from 1 to 3600\n", wf.raw)
+				return 2
+			}
+			return watchStatus(stdout, time.Duration(secs)*time.Second, display, func(w io.Writer) error {
+				return runner.PrintStatusTable(w, h, stateRoot, opts)
+			})
 		}
 		if err := runner.PrintStatusTable(stdout, h, stateRoot, opts); err != nil {
 			fmt.Fprintf(stderr, "nightshift: %v\n", err)

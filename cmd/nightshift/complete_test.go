@@ -178,7 +178,7 @@ func TestCompleteFlags(t *testing.T) {
 		{[]string{"run", "-"}, lines("--next", "--fresh", "--yes", "--max-iter", "--extend-iter", "--until",
 			"--dry-run", "--base", "--max-concurrent", "--ignore-deps", "-f", "--follow", "--plan-only", "--jobs")},
 		{[]string{"ready", "--p"}, lines("--plan")},
-		{[]string{"status", "--"}, lines("--all", "--since", "--done", "--repo")},
+		{[]string{"status", "--"}, lines("--all", "--since", "--done", "--repo", "--watch")},
 		{[]string{"logs", "-"}, lines("-f", "--agent", "--raw", "--iter", "--verify", "-n")},
 		{[]string{"version", "-"}, ""},
 	}

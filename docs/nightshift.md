@@ -59,7 +59,7 @@ nightshift lint <spec> [--no-verify]  check a draft or ready spec (verify runs o
 nightshift done <slug>... | --complete move ready spec(s) to specs/done/
 nightshift run <spec> [flags]         run one ready spec (nightshift run -h for flags)
 nightshift run --next [flags]         run eligible ready specs, one after another
-nightshift status [--all | --since <dur> | --done N] [--repo <name>] | <slug>
+nightshift status [--all | --since <dur> | --done N] [--repo <name>] [-w [N]] | <slug>
                                       list every spec, or show one run in detail
 nightshift logs [<slug>] [flags]      show or follow a run's logs (nightshift logs -h)
 nightshift review <slug> [--model M]  sandboxed Claude review of a run's work
@@ -423,6 +423,15 @@ display status, first match wins:
 `specs/done/`) are distinct. `UPDATED` is local time: for done, the spec's
 `done:` stamp (else the last history entry, else file mtime); for runs, the
 last history entry (else `started`); for ready/draft, the file mtime.
+
+**Watching.** `status -w` (also `-w N`, `-w=N`, `--watch N`, `--watch=N`) redraws the
+table every N whole seconds, 1–3600, default 2, like `watch nightshift status`. It
+combines with `--all`, `--done N`, `--since` and `--repo`, but not with a slug (use
+`nightshift logs <slug> -f`). Each frame starts with a header, `Every 2s: nightshift
+status …`, and the local time at the right edge of an 80-column line. On a terminal
+each frame clears the screen and is written in one write; piped, there are no escape
+codes and frames are separated by a blank line. A table error shows in the frame and
+the watch carries on. Ctrl+C exits 0 and leaves the cursor on a clean line.
 `ITER`/`COMMITS` are `-` with no run. `REPO` is the basename of the run's
 `repo` (or the spec's `repo:`), `REVIEW` the newest review note's verdict
 (`-` none, `unknown` no verdict).

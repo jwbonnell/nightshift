@@ -44,7 +44,7 @@ var completionCommands = []completionCmd{
 	{name: "done", flags: []string{"complete"}, slugs: slugsReady, multi: true},
 	{name: "run", flags: []string{"next", "fresh", "yes", "max-iter=", "extend-iter=", "until=",
 		"dry-run", "base=", "max-concurrent=", "ignore-deps", "f", "follow", "plan-only", "jobs="}, slugs: slugsReady},
-	{name: "status", flags: []string{"all", "since=", "done=", "repo="}, slugs: slugsRuns},
+	{name: "status", flags: []string{"all", "since=", "done=", "repo=", "w", "watch"}, slugs: slugsRuns},
 	{name: "logs", flags: []string{"f", "agent", "raw", "iter=", "verify=", "n="}, slugs: slugsRuns},
 	{name: "pr", flags: []string{"pending", "force", "include-drafts", "dry-run", "list", "limit=",
 		"model=", "max-turns=", "timeout=", "max-lines=", "forge="}},
