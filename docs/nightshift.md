@@ -489,6 +489,15 @@ takes precedence over `general`; an unknown lens name exits `1` with the
 same `unknown review lens` error [Review](#review) describes, and the
 reviewer is never invoked.
 
+If `spec/<slug>` no longer resolves in the source repo (it was merged and
+the branch deleted), it falls back to the run's `last_green` commit, as
+long as that commit still exists there: prints `review: spec/<slug> not
+found — reviewing last_green <sha8>` to stderr and reviews `<sha8>`
+instead of the branch head. If neither resolves, it fails before writing
+any note: `nothing to review: spec/<slug> is gone and last_green <sha8>
+isn't in <repo>` (exit `1`). The automatic review in a live run and its
+fix rounds are unaffected — they always run while the branch exists.
+
 It takes the spec's per-spec lock *before* reading any run state, so a
 run that's actively rewriting `run.json` can't race the busy check. The
 review itself is bounded by the spec's `iter_timeout:` frontmatter, then
@@ -740,6 +749,7 @@ env > config > default.)
 | `review:` | `NIGHTSHIFT_REVIEW` | `NIGHTSHIFT_REVIEW` | `false` |
 | `review_model:` | `NIGHTSHIFT_REVIEW_MODEL` | `NIGHTSHIFT_REVIEW_MODEL` | `opus` |
 | `review_rounds:` | `NIGHTSHIFT_REVIEW_ROUNDS` | `NIGHTSHIFT_REVIEW_ROUNDS` | `0` |
+| — | `NIGHTSHIFT_REVIEW_EGRESS` | `NIGHTSHIFT_REVIEW_EGRESS` | unset — extra hosts the review sandbox may reach, comma-separated (`opencode.ai` is added automatically for an OpenCode Zen `review_model:`) |
 | — | — | `NIGHTSHIFT_MAX_CONCURRENT` | `2` |
 | — | — | `NIGHTSHIFT_JOBS` | `1` — capped by `NIGHTSHIFT_MAX_CONCURRENT`; see [Multi-spec projects](#multi-spec-projects) |
 | — | `NIGHTSHIFT_SBX_BIN` | `NIGHTSHIFT_SBX_BIN` | `sbx` |
@@ -1114,6 +1124,23 @@ in the workspace itself). A lens name must match `^[a-z][a-z0-9-]*$`; an
 unrecognized one is a hard error naming where to add it:
 `unknown review lens "foo" (built-in: general, requirements, quality,
 security; or add <Home>/lenses/foo.md)`.
+
+**Opencode reviewers.** `review_model:`/`NIGHTSHIFT_REVIEW_MODEL`/`--model`
+accept the same `agent/provider/model` selector as every other role — see
+[Agents and models](#agents-and-models) — so a review can run through
+opencode instead of claude, e.g.
+`review_model: opencode/opencode/longcat-2.5-preview-free` for a free
+[OpenCode Zen](https://opencode.ai) model. When the selector names an
+OpenCode Zen model, the review sandbox gets `opencode.ai` explicitly
+allowed (`sbx policy allow network --sandbox <name> opencode.ai`) right
+after it's created, on top of anything in `NIGHTSHIFT_REVIEW_EGRESS` (env
+over config, a comma list of `host`/`host:port` entries); a failed policy
+call fails that review with verdict `error`, and the sandbox is still
+removed. OpenCode's free tier rejects any request whose `bash` tool is
+denied outright, so the reviewer's read-only permission set declares
+`bash` as a deny-all map (`{"*":"deny"}`) instead of the bare string
+`"deny"` — it still can't run any command, it just has to say so in a
+shape the free-tier check accepts.
 
 A review builds its workspace once, then runs each lens in turn, in the
 order listed — a fresh `nightshift-<slug>-review` sandbox per lens, same

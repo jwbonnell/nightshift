@@ -57,6 +57,8 @@ const commentedConfig = `# nightshift config file.
 # NIGHTSHIFT_REVIEW_ROUNDS=0
 # acceptance-gate hand-backs before the run finishes with the gate failure recorded (0-5)
 # NIGHTSHIFT_GATE_ROUNDS=2
+# extra hosts the review sandbox may reach, comma-separated (opencode.ai is added for OpenCode Zen)
+# NIGHTSHIFT_REVIEW_EGRESS=
 
 # how long to wait out a usage limit with no usable reset time
 # NIGHTSHIFT_LIMIT_FALLBACK=60m

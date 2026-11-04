@@ -137,7 +137,7 @@ func TestReviewerWithOpencode(t *testing.T) {
 		t.Fatalf("text = %q", text)
 	}
 
-	const reviewPermission = `{"edit":"deny","bash":"deny","webfetch":"deny","websearch":"deny","task":"deny","external_directory":"deny"}`
+	const reviewPermission = `{"edit":"deny","bash":{"*":"deny"},"webfetch":"deny","websearch":"deny","task":"deny","external_directory":"deny"}`
 	got := readLog(t, logPath)
 	want := []string{
 		"rm -f nightshift-demo-review",
@@ -505,6 +505,131 @@ func TestReviewWorkspaceRemovedAfter(t *testing.T) {
 	}
 	if _, err := os.Stat(ws); !os.IsNotExist(err) {
 		t.Fatalf("ws still exists after a failing runReview: %v", err)
+	}
+}
+
+// TestReviewerAllowsProviderHost covers an OpenCode Zen reviewer: its
+// sandbox is explicitly allowed opencode.ai between create and exec, so
+// the sandbox's baseline egress policy doesn't have to cover it.
+func TestReviewerAllowsProviderHost(t *testing.T) {
+	bin, logPath := newFakeSbx(t)
+	t.Setenv("FAKE_SBX_STDOUT", `{"type":"text","part":{"text":"VERDICT: approve"}}`)
+
+	ws := t.TempDir()
+	rv := sbxReviewer{bin: bin, claudeBin: "claude", slug: "demo", opencodeBin: "opencode"}
+	if _, err := rv.Review(context.Background(), ws, "opencode/opencode/longcat-2.5-preview-free", "prompt"); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+
+	got := readLog(t, logPath)
+	want := []string{
+		"rm -f nightshift-demo-review",
+		"create --name nightshift-demo-review opencode " + ws,
+		"policy allow network --sandbox nightshift-demo-review opencode.ai",
+		"exec -w " + ws + " nightshift-demo-review env OPENCODE_PERMISSION={\"edit\":\"deny\",\"bash\":{\"*\":\"deny\"},\"webfetch\":\"deny\",\"websearch\":\"deny\",\"task\":\"deny\",\"external_directory\":\"deny\"} opencode run --format json --auto -m opencode/longcat-2.5-preview-free",
+		"rm -f nightshift-demo-review",
+	}
+	if !equalLines(got, want) {
+		t.Fatalf("log = %v, want %v", got, want)
+	}
+}
+
+// TestReviewerNoEgressForClaude covers the claude reviewer, which never
+// needs an explicit egress allowance: its log has no "policy" line.
+func TestReviewerNoEgressForClaude(t *testing.T) {
+	bin, logPath := newFakeSbx(t)
+	t.Setenv("FAKE_SBX_STDOUT", `{"result":"VERDICT: approve"}`)
+
+	ws := t.TempDir()
+	rv := sbxReviewer{bin: bin, claudeBin: "claude", slug: "demo"}
+	if _, err := rv.Review(context.Background(), ws, "opus", "prompt"); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+
+	for _, line := range readLog(t, logPath) {
+		if strings.HasPrefix(line, "policy") {
+			t.Fatalf("log has a policy line for a claude reviewer: %v", readLog(t, logPath))
+		}
+	}
+}
+
+// TestReviewerPolicyFailureIsError covers a failed "policy allow network"
+// call: Review returns an error naming the host, there is no exec line,
+// and the sandbox is still removed.
+func TestReviewerPolicyFailureIsError(t *testing.T) {
+	bin, logPath := newFakeSbx(t)
+	t.Setenv("FAKE_SBX_FAIL_SUBSTR", "policy")
+
+	ws := t.TempDir()
+	rv := sbxReviewer{bin: bin, claudeBin: "claude", slug: "demo", opencodeBin: "opencode"}
+	_, err := rv.Review(context.Background(), ws, "opencode/opencode/longcat-2.5-preview-free", "prompt")
+	if err == nil || !strings.Contains(err.Error(), "allow network opencode.ai") {
+		t.Fatalf("Review err = %v, want it to contain %q", err, "allow network opencode.ai")
+	}
+
+	got := readLog(t, logPath)
+	for _, line := range got {
+		if strings.HasPrefix(line, "exec") {
+			t.Fatalf("log has an exec line after a policy failure: %v", got)
+		}
+	}
+	if len(got) == 0 || got[len(got)-1] != "rm -f nightshift-demo-review" {
+		t.Fatalf("log did not end with final rm -f: %v", got)
+	}
+}
+
+// TestReviewEgressConfig is a table test of resolveReviewEgress: env beats
+// config, entries are trimmed/deduplicated in first-seen order, and a
+// malformed entry gives the exact error.
+func TestReviewEgressConfig(t *testing.T) {
+	cases := []struct {
+		name   string
+		getenv func(string) string
+		cfg    map[string]string
+		want   []string
+		errStr string
+	}{
+		{
+			name:   "env beats config",
+			getenv: func(string) string { return "a.lan" },
+			cfg:    map[string]string{"NIGHTSHIFT_REVIEW_EGRESS": "b.lan"},
+			want:   []string{"a.lan"},
+		},
+		{
+			name:   "config used when env empty",
+			getenv: func(string) string { return "" },
+			cfg:    map[string]string{"NIGHTSHIFT_REVIEW_EGRESS": "b.lan"},
+			want:   []string{"b.lan"},
+		},
+		{
+			name:   "trim and dedupe in order",
+			getenv: func(string) string { return " a.lan, b.lan:8080, a.lan" },
+			cfg:    nil,
+			want:   []string{"a.lan", "b.lan:8080"},
+		},
+		{
+			name:   "bad entry",
+			getenv: func(string) string { return "http://x" },
+			cfg:    nil,
+			errStr: `NIGHTSHIFT_REVIEW_EGRESS entry "http://x": want a host or host:port`,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := resolveReviewEgress(c.getenv, c.cfg)
+			if c.errStr != "" {
+				if err == nil || err.Error() != c.errStr {
+					t.Fatalf("err = %v, want %q", err, c.errStr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveReviewEgress: %v", err)
+			}
+			if !equalLines(got, c.want) {
+				t.Fatalf("hosts = %v, want %v", got, c.want)
+			}
+		})
 	}
 }
 

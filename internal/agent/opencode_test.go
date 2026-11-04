@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,8 +61,45 @@ func TestOpencodePermissionsExact(t *testing.T) {
 	if codePermission != `{"edit":"allow","bash":{"*":"allow","git push*":"deny","git remote*":"deny","git config*":"deny"},"webfetch":"allow","external_directory":"deny"}` {
 		t.Errorf("codePermission = %q", codePermission)
 	}
-	if reviewPermission != `{"edit":"deny","bash":"deny","webfetch":"deny","websearch":"deny","task":"deny","external_directory":"deny"}` {
+	if reviewPermission != `{"edit":"deny","bash":{"*":"deny"},"webfetch":"deny","websearch":"deny","task":"deny","external_directory":"deny"}` {
 		t.Errorf("reviewPermission = %q", reviewPermission)
+	}
+}
+
+// TestReviewPermissionHasNoFlatDeny guards against regressing to a bare
+// "deny" string for bash (or read/glob/grep), which OpenCode's free-tier
+// check rejects outright (FreeTierError).
+func TestReviewPermissionHasNoFlatDeny(t *testing.T) {
+	var perm map[string]any
+	if err := json.Unmarshal([]byte(reviewPermission), &perm); err != nil {
+		t.Fatalf("reviewPermission is not valid JSON: %v", err)
+	}
+
+	for _, key := range []string{"bash", "read", "glob", "grep"} {
+		if v, ok := perm[key]; ok {
+			if s, isStr := v.(string); isStr && s == "deny" {
+				t.Errorf("%s must not be a flat \"deny\": OpenCode's free-tier check rejects that", key)
+			}
+		}
+	}
+
+	bash, ok := perm["bash"].(map[string]any)
+	if !ok {
+		t.Fatalf("bash = %#v, want a map", perm["bash"])
+	}
+	if bash["*"] != "deny" {
+		t.Errorf("bash[\"*\"] = %v, want \"deny\"", bash["*"])
+	}
+	for k, v := range bash {
+		if v == "allow" {
+			t.Errorf("bash[%q] = %q, want no \"allow\" entries", k, v)
+		}
+	}
+
+	for _, key := range []string{"edit", "webfetch", "websearch", "task"} {
+		if perm[key] != "deny" {
+			t.Errorf("%s = %v, want \"deny\"", key, perm[key])
+		}
 	}
 }
 

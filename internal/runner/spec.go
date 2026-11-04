@@ -54,6 +54,7 @@ type Spec struct {
 	GateRounds   int    // gate hand-backs before finishing with the failure recorded
 	ReviewModel  string // raw selector string, as handed to Reviewer
 	ReviewSel    agent.Selector
+	ReviewEgress []string // extra hosts the review sandbox may reach, beyond ReviewSel's own ProviderHosts
 	Created      string
 	ContentHash  string
 	Base         string   // requested base name
@@ -485,6 +486,13 @@ func resolveSpecFile(opts Options, path string) (*Spec, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s (from %s): %w", "review_model", src["review_model"], err)
 	}
+	var reviewEgress []string
+	if review || reviewRounds > 0 {
+		reviewEgress, err = resolveReviewEgress(os.Getenv, cfg)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	var egress []string
 	for _, item := range strings.Split(fm["egress"], ",") {
@@ -546,6 +554,7 @@ func resolveSpecFile(opts Options, path string) (*Spec, error) {
 		GateRounds:      gateRounds,
 		ReviewModel:     reviewModel,
 		ReviewSel:       reviewSel,
+		ReviewEgress:    reviewEgress,
 		OpencodeCfgPath: opencodeCfgPath,
 		OpencodeCfg:     opencodeCfg,
 		Created:         fmVal("created"),

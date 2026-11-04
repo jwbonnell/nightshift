@@ -23,10 +23,13 @@ func (opencodeAgent) SbxAgent() string { return "opencode" }
 // Both are hand-written (not json.Marshal'd) so the key order matches the
 // spec exactly, byte for byte. webfetch is "allow" in codePermission
 // because today's claude coding argv runs with --permission-mode
-// bypassPermissions, which allows web fetch too.
+// bypassPermissions, which allows web fetch too. reviewPermission's bash is
+// a deny-all map, not the bare string "deny": OpenCode's free-tier check
+// rejects a request whose bash tool is denied outright, so the tool must
+// stay declared while every command under it is still refused.
 const (
 	codePermission   = `{"edit":"allow","bash":{"*":"allow","git push*":"deny","git remote*":"deny","git config*":"deny"},"webfetch":"allow","external_directory":"deny"}`
-	reviewPermission = `{"edit":"deny","bash":"deny","webfetch":"deny","websearch":"deny","task":"deny","external_directory":"deny"}`
+	reviewPermission = `{"edit":"deny","bash":{"*":"deny"},"webfetch":"deny","websearch":"deny","task":"deny","external_directory":"deny"}`
 )
 
 // Argv returns `env OPENCODE_PERMISSION=... [OPENCODE_CONFIG_CONTENT=...]

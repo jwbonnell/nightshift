@@ -35,6 +35,35 @@ func TestSelectorParse(t *testing.T) {
 	}
 }
 
+func TestProviderHosts(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"opencode/opencode/longcat-2.5-preview-free", []string{"opencode.ai"}},
+		{"opencode/openai/gpt-5", nil},
+		{"opus", nil},
+		{"claude/sonnet", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.in, func(t *testing.T) {
+			sel, err := ParseSelector(c.in)
+			if err != nil {
+				t.Fatalf("ParseSelector(%q): %v", c.in, err)
+			}
+			got := ProviderHosts(sel)
+			if len(got) != len(c.want) {
+				t.Fatalf("ProviderHosts(%q) = %v, want %v", c.in, got, c.want)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Fatalf("ProviderHosts(%q) = %v, want %v", c.in, got, c.want)
+				}
+			}
+		})
+	}
+}
+
 func TestSelectorParseErrors(t *testing.T) {
 	cases := []struct {
 		in   string
