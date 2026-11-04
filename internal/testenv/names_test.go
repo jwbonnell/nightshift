@@ -3,7 +3,6 @@ package testenv
 import (
 	"bytes"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,6 +54,74 @@ func findOriginNames(root string, files []string) []string {
 	return out
 }
 
+// trackedFiles returns the slash-relative paths git tracks under root, minus
+// anything under vendor/. It skips the test outside a git work tree.
+func trackedFiles(t *testing.T, root string) []string {
+	t.Helper()
+	if err := exec.Command("git", "-C", root, "rev-parse", "--is-inside-work-tree").Run(); err != nil {
+		t.Skip("not a git work tree")
+	}
+	out, err := exec.Command("git", "-C", root, "ls-files", "-z").Output()
+	if err != nil {
+		t.Fatalf("git ls-files: %v", err)
+	}
+	var files []string
+	for _, p := range strings.Split(string(out), "\x00") {
+		if p == "" || strings.HasPrefix(p, "vendor/") {
+			continue
+		}
+		files = append(files, p)
+	}
+	return files
+}
+
+func gitIn(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+func writeFile(t *testing.T, dir, rel, content string) {
+	t.Helper()
+	p := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTrackedFilesFilters(t *testing.T) {
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q")
+	writeFile(t, dir, ".gitignore", "bin/\n")
+	writeFile(t, dir, "a.txt", "a\n")
+	writeFile(t, dir, "vendor/x.txt", "x\n")
+	gitIn(t, dir, "add", "-f", "a.txt", "vendor/x.txt")
+	writeFile(t, dir, "REVIEW.md", "r\n")
+	writeFile(t, dir, "bin/y", "y\n")
+	got := trackedFiles(t, dir)
+	if len(got) != 1 || got[0] != "a.txt" {
+		t.Errorf("trackedFiles = %q, want [a.txt]", got)
+	}
+}
+
+func TestNoOriginToolNamesIgnoresUntracked(t *testing.T) {
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q")
+	writeFile(t, dir, "note.md", "mentions "+"Pen"+"Sieve"+"\n")
+	if got := findOriginNames(dir, trackedFiles(t, dir)); len(got) != 0 {
+		t.Errorf("untracked file produced findings: %q", got)
+	}
+	gitIn(t, dir, "add", "note.md")
+	if got := findOriginNames(dir, trackedFiles(t, dir)); len(got) != 1 {
+		t.Errorf("tracked file findings = %q, want 1", got)
+	}
+}
+
 // TestNoOriginToolNames guards against the names of the tools nightshift was
 // reimplemented from coming back into any tracked, non-vendored file.
 func TestNoOriginToolNames(t *testing.T) {
@@ -74,52 +141,8 @@ func TestNoOriginToolNames(t *testing.T) {
 		root = parent
 	}
 
-	var files []string
-	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return err
-		}
-		if d.Name() == ".git" || (rel == "vendor" && d.IsDir()) {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if d.Type().IsRegular() {
-			files = append(files, filepath.ToSlash(rel))
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	cmd := exec.Command("git", "-C", root, "check-ignore", "--stdin", "-z")
-	cmd.Stdin = strings.NewReader(strings.Join(files, "\x00") + "\x00")
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	ignored := map[string]bool{}
-	if err := cmd.Run(); err != nil {
-		if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 1 {
-			t.Fatalf("git check-ignore: %v", err)
-		}
-	}
-	for _, p := range strings.Split(stdout.String(), "\x00") {
-		if p != "" {
-			ignored[p] = true
-		}
-	}
-	var keep []string
-	for _, f := range files {
-		if !ignored[f] {
-			keep = append(keep, f)
-		}
-	}
-	for _, msg := range findOriginNames(root, keep) {
+	files := trackedFiles(t, root)
+	for _, msg := range findOriginNames(root, files) {
 		t.Error(msg)
 	}
 }

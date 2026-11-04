@@ -345,9 +345,8 @@ func branchCheckedOut(repo, branch string) (bool, error) {
 	return false, nil
 }
 
-// pendingSyncRef is the runner-owned ref (D1 renames from the original tool):
-// the runner-owned ref copy-back uses when spec/<slug> is checked out
-// elsewhere in the source repo.
+// pendingSyncRef (D1) is the runner-owned ref copy-back uses when
+// spec/<slug> is checked out elsewhere in the source repo.
 func (r *run) pendingSyncRef() string {
 	return "refs/nightshift/" + r.spec.Slug
 }

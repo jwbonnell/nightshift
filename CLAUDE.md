@@ -68,7 +68,7 @@ only package that imports all of them. `runner` and `internal/review`/
 versa — see `TestPackageBoundaries` in `internal/agent` and in
 `internal/review`.
 
-`internal/runner`'s own files roughly mirror the reference's
+`internal/runner`'s own files roughly mirror the original tool's runner package
 split (`spec.go`/`base.go` resolution, `state.go` setup
 and clone management, `sandbox.go`/`prompt.go` the sbx backend and prompts,
 `loop.go` the Ralph loop, `result.go` the result note, `locks.go`/`next.go`/

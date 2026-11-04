@@ -31,7 +31,7 @@ inside Docker Sandboxes (`sbx`). The runner, not the agent, enforces verify, red
 stall, iteration caps, timeouts and the `--until` window, and it reports results back.
 nightshift also owns its own home directory (`~/.nightshift`) for specs, run state and
 results, and has a few small subcommands (`init`, `new`, `ready`, `done`, `status`) so it
-works without the original tool or Obsidian. It is done when every test named in the Test
+works without the companion notes app or Obsidian. It is done when every test named in the Test
 checklist exists and passes, and the acceptance criteria below hold.
 
 ## Context
@@ -79,11 +79,13 @@ checklist exists and passes, and the acceptance criteria below hold.
 
 ### D1. Names
 
+Names nightshift uses where the original tool used its own:
+
 | Item | nightshift |
 |---|---|
 | binary and module | binary `nightshift`, module `github.com/jwbonnell/nightshift` |
 | runner package | `internal/runner` (same file split) |
-| `internal/vcs` (subset) | `internal/gitx`: `Run`, `IsRepo`, `GitDir`, `RunRetry`, `Commit` with the reference's semantics; `Commit`'s lock file is `<git-dir>/nightshift-commit.lock` |
+| git helper package (subset) | `internal/gitx`: `Run`, `IsRepo`, `GitDir`, `RunRetry`, `Commit` with the reference's semantics; `Commit`'s lock file is `<git-dir>/nightshift-commit.lock` |
 | `internal/lock` | `internal/lock` unchanged, except: `boottime_linux.go` + `boottime_other.go` (`//go:build !linux`); no darwin file |
 | base / model / planner model / max iterations / iteration timeout / max concurrency env vars | `NIGHTSHIFT_BASE` / `NIGHTSHIFT_MODEL` / `NIGHTSHIFT_PLANNER_MODEL` / `NIGHTSHIFT_MAX_ITER` / `NIGHTSHIFT_ITER_TIMEOUT` / `NIGHTSHIFT_MAX_CONCURRENT` |
 | sbx binary, claude binary and home env vars | `NIGHTSHIFT_SBX_BIN`, `NIGHTSHIFT_CLAUDE_BIN`, `NIGHTSHIFT_HOME` |
@@ -92,9 +94,9 @@ checklist exists and passes, and the acceptance criteria below hold.
 | clone identity | `nightshift` / `nightshift@localhost` |
 | pending copy-back ref | `refs/nightshift/<slug>` |
 | branch `spec/<slug>` | unchanged |
-| `_specs/ready`, `_specs/draft`, `_specs/done`, `_specs/results` in messages | `specs/ready`, `specs/draft`, `specs/done`, `results` |
+| spec folders in messages | `specs/ready`, `specs/draft`, `specs/done`, `results` |
 | error prefix | `nightshift: %v` |
-| result-note fm `type: spec-result` | `type: nightshift-result` |
+| result-note `type:` | `type: nightshift-result` |
 
 The two prompt preambles (`iterPreamble`, `planPreamble`) and the `buildPrompt` assembly
 stay byte-identical to reference §3.8.
@@ -260,7 +262,7 @@ type Notifier interface{ Notify(title, msg string, urgent bool) }
   `~/.nightshift`). Then `gitx.Commit(Home, "nightshift: result <slug> (<status>)", rel)`.
   Otherwise there is no commit and nothing is logged. A commit failure is logged
   (`commit result note failed: %v`) and never changes the status.
-- No daily-note / "Overnight specs" integration. The original tool may read `<Home>/results/` later.
+- No daily-note / "Overnight specs" integration. The companion notes app may read `<Home>/results/` later.
 
 ### D8. Interrupts (new)
 
@@ -353,7 +355,7 @@ Embedded at `internal/home/spec-template.md` (`go:embed`). `init` writes it to
 changes: the comment block says `nightshift new <slug>` creates a draft from this file,
 `nightshift ready <slug>` / `nightshift done <slug>` move it, precedence reads
 `CLI flag > this frontmatter > NIGHTSHIFT_* env > ~/.nightshift/config > default`, and
-re-running is `nightshift run <slug>`. Remove the original tool's specific paragraph (daily
+re-running is `nightshift run <slug>`. Remove the companion notes app's paragraph (daily
 agenda / todo listing) and the `[[wikilinks]]` hint.
 
 ### D11. Fixes to the reference's known quirks
@@ -385,7 +387,7 @@ The reference preserved these on purpose. nightshift fixes them:
 
 ### D12. Dropped
 
-- The import-guard test and the read-only relationship to the original tool's other binary. nightshift is
+- The import-guard test and the read-only relationship to the companion notes app's binary. nightshift is
   a single binary.
 - `boottime_darwin.go`, osascript, launchd plist, the old vault env var/vault paths, vault git
   commits (replaced by D7's optional home commit), daily agenda integration.
@@ -518,7 +520,7 @@ New tests:
 - Any web/API/dashboard, database or metrics (go-libs `web`, `dbx`, `metrics`). Keep
   `internal/runner` free of `fmt.Print*` to stdout outside the reference's user-facing
   output points, so a server can wrap it later.
-- The original tool and its review companion, GitLab, Obsidian, the daily agenda.
+- The companion notes app and its MR reviewer, GitLab, Obsidian, the daily agenda.
 - macOS support.
 - Auto-moving specs between draft/ready/done (only the explicit subcommands move them).
 - A sandbox backend other than `sbx`.
