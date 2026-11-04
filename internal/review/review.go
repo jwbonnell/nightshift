@@ -242,8 +242,8 @@ func (r *runner) rateLimitedOutcome(label string, res agent.Result) reviewOutcom
 
 // reviewTarget resolves an explicit Target through its forge client (Get
 // then GetRepo, on the typed repo string) and runs reviewOne on the
-// canonical repo path, per the reference's reviewTarget (docs/reference
-// §"Canonical project path").
+// canonical repo path, following the original mr-review tool's canonical
+// project path rule.
 func (r *runner) reviewTarget(ctx context.Context, t Target) reviewOutcome {
 	client := r.opts.Clients[t.Forge]
 	typedLabel := client.Label(t.Repo, t.Number)

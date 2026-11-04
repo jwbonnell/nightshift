@@ -7,52 +7,34 @@ import (
 	"testing"
 )
 
-// extractFencedBlock returns the content of the first ````text ... ````
-// fenced block found after a line containing header, exclusive of the
-// fence lines themselves.
-func extractFencedBlock(t *testing.T, doc, header string) string {
-	t.Helper()
-	i := strings.Index(doc, header)
-	if i < 0 {
-		t.Fatalf("header %q not found in reference doc", header)
-	}
-	rest := doc[i:]
-
-	start := strings.Index(rest, "````text\n")
-	if start < 0 {
-		t.Fatalf("no fenced block found after %q", header)
-	}
-	rest = rest[start+len("````text\n"):]
-
-	end := strings.Index(rest, "\n````")
-	if end < 0 {
-		t.Fatalf("unterminated fenced block after %q", header)
-	}
-	return rest[:end]
-}
-
+// TestPreamblesByteIdenticalToReference pins both preambles byte for byte to
+// testdata/golden/{iter,plan}-preamble.golden, which hold the original
+// tool's verbatim §3.8.1/§3.8.2 text. The goldens have no trailing newline,
+// and neither may the constants. Change a preamble only on purpose: update
+// its golden in the same commit.
 func TestPreamblesByteIdenticalToReference(t *testing.T) {
-	refPath := filepath.Join("..", "..", "docs", "reference", "pensieve-spec-run.md")
-	data, err := os.ReadFile(refPath)
-	if err != nil {
-		t.Fatalf("read reference doc: %v", err)
+	read := func(name string) string {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join("testdata", "golden", name))
+		if err != nil {
+			t.Fatalf("read golden: %v", err)
+		}
+		return string(data)
 	}
-	doc := string(data)
-
-	wantIter := extractFencedBlock(t, doc, "### 3.8.1 `iterPreamble`")
-	wantPlan := extractFencedBlock(t, doc, "### 3.8.2 `planPreamble`")
+	wantIter := read("iter-preamble.golden")
+	wantPlan := read("plan-preamble.golden")
 
 	if iterPreamble != wantIter {
-		t.Fatalf("iterPreamble does not match reference §3.8.1 byte-for-byte\ngot:  %q\nwant: %q", iterPreamble, wantIter)
+		t.Fatalf("iterPreamble does not match iter-preamble.golden byte-for-byte\ngot:  %q\nwant: %q", iterPreamble, wantIter)
 	}
 	if planPreamble != wantPlan {
-		t.Fatalf("planPreamble does not match reference §3.8.2 byte-for-byte\ngot:  %q\nwant: %q", planPreamble, wantPlan)
+		t.Fatalf("planPreamble does not match plan-preamble.golden byte-for-byte\ngot:  %q\nwant: %q", planPreamble, wantPlan)
 	}
 	if strings.HasSuffix(iterPreamble, "\n") {
-		t.Fatalf("iterPreamble has a trailing newline, reference says it must not")
+		t.Fatalf("iterPreamble has a trailing newline; it must not")
 	}
 	if strings.HasSuffix(planPreamble, "\n") {
-		t.Fatalf("planPreamble has a trailing newline, reference says it must not")
+		t.Fatalf("planPreamble has a trailing newline; it must not")
 	}
 }
 

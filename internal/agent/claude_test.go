@@ -147,7 +147,7 @@ func TestClaudeArgv(t *testing.T) {
 }
 
 // TestClaudeArgvHardened pins nightshift pr's argv (P12.2) byte for byte
-// against docs/reference/pensieve-mr-review.md §4.6, distinct from
+// to the original mr-review tool's hardened argv, distinct from
 // nightshift review's own read-only argv (TestClaudeArgv, left unedited).
 func TestClaudeArgvHardened(t *testing.T) {
 	a := claudeAgent{bin: "claude"}

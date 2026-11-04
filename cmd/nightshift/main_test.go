@@ -33,68 +33,16 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// TestRunHelpMatchesD4 mechanically verifies the Acceptance criterion
-// "nightshift run -h match D4": extracts the reference's exact §3.1.3
-// stderr byte output from docs/reference/pensieve-spec-run.md, applies
-// the documented D1 renames, and diffs it against the real binary's
-// `run -h` output (a subprocess, since -h exits via flag.ExitOnError's
-// own os.Exit(0)).
+// TestRunHelpMatchesD4 checks the Acceptance criterion "nightshift run -h
+// match D4": the real binary's `run -h` output (a subprocess, since -h exits
+// via flag.ExitOnError's own os.Exit(0)) must equal testdata/run-help.golden
+// byte for byte. The golden started as the original tool's exact stderr
+// output with the D1 renames applied, plus every flag nightshift has added
+// since (--ignore-deps, --jobs, -f/--follow, --plan-only, --extend-iter).
+// UPDATE_GOLDEN=1 rewrites it from the binary; review the diff before
+// committing.
 func TestRunHelpMatchesD4(t *testing.T) {
-	refData, err := os.ReadFile(filepath.Join("..", "..", "docs", "reference", "pensieve-spec-run.md"))
-	if err != nil {
-		t.Fatalf("read reference doc: %v", err)
-	}
-	ref := string(refData)
-
-	label := "exact stderr byte output"
-	i := strings.Index(ref, label)
-	if i < 0 {
-		t.Fatalf("label %q not found in reference doc", label)
-	}
-	rest := ref[i:]
-	fenceMarker := "```\n"
-	fenceStart := strings.Index(rest, fenceMarker)
-	if fenceStart < 0 {
-		t.Fatalf("no fenced block after %q", label)
-	}
-	rest = rest[fenceStart+len(fenceMarker):]
-	end := strings.Index(rest, "```")
-	if end < 0 {
-		t.Fatalf("unterminated fenced block after %q", label)
-	}
-	want := rest[:end]
-
-	want = strings.ReplaceAll(want, `\t`, "\t")
-	want = strings.ReplaceAll(want, "pensieve-spec-run", "nightshift run")
-	want = strings.ReplaceAll(want, "PENSIEVE_SPEC_BASE", "NIGHTSHIFT_BASE")
-	want = strings.ReplaceAll(want, "PENSIEVE_SPEC_MAX_CONCURRENT", "NIGHTSHIFT_MAX_CONCURRENT")
-	want = strings.ReplaceAll(want, "_specs/ready/", "specs/ready/")
-	// nightshift-deps adds --ignore-deps and --jobs, flags the reference has
-	// no concept of (dependency satisfaction and parallel nights didn't
-	// exist yet); splice them into the baseline at their alphabetical
-	// PrintDefaults position.
-	want = strings.ReplaceAll(want, "[--max-concurrent N] [--dry-run]\n       nightshift run --next [--until HH:MM] [--max-concurrent N] [--dry-run]",
-		"[--max-concurrent N] [--ignore-deps] [--dry-run]\n       nightshift run --next [--until HH:MM] [--max-concurrent N] [--jobs N] [--dry-run]")
-	want = strings.ReplaceAll(want, "  -fresh\n    \tdiscard prior state for this spec and start over\n",
-		"  -fresh\n    \tdiscard prior state for this spec and start over\n  -ignore-deps\n    \tskip dependency satisfaction and the integrated base\n")
-	want = strings.ReplaceAll(want, "  -max-concurrent string\n    \tmax simultaneous runs (default: NIGHTSHIFT_MAX_CONCURRENT/2)\n",
-		"  -jobs int\n    \twith --next, run up to N eligible specs at once (default: NIGHTSHIFT_JOBS/1, capped by max-concurrent) (default -1)\n  -max-concurrent string\n    \tmax simultaneous runs (default: NIGHTSHIFT_MAX_CONCURRENT/2)\n")
-
-	// nightshift-logs adds -f/--follow the same way.
-	want = strings.ReplaceAll(want, "[--ignore-deps] [--dry-run]\n", "[--ignore-deps] [-f] [--dry-run]\n")
-	want = strings.ReplaceAll(want, "[--jobs N] [--dry-run]\n", "[--jobs N] [-f] [--dry-run]\n")
-	want = strings.ReplaceAll(want, "  -fresh\n",
-		"  -f\tfollow: show runner.log and the rendered agent.log live (prefixed per spec under --next --jobs)\n  -follow\n    \talias for -f\n  -fresh\n")
-
-	// plan-ahead adds --plan-only.
-	want = strings.ReplaceAll(want, "[--ignore-deps] [-f] [--dry-run]\n", "[--ignore-deps] [--plan-only] [-f] [--dry-run]\n")
-	want = strings.ReplaceAll(want, "  -until string\n",
-		"  -plan-only\n    \trun only the planning pass, then stop\n  -until string\n")
-
-	// cap-extend adds --extend-iter.
-	want = strings.ReplaceAll(want, "[--max-iter N] [--until", "[--max-iter N] [--extend-iter N] [--until")
-	want = strings.ReplaceAll(want, "  -f\tfollow:",
-		"  -extend-iter string\n    \textra iterations granted past max-iter while each lands a green commit (default: spec/env/10)\n  -f\tfollow:")
+	golden := filepath.Join("testdata", "run-help.golden")
 
 	bin := buildNightshiftBinary(t)
 	cmd := exec.Command(bin, "run", "-h")
@@ -102,8 +50,18 @@ func TestRunHelpMatchesD4(t *testing.T) {
 	cmd.Stderr = &stderr
 	_ = cmd.Run() // -h exits 0; the exit status itself isn't under test here
 
-	if stderr.String() != want {
-		t.Fatalf("run -h output does not match D4\ngot:  %q\nwant: %q", stderr.String(), want)
+	if os.Getenv("UPDATE_GOLDEN") == "1" {
+		if err := os.WriteFile(golden, stderr.Bytes(), 0o644); err != nil {
+			t.Fatalf("write golden: %v", err)
+		}
+		return
+	}
+	want, err := os.ReadFile(golden)
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	if stderr.String() != string(want) {
+		t.Fatalf("run -h output does not match D4 (%s)\ngot:  %q\nwant: %q", golden, stderr.String(), string(want))
 	}
 }
 

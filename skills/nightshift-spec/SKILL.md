@@ -58,7 +58,7 @@ prerequisite.
   from the code, with "around line N" hints. Quote exact error text. Give the evidence
   behind any bug claim (which log or run shows it), and say why the change is worth making.
   Read the code before writing this. Never guess a name you could look up.
-- **Constraints:** no edits to `SPEC.md` or `docs/reference/`, no new dependencies,
+- **Constraints:** no edits to `SPEC.md`, no new dependencies,
   hermetic tests (temp homes, never the real `$HOME`), the no-op notify guard stays, and
   "never weaken a test; extend it". State what must stay byte-for-byte unchanged.
 - **Tasks:** 3–6 numbered `- [ ] N. **Title.**` items, each one committable on its own.

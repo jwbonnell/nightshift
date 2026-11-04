@@ -17,10 +17,10 @@ pensieve module. It ran on macOS under launchd and read its specs from an Obsidi
 nightshift is its own module and its own binary, and it keeps everything under
 ~/.nightshift. It targets Linux (Arch/Hyprland) with a systemd user timer.
 
-The behavioral baseline is docs/reference/pensieve-spec-run.md. This file lists every
-deliberate change from it (the "Deltas"). Where the two disagree, THIS FILE WINS.
-Anything not changed here is carried over from the reference, with the renames in D1
-applied.
+The behavioral baseline was the original pensieve-spec-run design doc, which isn't
+published in this repo. This file lists every deliberate change from it (the "Deltas").
+Where the two disagreed, THIS FILE WON. Anything not changed here was carried over from
+the baseline, with the renames in D1 applied.
 -->
 
 ## Goal
@@ -41,10 +41,10 @@ checklist exists and passes, and the acceptance criteria below hold.
   scope, and move it to `specs/ready/`. `nightshift run` then hands it to Claude Code. Each
   iteration gets a fresh context, and the agent's only memory is `PROGRESS.md` plus git
   history. Containment comes from three `sbx` sandboxes (agent / `-ctl` for git /
-  `-verify` recreated before every verify) on one clone that has no remotes. Read
-  docs/reference/pensieve-spec-run.md in full before starting. It is the detailed design:
-  loop pseudocode, sandbox argv, lock protocol, copy-back, scaffold symlink safety,
-  verbatim prompts and test harness.
+  `-verify` recreated before every verify) on one clone that has no remotes. The build
+  followed the original tool's detailed design (loop pseudocode, sandbox argv, lock
+  protocol, copy-back, scaffold symlink safety, verbatim prompts and test harness), which
+  isn't published here; the code and docs/nightshift.md now describe that behavior.
 - **Platform:** Linux only. `sbx` is installed on the host. `claude` exists only inside
   the sandbox template; the host never runs it.
 - **Libraries:** the owner's `github.com/jwbonnell/go-libs` is the FIRST place to look for
@@ -405,7 +405,6 @@ internal/gitx/                Run, IsRepo, GitDir, RunRetry, Commit
 internal/notify/              Notifier, desktop (notify-send), noop
 deploy/                       nightshift-nightly.sh, nightshift.service, nightshift.timer
 docs/nightshift.md            user docs (successor of the reference's docs/spec-runner.md)
-docs/reference/               the baseline (do not edit)
 README.md, CLAUDE.md, Makefile, .gitignore, vendor/
 ```
 
@@ -524,4 +523,4 @@ New tests:
 - Auto-moving specs between draft/ready/done (only the explicit subcommands move them).
 - A sandbox backend other than `sbx`.
 - Running the real `sbx`/`claude`/`notify-send`, enabling any systemd unit, pushing
-  anywhere, editing `docs/reference/` or this spec.
+  anywhere, or editing this spec.

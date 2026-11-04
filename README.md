@@ -19,8 +19,7 @@ nightshift run my-spec
 See [`docs/nightshift.md`](docs/nightshift.md) for the full subcommand
 reference, configuration, the sandbox trust model, concurrency, scheduling,
 and recovery. See [`SPEC.md`](SPEC.md) for the spec this build was driven
-from, and [`docs/reference/`](docs/reference/) for the detailed design this
-one supersedes.
+from.
 
 `nightshift pr` pre-reviews GitLab merge requests and GitHub pull requests
 in a read-only sandbox and writes a review note — see

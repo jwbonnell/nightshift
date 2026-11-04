@@ -19,8 +19,8 @@ type Invocation struct {
 	ReadOnly bool // reviewers: read and search tools only
 	MaxTurns int  // 0 = default; claude only
 
-	// Hardened, claude read-only only: the pinned nightshift pr argv,
-	// docs/reference/pensieve-mr-review.md §4.6, instead of nightshift
+	// Hardened, claude read-only only: the pinned nightshift pr argv
+	// (carried over from the original mr-review tool), instead of nightshift
 	// review's own read-only argv. Ignored by opencode and by a non-
 	// read-only invocation.
 	Hardened bool

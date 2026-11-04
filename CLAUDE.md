@@ -11,8 +11,8 @@ context every iteration, memory only via `PROGRESS.md` and git history. The
 iteration caps, timeouts, stall detection, the `--until` window — never the
 agent. See [`SPEC.md`](SPEC.md) for the authoritative spec this was built
 from and [`docs/nightshift.md`](docs/nightshift.md) for user-facing docs.
-`docs/reference/` is the behavioral baseline this supersedes — never edit
-it, and never edit `SPEC.md`.
+`SPEC.md` records the deliberate changes from the original pensieve tools
+(their design docs aren't published here) — never edit `SPEC.md`.
 
 `nightshift pr` is a second, independent feature on the same binary: a
 read-only pre-reviewer for GitLab merge requests and GitHub pull requests.
@@ -210,14 +210,12 @@ systemd, and must never touch your real `$HOME`.** Use:
 
 ## Things that look like bugs but aren't
 
-SPEC.md's D11 lists nine deliberate fixes to the reference's own known
+SPEC.md's D11 lists nine deliberate fixes to the original tool's known
 quirks (planner-commit reset target, resume repo-change detection, frontmatter
 quote-stripping, `--until` validation, `--fresh`-with-no-state-dir ref
 cleanup, case-insensitive `.md` matching, git-output trimming, `-ctl`
-create-failure cleanup, wall-clock progress stamps). If you're porting
-anything from `docs/reference/`, check D11 first — several of its quirks
-are *intentionally* reproduced in the reference's own pseudocode and must
-NOT be copied as-is.
+create-failure cleanup, wall-clock progress stamps). Don't reintroduce
+any of them: several of those quirks look like reasonable behavior.
 
 QUESTION.md is cleared only when the spec changed since the last planning
 pass (`spec_hash` mismatch), never otherwise: an unanswered question must

@@ -1,0 +1,29 @@
+usage: nightshift run <spec-name|path> [--fresh [--yes]] [--max-iter N] [--extend-iter N] [--until HH:MM] [--base REF] [--max-concurrent N] [--ignore-deps] [--plan-only] [-f] [--dry-run]
+       nightshift run --next [--until HH:MM] [--max-concurrent N] [--jobs N] [-f] [--dry-run]
+  -base string
+    	branch/ref/sha the run starts from (default: spec base:/NIGHTSHIFT_BASE/origin HEAD)
+  -dry-run
+    	resolve, validate, and print the plan; run nothing
+  -extend-iter string
+    	extra iterations granted past max-iter while each lands a green commit (default: spec/env/10)
+  -f	follow: show runner.log and the rendered agent.log live (prefixed per spec under --next --jobs)
+  -follow
+    	alias for -f
+  -fresh
+    	discard prior state for this spec and start over
+  -ignore-deps
+    	skip dependency satisfaction and the integrated base
+  -jobs int
+    	with --next, run up to N eligible specs at once (default: NIGHTSHIFT_JOBS/1, capped by max-concurrent) (default -1)
+  -max-concurrent string
+    	max simultaneous runs (default: NIGHTSHIFT_MAX_CONCURRENT/2)
+  -max-iter int
+    	hard cap on iterations (default: spec/env/10)
+  -next
+    	run the oldest eligible spec in specs/ready/
+  -plan-only
+    	run only the planning pass, then stop
+  -until string
+    	local HH:MM deadline; the run stops (resumably) at it
+  -yes
+    	assume yes to the --fresh confirmation
