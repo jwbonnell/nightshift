@@ -55,14 +55,26 @@ func findOriginNames(root string, files []string) []string {
 }
 
 // trackedFiles returns the slash-relative paths git tracks under root, minus
-// anything under vendor/. It skips the test outside a git work tree.
+// anything under vendor/ and anything that isn't a file on disk (deleted but
+// not yet committed, or a submodule). It skips the test outside a git work tree.
 func trackedFiles(t *testing.T, root string) []string {
 	t.Helper()
-	if err := exec.Command("git", "-C", root, "rev-parse", "--is-inside-work-tree").Run(); err != nil {
+	inside, err := exec.Command("git", "-C", root, "rev-parse", "--is-inside-work-tree").Output()
+	if err != nil || strings.TrimSpace(string(inside)) != "true" {
 		t.Skip("not a git work tree")
 	}
+	return listTracked(t, root)
+}
+
+// listTracked is trackedFiles without the skip, for tests that build their own
+// repo and must fail, not skip, if git misbehaves.
+func listTracked(t *testing.T, root string) []string {
+	t.Helper()
 	out, err := exec.Command("git", "-C", root, "ls-files", "-z").Output()
 	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			t.Fatalf("git ls-files: %v\n%s", err, ee.Stderr)
+		}
 		t.Fatalf("git ls-files: %v", err)
 	}
 	var files []string
@@ -70,9 +82,17 @@ func trackedFiles(t *testing.T, root string) []string {
 		if p == "" || strings.HasPrefix(p, "vendor/") {
 			continue
 		}
+		if fi, err := os.Lstat(filepath.Join(root, filepath.FromSlash(p))); err != nil || fi.IsDir() {
+			continue
+		}
 		files = append(files, p)
 	}
 	return files
+}
+
+func commitAll(t *testing.T, dir string) {
+	t.Helper()
+	gitIn(t, dir, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "x")
 }
 
 func gitIn(t *testing.T, dir string, args ...string) {
@@ -100,12 +120,17 @@ func TestTrackedFilesFilters(t *testing.T) {
 	writeFile(t, dir, ".gitignore", "bin/\n")
 	writeFile(t, dir, "a.txt", "a\n")
 	writeFile(t, dir, "vendor/x.txt", "x\n")
-	gitIn(t, dir, "add", "-f", "a.txt", "vendor/x.txt")
+	writeFile(t, dir, "gone.txt", "g\n")
+	gitIn(t, dir, "add", ".gitignore", "a.txt", "vendor/x.txt", "gone.txt")
+	commitAll(t, dir)
+	if err := os.Remove(filepath.Join(dir, "gone.txt")); err != nil {
+		t.Fatal(err)
+	}
 	writeFile(t, dir, "REVIEW.md", "r\n")
 	writeFile(t, dir, "bin/y", "y\n")
-	got := trackedFiles(t, dir)
-	if len(got) != 1 || got[0] != "a.txt" {
-		t.Errorf("trackedFiles = %q, want [a.txt]", got)
+	got := listTracked(t, dir)
+	if len(got) != 2 || got[0] != ".gitignore" || got[1] != "a.txt" {
+		t.Errorf("listTracked = %q, want [.gitignore a.txt]", got)
 	}
 }
 
@@ -113,12 +138,13 @@ func TestNoOriginToolNamesIgnoresUntracked(t *testing.T) {
 	dir := t.TempDir()
 	gitIn(t, dir, "init", "-q")
 	writeFile(t, dir, "note.md", "mentions "+"Pen"+"Sieve"+"\n")
-	if got := findOriginNames(dir, trackedFiles(t, dir)); len(got) != 0 {
+	if got := findOriginNames(dir, listTracked(t, dir)); len(got) != 0 {
 		t.Errorf("untracked file produced findings: %q", got)
 	}
 	gitIn(t, dir, "add", "note.md")
-	if got := findOriginNames(dir, trackedFiles(t, dir)); len(got) != 1 {
-		t.Errorf("tracked file findings = %q, want 1", got)
+	commitAll(t, dir)
+	if got := findOriginNames(dir, listTracked(t, dir)); len(got) != 1 {
+		t.Errorf("committed file findings = %q, want 1", got)
 	}
 }
 
