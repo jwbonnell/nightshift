@@ -7,7 +7,7 @@ the last green commit, caps iterations, detects stalls, and reports the
 result back — all outside the agent's control.
 
 ```sh
-go install ./cmd/nightshift
+go install github.com/jwbonnell/nightshift/cmd/nightshift@latest   # or: make install, from a clone
 nightshift init
 nightshift new my-spec --repo ~/path/to/checkout --verify 'go test ./...'
 # edit ~/.nightshift/specs/draft/my-spec.md
@@ -25,9 +25,49 @@ from.
 in a read-only sandbox and writes a review note — see
 [`docs/pr.md`](docs/pr.md).
 
-Linux only. `sbx` must be installed and configured (`sbx secret ls` should
-show an `anthropic` service secret) on the host; `claude` runs only inside
-the sandbox template, never on the host.
+## Requirements
+
+- **Linux.** It's developed on Arch. The optional nightly scheduling uses a systemd user
+  timer (`deploy/`, shipped disabled).
+- **Go 1.25 or newer** to build, and **git**.
+- **Docker Sandboxes (`sbx`)**, installed and set up on the host. Every agent and every
+  verify command runs inside an `sbx` sandbox. nightshift refuses to run without it.
+- **Your own model access.** Claude Code runs only inside the sandbox template, using a
+  Claude subscription or Anthropic API key you give `sbx` (`sbx secret ls` should show an
+  `anthropic` service secret). opencode agents use whatever provider you configure for
+  opencode. You're responsible for using your model access within your provider's terms.
+- Optional: `notify-send` for desktop notifications, and bash-completion for
+  `nightshift completion bash`.
+
+## Safety
+
+nightshift runs a coding agent unattended, with permission to edit files and run
+commands. It's built so that the sandbox, not the agent's restraint, limits what it can do:
+
+- **The agent runs only inside `sbx`, never on the host.** Inside its sandbox it runs with
+  `--permission-mode bypassPermissions`, which is safe only because of the sandbox. Don't
+  run the agent command outside one.
+- **Three sandboxes on one clone.** The agent's sandbox edits code. A separate sandbox does
+  every git operation. A third is recreated from a clean image for every verify, so nothing
+  persists between iterations.
+- **No credentials and no way to push.** The clone the agent works in has no remotes, and
+  the sandbox has no host `$HOME`, SSH agent or git credentials. Work reaches your repo only
+  through nightshift copying a verified branch back, under a lock, as `spec/<slug>`. It
+  never pushes anywhere.
+- **Network is allow-listed.** Sandboxes can reach the model API and the usual package
+  registries, plus any hosts a spec adds with `egress:`. Keep that list short.
+- **Agent-written code does run**, in sandboxes: every verify command, `accept:` command and
+  holdout test executes code the agent wrote. That's the point of verifying. It's also why
+  none of it runs on the host.
+- **Two things do run on the host:** `nightshift new`/`refine` start an interactive Claude
+  session that can edit only the draft spec (no shell), and `nightshift pr` makes read-only
+  `GET` requests to your forge with the token you configure.
+- **Review before you merge.** A green verify and a passing automatic review are evidence,
+  not proof. Read `spec/<slug>` before merging it.
+
+The full trust model is in [`CLAUDE.md`](CLAUDE.md) and the Sandbox model section of
+[`docs/nightshift.md`](docs/nightshift.md). nightshift is MIT-licensed and comes with no
+warranty.
 
 ## Skills and backlog
 
