@@ -12,12 +12,12 @@ iter_timeout: 45m
 # Build nightshift: a standalone, sandboxed spec runner for Linux
 
 <!--
-nightshift is the successor to pensieve-spec-run. The original was one binary inside the
-pensieve module. It ran on macOS under launchd and read its specs from an Obsidian vault.
+nightshift is the successor to a private tool. The original was one binary inside a
+larger module. It ran on macOS under launchd and read its specs from an Obsidian vault.
 nightshift is its own module and its own binary, and it keeps everything under
 ~/.nightshift. It targets Linux (Arch/Hyprland) with a systemd user timer.
 
-The behavioral baseline was the original pensieve-spec-run design doc, which isn't
+The behavioral baseline was the original tool's design doc, which isn't
 published in this repo. This file lists every deliberate change from it (the "Deltas").
 Where the two disagreed, THIS FILE WON. Anything not changed here was carried over from
 the baseline, with the renames in D1 applied.
@@ -26,12 +26,12 @@ the baseline, with the renames in D1 applied.
 ## Goal
 
 A Go module `github.com/jwbonnell/nightshift` that builds one binary, `nightshift`. It
-does what `pensieve-spec-run` did: it runs ONE ready design spec through a Ralph loop
+does what the original tool did: it runs ONE ready design spec through a Ralph loop
 inside Docker Sandboxes (`sbx`). The runner, not the agent, enforces verify, red-reset,
 stall, iteration caps, timeouts and the `--until` window, and it reports results back.
 nightshift also owns its own home directory (`~/.nightshift`) for specs, run state and
 results, and has a few small subcommands (`init`, `new`, `ready`, `done`, `status`) so it
-works without pensieve or Obsidian. It is done when every test named in the Test
+works without the original tool or Obsidian. It is done when every test named in the Test
 checklist exists and passes, and the acceptance criteria below hold.
 
 ## Context
@@ -79,21 +79,21 @@ checklist exists and passes, and the acceptance criteria below hold.
 
 ### D1. Names
 
-| Reference | nightshift |
+| Item | nightshift |
 |---|---|
-| binary `pensieve-spec-run`, module `pensieve` | binary `nightshift`, module `github.com/jwbonnell/nightshift` |
-| `internal/specrun` | `internal/runner` (same file split) |
+| binary and module | binary `nightshift`, module `github.com/jwbonnell/nightshift` |
+| runner package | `internal/runner` (same file split) |
 | `internal/vcs` (subset) | `internal/gitx`: `Run`, `IsRepo`, `GitDir`, `RunRetry`, `Commit` with the reference's semantics; `Commit`'s lock file is `<git-dir>/nightshift-commit.lock` |
 | `internal/lock` | `internal/lock` unchanged, except: `boottime_linux.go` + `boottime_other.go` (`//go:build !linux`); no darwin file |
-| `PENSIEVE_SPEC_BASE` / `_MODEL` / `_PLANNER_MODEL` / `_MAX_ITER` / `_ITER_TIMEOUT` / `_MAX_CONCURRENT` | `NIGHTSHIFT_BASE` / `NIGHTSHIFT_MODEL` / `NIGHTSHIFT_PLANNER_MODEL` / `NIGHTSHIFT_MAX_ITER` / `NIGHTSHIFT_ITER_TIMEOUT` / `NIGHTSHIFT_MAX_CONCURRENT` |
-| `PENSIEVE_SBX_BIN`, `PENSIEVE_CLAUDE_BIN`, `PENSIEVE_VAULT` | `NIGHTSHIFT_SBX_BIN`, `NIGHTSHIFT_CLAUDE_BIN`, `NIGHTSHIFT_HOME` |
-| `PENSIEVE_LOCK_*` (test child protocol) | `NIGHTSHIFT_LOCK_*` |
-| sandboxes `pensieve-spec-<slug>[-ctl\|-verify]` | `nightshift-<slug>[-ctl\|-verify]` |
-| clone identity `pensieve-spec-run` / `spec-run@pensieve.local` | `nightshift` / `nightshift@localhost` |
-| pending copy-back ref `refs/spec-runs/<slug>` | `refs/nightshift/<slug>` |
+| base / model / planner model / max iterations / iteration timeout / max concurrency env vars | `NIGHTSHIFT_BASE` / `NIGHTSHIFT_MODEL` / `NIGHTSHIFT_PLANNER_MODEL` / `NIGHTSHIFT_MAX_ITER` / `NIGHTSHIFT_ITER_TIMEOUT` / `NIGHTSHIFT_MAX_CONCURRENT` |
+| sbx binary, claude binary and home env vars | `NIGHTSHIFT_SBX_BIN`, `NIGHTSHIFT_CLAUDE_BIN`, `NIGHTSHIFT_HOME` |
+| lock test child protocol env vars | `NIGHTSHIFT_LOCK_*` |
+| sandbox names | `nightshift-<slug>[-ctl\|-verify]` |
+| clone identity | `nightshift` / `nightshift@localhost` |
+| pending copy-back ref | `refs/nightshift/<slug>` |
 | branch `spec/<slug>` | unchanged |
 | `_specs/ready`, `_specs/draft`, `_specs/done`, `_specs/results` in messages | `specs/ready`, `specs/draft`, `specs/done`, `results` |
-| error prefix `pensieve-spec-run: %v` | `nightshift: %v` |
+| error prefix | `nightshift: %v` |
 | result-note fm `type: spec-result` | `type: nightshift-result` |
 
 The two prompt preambles (`iterPreamble`, `planPreamble`) and the `buildPrompt` assembly
@@ -112,7 +112,7 @@ stay byte-identical to reference §3.8.
     ready/               the only place `run` accepts specs from
     done/                `done` moves specs here; the runner never does
   results/               <slug>-<YYYY-MM-DD>[-N].md result notes
-  runs/                  StateRoot (was ~/.pensieve/spec-runs): .locks/, <slug>/…
+  runs/                  StateRoot (was a dot-directory under the old home): .locks/, <slug>/…
   logs/                  nightly.log (written by the systemd wrapper, not the binary)
 ```
 
@@ -202,7 +202,7 @@ stderr), 2 usage. `run` keeps the reference exit codes (§3.1.8), plus `interrup
          nightshift run --next [--until HH:MM] [--max-concurrent N] [--dry-run]
   ```
   followed by `fs.PrintDefaults()`. In flag usage strings, replace `_specs/ready/` with
-  `specs/ready/` and `PENSIEVE_SPEC_*` with the D1 names. Insert `home:        %s` as the
+  `specs/ready/` and the old env var prefix with the D1 names. Insert `home:        %s` as the
   first `--dry-run` line.
 - **`status`** (no arg): one `text/tabwriter` table (minwidth 0, tabwidth 8, padding 2,
   `' '`) over `<Home>/runs/*/run.json`, sorted by slug. Columns
@@ -260,7 +260,7 @@ type Notifier interface{ Notify(title, msg string, urgent bool) }
   `~/.nightshift`). Then `gitx.Commit(Home, "nightshift: result <slug> (<status>)", rel)`.
   Otherwise there is no commit and nothing is logged. A commit failure is logged
   (`commit result note failed: %v`) and never changes the status.
-- No daily-note / "Overnight specs" integration. pensieve may read `<Home>/results/` later.
+- No daily-note / "Overnight specs" integration. The original tool may read `<Home>/results/` later.
 
 ### D8. Interrupts (new)
 
@@ -353,8 +353,8 @@ Embedded at `internal/home/spec-template.md` (`go:embed`). `init` writes it to
 changes: the comment block says `nightshift new <slug>` creates a draft from this file,
 `nightshift ready <slug>` / `nightshift done <slug>` move it, precedence reads
 `CLI flag > this frontmatter > NIGHTSHIFT_* env > ~/.nightshift/config > default`, and
-re-running is `nightshift run <slug>`. Remove the pensieve-specific paragraph (daily
-agenda / `pensieve todos`) and the `[[wikilinks]]` hint.
+re-running is `nightshift run <slug>`. Remove the original tool's specific paragraph (daily
+agenda / todo listing) and the `[[wikilinks]]` hint.
 
 ### D11. Fixes to the reference's known quirks
 
@@ -385,9 +385,9 @@ The reference preserved these on purpose. nightshift fixes them:
 
 ### D12. Dropped
 
-- The import-guard test and the read-only `pensieve` binary relationship. nightshift is
+- The import-guard test and the read-only relationship to the original tool's other binary. nightshift is
   a single binary.
-- `boottime_darwin.go`, osascript, launchd plist, `PENSIEVE_VAULT`/vault paths, vault git
+- `boottime_darwin.go`, osascript, launchd plist, the old vault env var/vault paths, vault git
   commits (replaced by D7's optional home commit), daily agenda integration.
 - `TestLogTimestampsAdvance` (D5).
 
@@ -397,14 +397,14 @@ The reference preserved these on purpose. nightshift fixes them:
 cmd/nightshift/main.go        dispatch, `run` flag parsing, usage, exit mapping, version
 internal/home/                Home resolution, D2 layout, config file (D3), init/new/ready/done,
                               embedded spec-template.md
-internal/runner/              reference internal/specrun, same file split (specrun.go, spec.go,
+internal/runner/              same file split as the original (run.go, spec.go,
                               base.go, locks.go, next.go, loop.go, state.go, sandbox.go,
                               scaffold.go, prompt.go, result.go) + status.go + signal.go
 internal/lock/                reference internal/lock (Linux + other)
 internal/gitx/                Run, IsRepo, GitDir, RunRetry, Commit
 internal/notify/              Notifier, desktop (notify-send), noop
 deploy/                       nightshift-nightly.sh, nightshift.service, nightshift.timer
-docs/nightshift.md            user docs (successor of the reference's docs/spec-runner.md)
+docs/nightshift.md            user docs
 README.md, CLAUDE.md, Makefile, .gitignore, vendor/
 ```
 
@@ -436,7 +436,7 @@ the checklist written and green.
 - [ ] 9. `internal/runner`: `loop.go` per reference §3.5.8 with D11.1 and D11.9, the
       stub-Sandbox harness, the logx runner.log and agent.log (D5) + loop scenario tests.
 - [ ] 10. `internal/notify` + `internal/runner/result.go` (D6, D7) + tests.
-- [ ] 11. `internal/runner`: `locks.go`, `next.go`, `specrun.go` (Run / runNext /
+- [ ] 11. `internal/runner`: `locks.go`, `next.go`, `run.go` (Run / runNext /
       runLocked, concurrency, busy) + remaining runner and reliability tests.
 - [ ] 12. `internal/runner/signal.go`: interrupt handling (D8) + tests.
 - [ ] 13. `internal/runner/status.go` + `cmd/nightshift` full dispatch: `run` flags and
@@ -518,7 +518,7 @@ New tests:
 - Any web/API/dashboard, database or metrics (go-libs `web`, `dbx`, `metrics`). Keep
   `internal/runner` free of `fmt.Print*` to stdout outside the reference's user-facing
   output points, so a server can wrap it later.
-- pensieve and mr-reviewer, GitLab, Obsidian, the daily agenda.
+- The original tool and its review companion, GitLab, Obsidian, the daily agenda.
 - macOS support.
 - Auto-moving specs between draft/ready/done (only the explicit subcommands move them).
 - A sandbox backend other than `sbx`.
