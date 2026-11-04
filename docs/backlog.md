@@ -54,7 +54,7 @@ When a spec fixes one, remove it.
   "unresolvable holdout path" case relies on a 5000-character path (ENAMETOOLONG).
 - `TestCompleteNoHome`: the "home is a regular file" case doesn't test what its name says.
 - `docs/known_issues.md` (custom images): no end-to-end test of `image:` reaching the real
-  sandbox, and `real` shadows the builtin in `specrun.go`.
+  sandbox, and `real` shadows the builtin in `run.go`.
 
 ## Ideas not started
 

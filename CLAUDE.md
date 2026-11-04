@@ -11,7 +11,7 @@ context every iteration, memory only via `PROGRESS.md` and git history. The
 iteration caps, timeouts, stall detection, the `--until` window — never the
 agent. See [`SPEC.md`](SPEC.md) for the authoritative spec this was built
 from and [`docs/nightshift.md`](docs/nightshift.md) for user-facing docs.
-`SPEC.md` records the deliberate changes from the original pensieve tools
+`SPEC.md` records the deliberate changes from the original tools
 (their design docs aren't published here) — never edit `SPEC.md`.
 
 `nightshift pr` is a second, independent feature on the same binary: a
@@ -69,10 +69,10 @@ versa — see `TestPackageBoundaries` in `internal/agent` and in
 `internal/review`.
 
 `internal/runner`'s own files roughly mirror the reference's
-`internal/specrun` split (`spec.go`/`base.go` resolution, `state.go` setup
+split (`spec.go`/`base.go` resolution, `state.go` setup
 and clone management, `sandbox.go`/`prompt.go` the sbx backend and prompts,
 `loop.go` the Ralph loop, `result.go` the result note, `locks.go`/`next.go`/
-`specrun.go` the top-level `Run`/concurrency, `signal.go` D8 interrupts,
+`run.go` the top-level `Run`/concurrency, `signal.go` D8 interrupts,
 `status.go` the `status` command (one unified table of runs/ready/drafts/done),
 `logs.go`/`follow.go`/`logview.go` the `logs` command, the `run -f`
 follower, and the agent.log renderer, `lint.go` the `lint` checks and the
@@ -85,7 +85,7 @@ because of package boundaries) — see
 including a few deliberate forward-declarations that got relocated once
 their target file existed. nightshift-deps added `deps.go` (the dependency
 graph and satisfaction) and `integrate.go` (the integrated base) to that
-same `specrun`-shaped split, plus `owns.go` (path-ownership checking) and
+same split, plus `owns.go` (path-ownership checking) and
 `scheduler.go`/`jobs.go` (the `--jobs` scheduler and its config
 resolution) on top; `--jobs` children are separate `nightshift run`
 processes, never goroutines, so each keeps its own lock, signal handling,

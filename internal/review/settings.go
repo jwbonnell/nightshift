@@ -1,7 +1,7 @@
 // Package review implements `nightshift pr`: a read-only, sandboxed
 // pre-review of one GitHub pull request or GitLab merge request, or every
 // open one awaiting the user's review. It is the forge-generalized
-// (P1/P2) successor of pensieve-mr-review. Its original design doc isn't
+// (P1/P2) successor of the original review tool. Its original design doc isn't
 // published here; docs/pr.md describes the behavior, and SPEC.md's
 // "Add `nightshift pr`" section lists every deliberate deviation from the
 // original.
