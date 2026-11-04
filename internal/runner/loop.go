@@ -446,13 +446,14 @@ func (r *run) loop() Status {
 				}
 				r.appendProgress("Runner: planning iteration committed code; reset to last green. The planner must only write PROGRESS.md.")
 			}
+			// Read before appending the new line below so it can't make a
+			// code-only plan look like it wrote PROGRESS.md.
+			progressAfter := r.scaffoldRead(r.progressPath())
 			if len(plannerPaths) > 0 {
 				msg := "planning iteration changed " + formatPathList(plannerPaths, 5) + " — discarded (planners only write PROGRESS.md)"
 				r.logf("%s", msg)
 				r.appendProgress(msg)
 			}
-
-			progressAfter := r.scaffoldRead(r.progressPath())
 			agentOK := agentErr == nil && !res.IsError
 			progressChanged := progressAfter != progressBefore
 			asked := r.scaffoldExists(r.questionPath())

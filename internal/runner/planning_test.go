@@ -228,3 +228,29 @@ func TestPlanningProgressOnlyNotLogged(t *testing.T) {
 		}
 	}
 }
+
+// TestPlanningCodeOnlyEditNotPlanned: the new log line must not make a plan
+// that never wrote PROGRESS.md count as planned.
+func TestPlanningCodeOnlyEditNotPlanned(t *testing.T) {
+	repo := newSourceRepo(t)
+	sb := newStubSandbox()
+	sb.plannerNoWrite = true
+	sb.agent = func(ctx context.Context, iter int, dir string) error {
+		if iter == 1 {
+			writeUncommitted(t, dir, "work.go", "package main\n")
+		}
+		return nil
+	}
+	sb.verify = alwaysGreenVerify
+
+	r := newTestRun(t, repo, "max_iter: 1\n", Options{}, sb)
+	r.loop()
+
+	logText, _ := planningLogs(t, r)
+	if !strings.Contains(logText, plannerEditLine+"work.go") {
+		t.Errorf("runner.log missing planner-edit line:\n%s", logText)
+	}
+	if r.st.Planned {
+		t.Errorf("Planned = true, want false for a code-only plan")
+	}
+}
