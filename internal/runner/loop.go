@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -118,6 +119,30 @@ func (r *run) headSHA() (string, error) {
 		return "", err
 	}
 	return sha, nil
+}
+
+// plannerChangedPaths lists the non-scaffold paths a planning iteration
+// changed: committed since last_green plus anything in status (a porcelain
+// listing taken before captureDirty). Sorted and deduplicated.
+func (r *run) plannerChangedPaths(status string) []string {
+	paths := porcelainPaths(status)
+	if out, err := r.git("diff", "--name-only", r.st.LastGreen+"..HEAD"); err == nil {
+		for _, l := range strings.Split(out, "\n") {
+			if l = strings.TrimSpace(l); l != "" {
+				paths = append(paths, l)
+			}
+		}
+	}
+	seen := map[string]bool{"PROGRESS.md": true, "QUESTION.md": true}
+	var res []string
+	for _, p := range paths {
+		if !seen[p] {
+			seen[p] = true
+			res = append(res, p)
+		}
+	}
+	sort.Strings(res)
+	return res
 }
 
 func (r *run) commitCount() (int, error) {
@@ -403,6 +428,10 @@ func (r *run) loop() Status {
 			return r.fail(err)
 		}
 		changed := commitsAfterAgent != commitsBefore || nonScaffoldDirty(statusBeforeCapture)
+		var plannerPaths []string
+		if planning {
+			plannerPaths = r.plannerChangedPaths(statusBeforeCapture)
+		}
 		r.captureDirty(st.Iterations)
 
 		if planning {
@@ -416,6 +445,11 @@ func (r *run) loop() Status {
 					return r.fail(err)
 				}
 				r.appendProgress("Runner: planning iteration committed code; reset to last green. The planner must only write PROGRESS.md.")
+			}
+			if len(plannerPaths) > 0 {
+				msg := "planning iteration changed " + formatPathList(plannerPaths, 5) + " — discarded (planners only write PROGRESS.md)"
+				r.logf("%s", msg)
+				r.appendProgress(msg)
 			}
 
 			progressAfter := r.scaffoldRead(r.progressPath())

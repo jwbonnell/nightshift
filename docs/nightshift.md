@@ -384,6 +384,9 @@ uncommitted change (other than to `PROGRESS.md`/`QUESTION.md`/
 `.spec-complete`) skips verify entirely rather than re-verifying an
 unchanged tree — it still counts toward the no-progress total, just
 without the wasted verify run.
+A planning iteration that changes anything besides `PROGRESS.md`/`QUESTION.md`,
+committed or not, is discarded and logged to `runner.log` and `PROGRESS.md` as
+`planning iteration changed <paths> — discarded (planners only write PROGRESS.md)`.
 
 #### Plan ahead
 
@@ -880,7 +883,11 @@ quota or overloaded. Of those errors, only the ones with status 429 or 5xx,
 or a rate-limit, quota or overload message (or such a raw line), are
 retried with the usual 1m/5m/15m transient waits. Anything else, such as a
 bad model name, fails the attempt at once. The `agent error:` line in
-`runner.log` carries the error's own message.
+`runner.log` carries the error's own message. An error event in opencode's
+nested shape, `{"type":"error","error":{"name":…,"data":{"message":…,"statusCode":…,"isRetryable":…}}}`,
+has its message and status read, and is retried when `isRetryable` is true or
+the status is 429 or 5xx; `isRetryable: false` with any other status is a hard
+error even if the message mentions a rate limit.
 
 **Mixed agents and the `-plan` sandbox.** `nightshift-<slug>` (the agent
 sandbox) is always created with the *coding* role's agent. If the planner

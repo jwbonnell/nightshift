@@ -4,7 +4,7 @@ Known leftovers, deferred ideas and lessons from running nightshift. Last update
 2026-11-02. When a review leaves findings that aren't worth a spec yet, add them here.
 When a spec fixes one, remove it.
 
-## Shipped 2026-10-25 → 2026-11-02
+## Shipped 2026-10-25 → 2026-11-04
 
 | Spec | What it added |
 |---|---|
@@ -19,13 +19,10 @@ When a spec fixes one, remove it.
 | nightshift-status-watch | `status -w [N]` redraws the table every N seconds (default 2, 1–3600) like `watch`; one write per frame on a terminal, no escapes when piped; Ctrl+C exits 0 |
 | nightshift-status-hide-done | `status` hides done rows by default; footer `+N done (--done N, --since <dur> or --all to show)`; `--done N`/`--since`/`--all` unchanged |
 | (by hand) | `newTestRun` resolves the limit config, so the rate-limit test no longer hangs between 8pm and 2am Eastern |
+| nightshift-opencode-nested-errors | opencode nested error events (message/status/isRetryable) read and retried correctly; every planner code edit, committed or not, logged to runner.log and PROGRESS.md |
 
 ## Runner gaps (worth a spec)
 
-- **A planner that edits code isn't flagged.** The runner only logs a violation when a
-  planning pass *commits*. Uncommitted edits are captured to `attempts/iter-N.dirty.patch`,
-  reset, and the pass still counts as planned. Log and append to PROGRESS.md the same way
-  as a planner commit (`loop.go`, the planning branch).
 - **A question is lost when the same iteration goes red.** `loop()` checks the red streak
   before QUESTION.md, so an iteration that writes QUESTION.md and leaves verify red ends
   `red`, and the question is missing from the result note. Blocked should win, or the note

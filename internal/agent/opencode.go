@@ -66,6 +66,14 @@ type opencodeEvent struct {
 	} `json:"part"`
 	Status  int    `json:"status"`
 	Message string `json:"message"`
+	Error   struct {
+		Name string `json:"name"`
+		Data struct {
+			Message     string `json:"message"`
+			StatusCode  int    `json:"statusCode"`
+			IsRetryable *bool  `json:"isRetryable"`
+		} `json:"data"`
+	} `json:"error"`
 }
 
 // Parse reads out line by line. Text collects "text" events' part.text
@@ -119,11 +127,21 @@ func (opencodeAgent) Parse(out string) Result {
 			}
 		case "error":
 			res.Found = true
-			errs = append(errs, errSig{
-				msg:       firstLineRunes(ev.Message, 200),
-				status:    ev.Status,
-				transient: transientStatus(ev.Status) || transientRe.MatchString(ev.Message),
-			})
+			msg := ev.Error.Data.Message
+			if msg == "" {
+				msg = ev.Message
+			}
+			if msg == "" {
+				msg = ev.Error.Name
+			}
+			status := ev.Error.Data.StatusCode
+			if status == 0 {
+				status = ev.Status
+			}
+			retry := ev.Error.Data.IsRetryable
+			transient := (retry != nil && *retry) || transientStatus(status) ||
+				(retry == nil && transientRe.MatchString(msg))
+			errs = append(errs, errSig{firstLineRunes(msg, 200), status, transient})
 		}
 	}
 

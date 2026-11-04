@@ -251,3 +251,32 @@ func TestOpencodeTransientSignals(t *testing.T) {
 		})
 	}
 }
+
+func TestOpencodeNestedErrors(t *testing.T) {
+	a := opencodeAgent{}
+
+	t.Run("error403_nested", func(t *testing.T) {
+		res := a.Parse(readTestdata(t, "error403_nested.jsonl"))
+		if !res.IsError || res.APIStatus != 403 || !strings.Contains(res.Message, "free tier") || a.Transient(res) {
+			t.Errorf("res=%+v transient=%v", res, a.Transient(res))
+		}
+	})
+	t.Run("error429_nested", func(t *testing.T) {
+		res := a.Parse(readTestdata(t, "error429_nested.jsonl"))
+		if !res.IsError || res.APIStatus != 429 || !a.Transient(res) {
+			t.Errorf("res=%+v transient=%v", res, a.Transient(res))
+		}
+	})
+	t.Run("retryable_nested", func(t *testing.T) {
+		res := a.Parse(readTestdata(t, "retryable_nested.jsonl"))
+		if !res.IsError || !a.Transient(res) || res.Message != "upstream hiccup" {
+			t.Errorf("res=%+v transient=%v", res, a.Transient(res))
+		}
+	})
+	t.Run("not_retryable_hard_despite_message", func(t *testing.T) {
+		res := a.Parse(`{"type":"error","error":{"name":"APIError","data":{"message":"rate limit exceeded","statusCode":400,"isRetryable":false}}}`)
+		if !res.IsError || res.APIStatus != 400 || a.Transient(res) {
+			t.Errorf("res=%+v transient=%v", res, a.Transient(res))
+		}
+	})
+}
