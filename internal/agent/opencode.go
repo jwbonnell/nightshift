@@ -66,14 +66,42 @@ type opencodeEvent struct {
 	} `json:"part"`
 	Status  int    `json:"status"`
 	Message string `json:"message"`
-	Error   struct {
-		Name string `json:"name"`
-		Data struct {
-			Message     string `json:"message"`
-			StatusCode  int    `json:"statusCode"`
-			IsRetryable *bool  `json:"isRetryable"`
-		} `json:"data"`
-	} `json:"error"`
+	// Error is decoded only for "error" events (see nestedError), so an
+	// unexpected shape (a string, a wrongly typed field) can't make the
+	// whole event fail to parse and fall through to the raw-line check.
+	Error json.RawMessage `json:"error"`
+}
+
+// opencodeNestedError is opencode's nested error object:
+// {"name":…,"data":{"message":…,"statusCode":…,"isRetryable":…}}.
+type opencodeNestedError struct {
+	Name string `json:"name"`
+	Data struct {
+		Message     string `json:"message"`
+		StatusCode  int    `json:"statusCode"`
+		IsRetryable *bool  `json:"isRetryable"`
+	} `json:"data"`
+}
+
+// nestedError decodes an error event's "error" field. An object is
+// decoded as opencodeNestedError; a string becomes its Data.Message;
+// anything else, or a decode failure, yields the zero value, so the
+// event falls back to its flat status and message.
+func nestedError(raw json.RawMessage) opencodeNestedError {
+	var e opencodeNestedError
+	if len(raw) == 0 {
+		return e
+	}
+	if json.Unmarshal(raw, &e) == nil {
+		return e
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		var out opencodeNestedError
+		out.Data.Message = s
+		return out
+	}
+	return opencodeNestedError{}
 }
 
 // Parse reads out line by line. Text collects "text" events' part.text
@@ -127,18 +155,19 @@ func (opencodeAgent) Parse(out string) Result {
 			}
 		case "error":
 			res.Found = true
-			msg := ev.Error.Data.Message
+			nested := nestedError(ev.Error)
+			msg := nested.Data.Message
 			if msg == "" {
 				msg = ev.Message
 			}
 			if msg == "" {
-				msg = ev.Error.Name
+				msg = nested.Name
 			}
-			status := ev.Error.Data.StatusCode
+			status := nested.Data.StatusCode
 			if status == 0 {
 				status = ev.Status
 			}
-			retry := ev.Error.Data.IsRetryable
+			retry := nested.Data.IsRetryable
 			transient := (retry != nil && *retry) || transientStatus(status) ||
 				(retry == nil && transientRe.MatchString(msg))
 			errs = append(errs, errSig{firstLineRunes(msg, 200), status, transient})

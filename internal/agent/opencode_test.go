@@ -280,3 +280,38 @@ func TestOpencodeNestedErrors(t *testing.T) {
 		}
 	})
 }
+
+// TestOpencodeOddErrorShapes checks that an "error" field that isn't the
+// nested object neither hides the event nor sends a non-error event
+// through the raw-line regex.
+func TestOpencodeOddErrorShapes(t *testing.T) {
+	a := opencodeAgent{}
+
+	t.Run("string error on an error event", func(t *testing.T) {
+		res := a.Parse(`{"type":"error","error":"model not found: foo/bar"}`)
+		if !res.Found || !res.IsError || res.Message != "model not found: foo/bar" || a.Transient(res) {
+			t.Errorf("got %+v transient=%v", res, a.Transient(res))
+		}
+	})
+
+	t.Run("string error that reads transient", func(t *testing.T) {
+		res := a.Parse(`{"type":"error","error":"rate limit hit"}`)
+		if !res.IsError || !a.Transient(res) {
+			t.Errorf("got %+v transient=%v", res, a.Transient(res))
+		}
+	})
+
+	t.Run("wrongly typed nested field falls back to flat fields", func(t *testing.T) {
+		res := a.Parse(`{"type":"error","message":"request failed","status":429,"error":{"data":{"statusCode":"429"}}}`)
+		if !res.IsError || res.APIStatus != 429 || !a.Transient(res) {
+			t.Errorf("got %+v transient=%v", res, a.Transient(res))
+		}
+	})
+
+	t.Run("string error on a non-error event is ignored", func(t *testing.T) {
+		res := a.Parse(`{"type":"tool_use","error":"tool said rate limit and 503"}` + "\n" + `{"type":"text","part":{"text":"done"}}`)
+		if res.IsError || res.Text != "done" {
+			t.Errorf("got %+v", res)
+		}
+	})
+}
